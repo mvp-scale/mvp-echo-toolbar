@@ -1,19 +1,27 @@
 # MVP-Echo Toolbar
 
-System tray voice-to-text for Windows 11. Press **Ctrl+Alt+Z** to record, press again to stop, hear a ding, paste with **Ctrl+V**. That's it.
-
-No visible window during normal use. Lives in your notification area next to the microphone icon, works across all virtual desktops and monitors.
+Voice-to-text for Windows 11 that lives in your system tray. Speeds you up 5-10x.
 
 ![MVP-Echo Toolbar popup showing transcription result and settings, sitting in the Windows 11 system tray next to the microphone icon](mvp-echo-toolbar/docs/screenshot.png)
 
-Click the blue tray icon to see your last transcription, copy it again, or adjust settings. Otherwise it stays out of your way.
+## Usage
+
+The global keybind is **Ctrl+Alt+Z**. Hold down **Ctrl+Alt**, then:
+
+1. **Tap Z** to start recording
+2. **Talk** — say what you want transcribed
+3. **Tap Z** again when you're done talking
+4. **Wait for the ding** — once you hear it, the text is already in your clipboard
+5. **Right-click > Paste** (or **Ctrl+V**) and away you go
+
+The app is invisible during normal use. It sits in your notification area next to the microphone icon — you'll see the blue icon change color as it records and processes. Click it anytime to see your last transcription, copy it again, or adjust settings.
 
 ## Requirements
 
 1. **Faster-Whisper server** running on your LAN with a GPU. See [`faster-whisper-docker/`](faster-whisper-docker/) for the Docker setup.
 2. **Windows 11** machine running the toolbar.
 
-## Quick Start
+## Setup
 
 1. Deploy the Whisper server on your LAN (e.g., Unraid):
    ```bash
@@ -24,17 +32,10 @@ Click the blue tray icon to see your last transcription, copy it again, or adjus
 
 2. Run `MVP-Echo Toolbar 2.0.0.exe` on Windows (portable, no install needed).
 
-3. The tray icon appears. Left-click to open the popup. Click **Settings** and set your server endpoint:
+3. Click the tray icon, open **Settings**, and set your server endpoint:
    ```
    http://192.168.1.10:20300/v1/audio/transcriptions
    ```
-
-4. **Use it**:
-   1. Hold down **Ctrl+Alt** and tap **Z** — recording starts (tray icon turns red)
-   2. Speak naturally while still holding **Ctrl+Alt**
-   3. Tap **Z** again — recording stops (icon turns yellow while processing)
-   4. Wait for the **ding** — your transcription is automatically copied to clipboard
-   5. **Ctrl+V** to paste anywhere
 
 ## Build From Source
 
