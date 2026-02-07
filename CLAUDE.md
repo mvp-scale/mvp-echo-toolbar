@@ -6,6 +6,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MVP-Echo is a Windows 11 desktop application for voice-to-text transcription using Whisper models. Built with Electron + React (TypeScript) + Python-based Faster-Whisper engine with optional CUDA GPU acceleration.
 
+## Git Branching & Release Strategy
+
+This project uses a **dev → main** workflow with automated cleanup:
+
+### Branch Structure
+
+| Branch | Purpose | Contains |
+|--------|---------|----------|
+| `dev` | Daily development | All code, mockups, test files, WIP docs |
+| `main` | Production releases | Clean code only, tagged versions |
+
+### Daily Development Workflow
+
+1. **Always work on `dev` branch** - this is your default
+2. Commit and push normally via Cursor/VS Code or CLI
+3. No GitHub Actions run on `dev` - fast, no CI overhead
+
+```bash
+# Typical daily workflow
+git add -A && git commit -m "your message"
+git push
+```
+
+### Release to Production
+
+When ready to release, trigger the **"Release to Main"** GitHub Action:
+
+1. Go to: **Actions** → **Release to Main** → **Run workflow**
+2. Enter version tag (e.g., `v1.0.1`, `v1.1.0`, `v2.0.0`)
+3. Click **Run workflow**
+
+The action will:
+- Take current `dev` branch
+- Remove all dev-only files (defined in `.dev-only`)
+- Replace `main` with the cleaned snapshot
+- Create a version tag
+
+### Dev-Only Files (`.dev-only`)
+
+The `.dev-only` file controls what gets **excluded from `main`**. Edit this file on `dev` to add/remove patterns:
+
+```
+# Currently excluded from production:
+html-mockups/          # UI prototypes
+mvp-echo-light/        # Experimental variants
+mvp-echo-standard/
+.claude/               # Claude Code config
+WIP-*.md               # Work-in-progress docs
+TESTING.md
+test-*.py              # Test scripts
+ccTel.sh               # Dev utilities
+```
+
+### SSH Configuration
+
+This repo uses dedicated SSH keys for the `mvp-scale` GitHub account:
+- **SSH alias**: `github-mvp`
+- **Remote URL**: `git@github-mvp:mvp-scale/mvp-echo-toolbar.git`
+- **Key file**: `~/.ssh/id_mvp`
+
 ## Tech Stack (Actual Implementation)
 
 - **Desktop Framework**: Electron 28.0.0
