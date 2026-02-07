@@ -1,130 +1,67 @@
-# MVP-Echo
+# MVP-Echo Toolbar
 
-A Windows 11 voice-to-text transcription application using Whisper models via ONNX Runtime.
+System tray voice-to-text for Windows 11. Press **Ctrl+Alt+Z** to record, press again to stop, hear a ding, paste with **Ctrl+V**. That's it.
 
-## 🚀 Quick Start (MVP)
+No visible window during normal use. Lives in your notification area next to the microphone icon, works across all virtual desktops and monitors.
 
-### Prerequisites
-- Node.js 18+ 
-- Windows 10/11
-- Git
+## Requirements
 
-### Run MVP
-```powershell
-# Clone and setup
-git clone [your-repo-url]
-cd mvp-echo
+1. **Faster-Whisper server** running on your LAN with a GPU. See [`faster-whisper-docker/`](faster-whisper-docker/) for the Docker setup.
+2. **Windows 11** machine running the toolbar.
+
+## Quick Start
+
+1. Deploy the Whisper server on your LAN (e.g., Unraid):
+   ```bash
+   cd faster-whisper-docker
+   scp -r . root@192.168.1.10:/mnt/user/appdata/faster-whisper-docker/
+   ssh root@192.168.1.10 "cd /mnt/user/appdata/faster-whisper-docker && docker-compose up -d"
+   ```
+
+2. Run `MVP-Echo Toolbar 2.0.0.exe` on Windows (portable, no install needed).
+
+3. The tray icon appears. Left-click to open the popup. Click **Settings** and set your server endpoint:
+   ```
+   http://192.168.1.10:20300/v1/audio/transcriptions
+   ```
+
+4. **Use it**: Hold **Ctrl+Alt**, tap **Z** to start recording. Tap **Z** again to stop. Hear a ding = copied to clipboard. **Ctrl+V** to paste.
+
+## Build From Source
+
+```bash
+cd mvp-echo-toolbar
 npm install
-
-# Start development
-npm run dev
-# OR
-./scripts/dev.ps1
+npm run dist
 ```
 
-This will:
-- Start the Vite dev server on http://localhost:5173
-- Build and watch the Electron main process
-- Launch the MVP-Echo application
+Output: `dist/MVP-Echo Toolbar 2.0.0.exe` (portable) and `dist/MVP-Echo Toolbar Setup 2.0.0.exe` (installer).
 
-## 🎯 MVP Features
-
-✅ **Visual MVP Ready**
-- [x] Beautiful MVP Scale UI with electric blue accents
-- [x] Recording controls with visual feedback
-- [x] Audio level visualization with pulse animation
-- [x] Mock transcription for testing workflow
-- [x] Responsive design (works when minimized)
-- [x] Dark/light theme support
-
-✅ **Core Architecture**
-- [x] Electron main/renderer separation
-- [x] IPC communication setup
-- [x] TypeScript throughout
-- [x] Tailwind CSS with MVP Scale design system
-
-🔄 **Next Iterations** (Feature by Feature)
-- [ ] Real audio recording with MediaRecorder API
-- [ ] ONNX Runtime integration
-- [ ] GPU detection and fallback
-- [ ] Model management system
-- [ ] Export functionality (TXT/MD)
-- [ ] Settings panel
-- [ ] First-run model download
-
-## 📁 Project Structure
+## How It Works
 
 ```
-mvp-echo/
-├── app/
-│   ├── main/           # Electron main process
-│   ├── renderer/       # React UI
-│   ├── audio/          # Audio processing (TODO)
-│   ├── stt/           # Speech-to-text engine (TODO)
-│   └── models/        # Model management
-├── docs/              # Documentation
-├── scripts/           # Build scripts
-└── styleGuide/        # MVP Scale design system (read-only)
+Windows 11                           LAN Server (Unraid/Docker)
++-----------------------+            +--------------------------+
+|  MVP-Echo Toolbar     |   HTTP     |  faster-whisper-server   |
+|  (system tray app)    | ---------> |  (GPU transcription)     |
+|                       |   audio    |                          |
+|  Ctrl+Alt+Z = record  | <--------- |  NVIDIA GPU + CUDA       |
+|  ding = clipboard     |   text     |  Port 20300              |
++-----------------------+            +--------------------------+
 ```
 
-## 🎨 Design System
+## Tray Icon States
 
-Uses the existing MVP Scale design system from `styleGuide/`:
-- Electric blue primary color: `oklch(0.55 0.25 264)`
-- Clean whites and grays for light theme
-- Dark navy background for dark theme
-- Recording pulse animation
-- Hover effects with blue border glow
+| Color | Meaning |
+|-------|---------|
+| Blue | Ready |
+| Red | Recording |
+| Yellow | Processing |
+| Green | Copied to clipboard |
 
-## 🔧 Development
+## Project Structure
 
-```powershell
-# Development mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Package as Windows app
-npm run pack:win
-
-# Run tests
-npm test
-
-# Type checking
-npm run typecheck
 ```
-
-## 📋 MVP Test Checklist
-
-- [ ] App launches successfully
-- [ ] UI is responsive (try minimizing/restoring)
-- [ ] Recording button changes state (Start ↔ Stop)
-- [ ] Audio visualizer animates during "recording"
-- [ ] Mock transcription appears after ~2 seconds
-- [ ] Status bar shows system info
-- [ ] Theme matches system preference
-- [ ] Electric blue accents visible throughout
-
-## 🚧 Known MVP Limitations
-
-- Audio recording is mocked (no actual MediaRecorder yet)
-- Transcription is random text (no real STT engine yet)
-- Export buttons are disabled (functionality TODO)
-- No settings panel (TODO)
-- No model management (TODO)
-
-**This is intentional** - the MVP focuses on visual feedback and architecture validation before adding complex features.
-
-## 🔄 Next Development Phase
-
-1. **Real Audio Recording**: Implement MediaRecorder API in renderer
-2. **STT Integration**: Add ONNX Runtime with Whisper models
-3. **GPU Detection**: DirectML provider setup with CPU fallback
-4. **Model Download**: First-run experience with progress tracking
-
-## 📞 Getting Help
-
-- Check `docs/architecture_rfc.md` for technical details
-- Review `docs/DetailedPRD.md` for full feature specifications
-- Each agent has detailed docs in `.claude/agents/` folder
+mvp-echo-toolbar/       # Electron app (React + Vite + TypeScript)
+faster-whisper-docker/   # Server deployment (Docker Compose + nginx)
+```

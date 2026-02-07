@@ -15,16 +15,35 @@ GITHUB_ACTIONS_GUIDE.md
 
 # Claude Code configuration (dev tooling)
 .claude/
+CLAUDE.md
 
 # Development/debug scripts
 ccTel.sh
 test-*.py
 dev-server.js
 
-# Sub-project experiments
+# Sub-project experiments (superseded by mvp-echo-toolbar)
 mvp-echo-light/
 mvp-echo-standard/
 mvp-echo/
+
+# Legacy root-level app code (not used by toolbar)
+app/
+python/
+scripts/
+standalone-whisper/
+docs/
+package.json
+package-lock.json
+package-simple.json
+vite.config.ts
+tailwind.config.js
+tsconfig.json
+tsconfig.node.json
+postcss.config.js
+electron-builder.yml
+electron-vite.config.ts
+setup.md
 
 # Temporary image files in root
 image.png
