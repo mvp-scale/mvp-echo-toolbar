@@ -1,26 +1,27 @@
-name: Clean Release to Main
+name: Release to Main
 
-# Triggers when a PR is merged to main
+# Manually triggered - you choose when to release
 on:
-  pull_request:
-    branches: [main]
-    types: [closed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0, v1.0.1, v1.1.0)'
+        required: true
+        type: string
 
 jobs:
-  clean-main:
-    # Only run if the PR was actually merged (not just closed)
-    if: github.event.pull_request.merged == true
+  release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout main branch
+      - name: Checkout dev branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure git
+      - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -28,39 +29,50 @@ jobs:
       - name: Remove dev-only files
         run: |
           if [ -f .dev-only ]; then
-            echo "Reading .dev-only exclusion patterns..."
+            echo "=== Cleaning dev-only files ==="
 
-            # Process each non-comment, non-empty line
             while IFS= read -r pattern || [ -n "$pattern" ]; do
               # Skip comments and empty lines
               [[ "$pattern" =~ ^#.*$ ]] && continue
               [[ -z "${pattern// }" ]] && continue
 
-              # Remove matching files/directories
               echo "Removing: $pattern"
               rm -rf $pattern 2>/dev/null || true
             done < .dev-only
 
-            # Remove the .dev-only file itself from main
+            # Remove .dev-only itself (not needed on main)
             rm -f .dev-only
 
-            echo "Cleanup complete."
+            echo "=== Cleanup complete ==="
           else
-            echo "No .dev-only file found, skipping cleanup."
+            echo "No .dev-only file found"
           fi
 
-      - name: Commit cleaned version
+      - name: Replace main with cleaned dev
         run: |
-          # Check if there are changes to commit
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -A
-            git commit -m "Clean release: remove dev-only files
+          # Create/reset main branch to current cleaned state
+          git checkout -B main
+          git add -A
+          git commit -m "Release ${{ inputs.version }}"
 
-          Automated cleanup by clean-release workflow.
-          See .dev-only on dev branch for exclusion patterns."
+          # Force push - replaces main entirely
+          git push origin main --force
 
-            git push origin main
-            echo "Cleaned files committed to main."
-          else
-            echo "No dev-only files to remove."
-          fi
+          echo "=== Main branch updated ==="
+
+      - name: Create version tag
+        run: |
+          git tag ${{ inputs.version }}
+          git push origin ${{ inputs.version }}
+
+          echo "=== Tagged as ${{ inputs.version }} ==="
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "========================================"
+          echo "  Released ${{ inputs.version }} to main"
+          echo "========================================"
+          echo ""
+          echo "View release: https://github.com/${{ github.repository }}/tree/main"
+          echo "View tag: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.version }}"
