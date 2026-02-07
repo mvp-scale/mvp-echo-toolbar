@@ -1,0 +1,66 @@
+name: Clean Release to Main
+
+# Triggers when a PR is merged to main
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+jobs:
+  clean-main:
+    # Only run if the PR was actually merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Remove dev-only files
+        run: |
+          if [ -f .dev-only ]; then
+            echo "Reading .dev-only exclusion patterns..."
+
+            # Process each non-comment, non-empty line
+            while IFS= read -r pattern || [ -n "$pattern" ]; do
+              # Skip comments and empty lines
+              [[ "$pattern" =~ ^#.*$ ]] && continue
+              [[ -z "${pattern// }" ]] && continue
+
+              # Remove matching files/directories
+              echo "Removing: $pattern"
+              rm -rf $pattern 2>/dev/null || true
+            done < .dev-only
+
+            # Remove the .dev-only file itself from main
+            rm -f .dev-only
+
+            echo "Cleanup complete."
+          else
+            echo "No .dev-only file found, skipping cleanup."
+          fi
+
+      - name: Commit cleaned version
+        run: |
+          # Check if there are changes to commit
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "Clean release: remove dev-only files
+
+          Automated cleanup by clean-release workflow.
+          See .dev-only on dev branch for exclusion patterns."
+
+            git push origin main
+            echo "Cleaned files committed to main."
+          else
+            echo "No dev-only files to remove."
+          fi

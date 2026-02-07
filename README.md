@@ -6,7 +6,7 @@ A Windows 11 voice-to-text transcription application using Whisper models via ON
 
 ### Prerequisites
 - Node.js 18+ 
-- Windows 11
+- Windows 10/11
 - Git
 
 ### Run MVP

@@ -1,0 +1,30 @@
+# .dev-only - Files/folders excluded from main branch releases
+# Uses .gitignore syntax. Patterns listed here are:
+# - Tracked normally on dev branch
+# - Automatically removed when merging to main
+#
+# Edit this file anytime on dev to control what stays out of production.
+
+# Development mockups and prototypes
+html-mockups/
+
+# Work-in-progress documentation
+WIP-*.md
+TESTING.md
+GITHUB_ACTIONS_GUIDE.md
+
+# Claude Code configuration (dev tooling)
+.claude/
+
+# Development/debug scripts
+ccTel.sh
+test-*.py
+dev-server.js
+
+# Sub-project experiments
+mvp-echo-light/
+mvp-echo-standard/
+mvp-echo/
+
+# Temporary image files in root
+image.png
