@@ -1,0 +1,22 @@
+# Logs
+logs/
+*.log
+
+# Docker
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Model cache (too large for git)
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,68 @@
+# docker-compose.yml for faster-whisper API with GPU support
+# Uses fedirz/faster-whisper-server - production-ready image
+# NGINX proxy adds CORS support
+
+services:
+  faster-whisper:
+    image: fedirz/faster-whisper-server:latest-cuda
+    container_name: faster-whisper-api
+
+    # Internal port only (accessed via nginx)
+    expose:
+      - "8000"
+
+    # NVIDIA GPU support
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+    # GPU support (requires nvidia-docker2)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Persistent model cache (fedirz uses /root/.cache/huggingface)
+    volumes:
+      - whisper-models:/root/.cache/huggingface
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Resource limits (adjust based on your system)
+    mem_limit: 8g
+    memswap_limit: 8g
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # NGINX reverse proxy for CORS
+  nginx:
+    image: nginx:alpine
+    container_name: faster-whisper-nginx
+    ports:
+      - "20300:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - faster-whisper
+    restart: unless-stopped
+
+volumes:
+  whisper-models:
+    driver: local
