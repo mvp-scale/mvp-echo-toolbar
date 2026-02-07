@@ -22,8 +22,6 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: mvp-echo-toolbar/package-lock.json
 
     - name: Install Node dependencies
       run: npm install
@@ -36,6 +34,10 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         CSC_IDENTITY_AUTO_DISCOVERY: false
       run: npm run dist
+
+    - name: List dist contents (debug)
+      if: always()
+      run: dir dist
 
     - name: Upload NSIS Installer
       uses: actions/upload-artifact@v4
@@ -50,10 +52,6 @@ jobs:
         name: MVP-Echo-Toolbar-Windows-Portable
         path: mvp-echo-toolbar/dist/MVP-Echo Toolbar *.exe
         if-no-files-found: warn
-
-    - name: List dist contents (debug)
-      if: always()
-      run: dir dist
 
     # Create GitHub Release on tags
     - name: Create Release
