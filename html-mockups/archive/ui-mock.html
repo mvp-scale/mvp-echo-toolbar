@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MVP-Echo UI Mock — Audio Visualization Integration</title>
+  <style>
+    :root {
+      --primary: oklch(0.55 0.25 264);
+      --primary-dark: oklch(0.65 0.25 264);
+      --background: oklch(0.02 0.01 264);
+      --text: #e8e9ff;
+      --muted: #9aa0b3;
+      --panel: rgba(255,255,255,.08);
+      --border: rgba(255,255,255,.15);
+      --radius: 20px;
+    }
+    
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    
+    body {
+      margin: 0; 
+      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable', Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+      background: var(--background);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    
+    /* Main App Card */
+    .app-card {
+      width: 800px;
+      height: 600px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(12px) saturate(140%);
+      box-shadow: 0 25px 80px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    /* Header */
+    .app-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .app-title {
+      font-weight: 800;
+      font-size: 18px;
+      background: linear-gradient(135deg, var(--primary), oklch(0.70 0.25 330));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      opacity: 0.7;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    
+    /* Main Visualization Area */
+    .visualization-area {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: 
+        radial-gradient(600px 400px at 30% 20%, rgba(0,198,255,0.05) 0%, transparent 50%),
+        radial-gradient(800px 600px at 80% 80%, rgba(0,114,255,0.05) 0%, transparent 50%),
+        var(--background);
+    }
+    
+    /* Audio Visualization Canvas */
+    .audio-canvas {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 0 8px rgba(255,255,255,.25));
+    }
+    
+    /* Subtle Record Button Overlay */
+    .record-overlay {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .record-button {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(255,68,68,0.9);
+      border: 2px solid rgba(255,255,255,0.3);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 4px 16px rgba(255,68,68,0.3);
+    }
+    
+    .record-button:hover {
+      transform: scale(1.1);
+      box-shadow: 0 6px 24px rgba(255,68,68,0.5);
+    }
+    
+    .record-button.recording {
+      animation: pulse-record 2s ease-in-out infinite;
+      background: rgba(255,68,68,1);
+    }
+    
+    .record-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: all 0.3s ease;
+    }
+    
+    .record-button.recording .record-icon {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+    
+    .record-hint {
+      font-size: 12px;
+      opacity: 0.6;
+      background: rgba(0,0,0,0.3);
+      padding: 6px 10px;
+      border-radius: 8px;
+      backdrop-filter: blur(10px);
+    }
+    
+    /* Footer */
+    .app-footer {
+      padding: 16px 24px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      opacity: 0.7;
+    }
+    
+    .shortcut-hint {
+      background: rgba(255,255,255,0.05);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-family: ui-monospace, monospace;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    @keyframes pulse-record {
+      0%, 100% { 
+        box-shadow: 0 4px 16px rgba(255,68,68,0.3);
+      }
+      50% { 
+        box-shadow: 0 8px 32px rgba(255,68,68,0.7);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-card">
+    <!-- Header -->
+    <div class="app-header">
+      <div class="app-title">MVP-Echo</div>
+      <div class="status-indicator">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Ready</span>
+      </div>
+    </div>
+    
+    <!-- Main Visualization Area -->
+    <div class="visualization-area">
+      <!-- Audio Visualization Canvas (from final.html) -->
+      <canvas id="audioViz" class="audio-canvas"></canvas>
+      
+      <!-- Subtle Record Button Overlay -->
+      <div class="record-overlay">
+        <div class="record-hint">Hold Ctrl+Alt+Z to record</div>
+        <button class="record-button" id="recordButton" title="Click or Ctrl+Alt+Z to record">
+          <div class="record-icon"></div>
+        </button>
+      </div>
+    </div>
+    
+    <!-- Footer -->
+    <div class="app-footer">
+      <span>Audio visualization with real-time transcription</span>
+      <div>
+        <span class="shortcut-hint">Ctrl+Alt+Z</span> Push-to-talk
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Visualization Code (extracted from final.html) -->
+  <script>
+    // Audio visualization variables
+    const canvas = document.getElementById('audioViz');
+    const ctx = canvas.getContext('2d');
+    let width, height, dpr;
+    const analyser = { node: null, dataF: null, dataT: null };
+    let audioCtx;
+    let isRecording = false;
+    let t0 = performance.now();
+    
+    // Fixed ocean settings from your preferred configuration
+    const settings = {
+      palette: "ocean",
+      flowSpeed: 0.81,
+      strokeAlpha: 0.5,
+      ringLayers: 4,
+      ringInner: 0.12,
+      ringGap: 0.05,
+      inner: { style: "beads", amp: 2, phase: 360 },
+      middle: { style: "smooth", amp: 0.5, phase: 0 },
+      outer: { style: "smooth", amp: 0.5, phase: 0 },
+      bars: { mirror: true, width: 1, extent: 1, edgeFade: 3 },
+      fft: 6267,
+      smoothing: 0.5,
+      gain: 0.2,
+      gate: 0,
+      line: 0.4,
+      trail: 0.3,
+      glow: true
+    };
+    
+    const oceanPalette = ['#00c6ff','#0072ff','#00e1ff'];
+    
+    // Canvas setup
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = canvas.clientWidth;
+      height = canvas.clientHeight;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    
+    // Audio processing functions
+    function clampPow2(v) {
+      const p = Math.round(Math.log2(Math.max(32, Math.min(32768, v))));
+      return 2 ** p;
+    }
+    
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    
+    function hexToRgb(h) {
+      h = (h || "").replace('#', '');
+      if (h.length === 3) {
+        return { r: parseInt(h[0] + h[0], 16), g: parseInt(h[1] + h[1], 16), b: parseInt(h[2] + h[2], 16) };
+      }
+      return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+    }
+    
+    function rgbToStr(obj, a) {
+      const r = obj.r | 0, g = obj.g | 0, b = obj.b | 0;
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + (a == null ? 1 : a) + ')';
+    }
+    
+    function flowColors(time) {
+      const spd = settings.flowSpeed;
+      const t = time * spd;
+      const f = function(x) {
+        const i = Math.floor(x) % oceanPalette.length;
+        const j = (i + 1) % oceanPalette.length;
+        const mix = x - Math.floor(x);
+        const a = hexToRgb(oceanPalette[i]);
+        const b = hexToRgb(oceanPalette[j]);
+        return rgbToStr({
+          r: lerp(a.r, b.r, mix),
+          g: lerp(a.g, b.g, mix),
+          b: lerp(a.b, b.b, mix)
+        }, settings.strokeAlpha);
+      };
+      return [f(t % oceanPalette.length), f((t + 1) % oceanPalette.length), f((t + 2) % oceanPalette.length)];
+    }
+    
+    function gradientFor(time, x0, y0, x1, y1) {
+      const cols = flowColors(time);
+      const g = ctx.createLinearGradient(x0, y0, x1, y1);
+      const n = cols.length;
+      for (var i = 0; i < n; i++) {
+        g.addColorStop(i / (n - 1), cols[i]);
+      }
+      return g;
+    }
+    
+    function clearTrail(a) {
+      if (a <= 0) {
+        ctx.clearRect(0, 0, width, height);
+        return;
+      }
+      ctx.fillStyle = 'rgba(0,0,0,' + a + ')';
+      ctx.fillRect(0, 0, width, height);
+    }
+    
+    function shape(v, style, i) {
+      const s = v < 0 ? -1 : 1;
+      const a = Math.abs(v);
+      if (style === 'peaks') return s * Math.pow(a, 0.5);
+      if (style === 'spikes') return s * Math.pow(a, 2);
+      if (style === 'beads') return (i % 8 < 2) ? s * a * 1.2 : 0;
+      return v;
+    }
+    
+    // Drawing functions
+    function drawStyledRing(gain, radius, style, amp, phaseDeg) {
+      const d = analyser.dataT;
+      const len = d.length;
+      const cx = width / 2, cy = height / 2;
+      const ph = phaseDeg * Math.PI / 180;
+      
+      ctx.beginPath();
+      for (let i = 0; i < len; i++) {
+        const t = i / len * Math.PI * 2 + ph;
+        const raw = (d[i] - 128) / 128 * gain * amp;
+        const v = shape(raw, style, i);
+        const rr = radius + v * (radius * 0.7);
+        const x = cx + Math.cos(t) * rr;
+        const y = cy + Math.sin(t) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+    
+    function drawBars(gain) {
+      const d = analyser.dataF;
+      const n = d.length;
+      const cx = width / 2;
+      const extent = settings.bars.extent;
+      const maxI = Math.floor(n * 0.5 * extent);
+      const fadePow = settings.bars.edgeFade;
+      const w = settings.bars.width;
+      
+      ctx.save();
+      ctx.lineWidth = w;
+      for (let i = 0; i < maxI; i++) {
+        const mag = d[i] / 255 * gain;
+        const h = mag * (height * 0.6);
+        const t = i / maxI;
+        const alpha = Math.pow(1 - t, fadePow);
+        ctx.globalAlpha = alpha;
+        const x = t * (width / 2);
+        
+        ctx.beginPath();
+        ctx.moveTo(cx - x, height / 2 - h / 2);
+        ctx.lineTo(cx - x, height / 2 + h / 2);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(cx + x, height / 2 - h / 2);
+        ctx.lineTo(cx + x, height / 2 + h / 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    
+    function drawCircularOsc(gain, radius) {
+      const d = analyser.dataT;
+      const len = d.length;
+      const cx = width / 2, cy = height / 2;
+      
+      ctx.save();
+      ctx.lineWidth = settings.line * 0.7;
+      ctx.beginPath();
+      for (let i = 0; i < len; i++) {
+        const t = i / len * Math.PI * 2;
+        const v = (d[i] - 128) / 128 * gain * 0.7;
+        const rr = radius + v * (radius * 0.45);
+        const x = cx + Math.cos(t) * rr;
+        const y = cy + Math.sin(t) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+    }
+    
+    function drawComposite(gain, time) {
+      const base = Math.min(width, height);
+      const inner = base * settings.ringInner;
+      const gap = base * settings.ringGap;
+      const layers = settings.ringLayers;
+      const styles = [settings.inner, settings.middle, settings.outer];
+      
+      // Draw rings
+      for (let i = 0; i < layers; i++) {
+        const r = inner + i * gap;
+        const idx = (i === 0) ? 0 : (i === layers - 1 ? 2 : 1);
+        ctx.save();
+        ctx.globalAlpha = 0.9 - i * 0.18;
+        drawStyledRing(gain * (1 - i * 0.06), r, styles[idx].style, styles[idx].amp, styles[idx].phase);
+        ctx.restore();
+      }
+      
+      // Circular oscilloscope
+      drawCircularOsc(gain, inner + (layers - 0.5) * gap);
+      
+      // Bars
+      ctx.save();
+      drawBars(gain * 0.9);
+      ctx.restore();
+    }
+    
+    // Audio setup and animation
+    async function setupAudio() {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const analyzerNode = audioCtx.createAnalyser();
+        analyzerNode.fftSize = clampPow2(settings.fft);
+        analyzerNode.smoothingTimeConstant = settings.smoothing;
+        analyser.node = analyzerNode;
+        analyser.dataF = new Uint8Array(analyzerNode.frequencyBinCount);
+        analyser.dataT = new Uint8Array(analyzerNode.fftSize);
+        
+        if (isRecording) {
+          // Connect to microphone when recording
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(analyzerNode);
+        } else {
+          // Demo audio when not recording
+          startDemoAudio(analyzerNode);
+        }
+      } catch (error) {
+        console.warn('Audio setup failed, using demo:', error);
+        setupDemoAudio();
+      }
+    }
+    
+    function setupDemoAudio() {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const analyzerNode = audioCtx.createAnalyser();
+      analyzerNode.fftSize = clampPow2(settings.fft);
+      analyzerNode.smoothingTimeConstant = settings.smoothing;
+      analyser.node = analyzerNode;
+      analyser.dataF = new Uint8Array(analyzerNode.frequencyBinCount);
+      analyser.dataT = new Uint8Array(analyzerNode.fftSize);
+      
+      startDemoAudio(analyzerNode);
+    }
+    
+    function startDemoAudio(analyzerNode) {
+      const master = audioCtx.createGain();
+      master.gain.value = 0.0;
+      
+      const o1 = audioCtx.createOscillator();
+      o1.type = 'sawtooth';
+      o1.frequency.value = 180;
+      
+      const o2 = audioCtx.createOscillator();
+      o2.type = 'triangle';
+      o2.frequency.value = 310;
+      
+      o1.connect(master);
+      o2.connect(master);
+      master.connect(analyzerNode);
+      
+      o1.start();
+      o2.start();
+      
+      // Animate demo
+      (function wander() {
+        const now = audioCtx.currentTime;
+        const seg = 0.12 + Math.random() * 0.25;
+        master.gain.cancelScheduledValues(now);
+        master.gain.setTargetAtTime(0.02, now, 0.05);
+        master.gain.setTargetAtTime(0.35 + Math.random() * 0.5, now + 0.02, 0.08);
+        o1.frequency.exponentialRampToValueAtTime(140 + Math.random() * 220, now + seg);
+        o2.frequency.exponentialRampToValueAtTime(280 + Math.random() * 360, now + seg);
+        setTimeout(wander, seg * 1000);
+      })();
+    }
+    
+    function animate() {
+      if (!analyser.node) return;
+      requestAnimationFrame(animate);
+      
+      const sec = (performance.now() - t0) / 1000;
+      
+      analyser.node.getByteTimeDomainData(analyser.dataT);
+      analyser.node.getByteFrequencyData(analyser.dataF);
+      
+      clearTrail(settings.trail);
+      
+      const g = gradientFor(sec, 0, 0, width, 0);
+      ctx.lineWidth = settings.line;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = g;
+      
+      const gain = settings.gain;
+      drawComposite(gain, sec);
+    }
+    
+    // Recording functionality
+    async function startRecording() {
+      isRecording = true;
+      document.getElementById('recordButton').classList.add('recording');
+      document.getElementById('statusText').textContent = 'Recording...';
+      document.getElementById('statusDot').style.background = '#dc2626';
+      
+      // Restart audio with microphone
+      if (analyser.node) {
+        analyser.node.disconnect();
+      }
+      await setupAudio();
+    }
+    
+    function stopRecording() {
+      isRecording = false;
+      document.getElementById('recordButton').classList.remove('recording');
+      document.getElementById('statusText').textContent = 'Processing...';
+      
+      // Simulate transcription and clipboard
+      setTimeout(() => {
+        document.getElementById('statusText').textContent = 'Copied to clipboard!';
+        document.getElementById('statusDot').style.background = '#10b981';
+        
+        // Return to demo audio
+        if (analyser.node) {
+          analyser.node.disconnect();
+        }
+        setupDemoAudio();
+        
+        setTimeout(() => {
+          document.getElementById('statusText').textContent = 'Ready';
+        }, 2000);
+      }, 1000);
+    }
+    
+    // Event listeners
+    document.getElementById('recordButton').addEventListener('click', () => {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
+    });
+    
+    // Keyboard shortcuts
+    let isCtrlAltZPressed = false;
+    
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.altKey && e.code === 'KeyZ' && !isCtrlAltZPressed) {
+        e.preventDefault();
+        isCtrlAltZPressed = true;
+        if (!isRecording) {
+          startRecording();
+        }
+      }
+    });
+    
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'KeyZ' && isCtrlAltZPressed) {
+        e.preventDefault();
+        isCtrlAltZPressed = false;
+        if (isRecording) {
+          stopRecording();
+        }
+      }
+    });
+    
+    // Initialize
+    window.addEventListener('resize', resize, { passive: true });
+    resize();
+    setupDemoAudio();
+    animate();
+  </script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+name: Build MVP-Echo Windows App
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-electron-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install Node dependencies
+      run: npm ci
+
+    - name: Build Vite frontend
+      run: npm run build
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install faster-whisper
+
+    - name: Build Electron app (Windows)
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        CSC_IDENTITY_AUTO_DISCOVERY: false
+      run: |
+        npm run dist
+
+    - name: Upload NSIS Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: MVP-Echo-Windows-Installer
+        path: dist/MVP-Echo-Setup-*.exe
+        if-no-files-found: warn
+
+    - name: Upload Portable Executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: MVP-Echo-Windows-Portable
+        path: dist/MVP-Echo-Portable-*.exe
+        if-no-files-found: warn
+
+    - name: List dist contents (debug)
+      if: always()
+      run: |
+        echo "Contents of dist directory:"
+        dir dist
+
+    # Optional: Create GitHub Release on tags
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/MVP-Echo-Setup-*.exe
+          dist/MVP-Echo-Portable-*.exe
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

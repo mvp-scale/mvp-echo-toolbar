@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MVP-Echo Light v1.1.0 — Cloud-Based Transcription</title>
+  <style>
+    :root {
+      --panel: rgba(135, 206, 250, 0.08);
+      --border: rgba(135, 206, 250, 0.20);
+      --text: #e8f4ff;
+      --muted: #9db8d4;
+      --accent: #4fc3f7;
+      --success: #4caf50;
+      --warning: #ff9800;
+      --radius: 16px;
+      --glow: drop-shadow(0 0 12px rgba(79, 195, 247, .3));
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, #0a1628 0%, #0d1b2a 50%, #112240 100%);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 16px;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 24px;
+      backdrop-filter: blur(10px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-icon {
+      font-size: 28px;
+    }
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+    .brand-name {
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
+    .brand-version {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: rgba(79, 195, 247, 0.15);
+      border: 1px solid var(--accent);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Main Layout */
+    .main-content {
+      display: grid;
+      grid-template-columns: 400px 1fr;
+      gap: 20px;
+      height: 100%;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(12px);
+      padding: 24px;
+      overflow: auto;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .section-icon {
+      font-size: 20px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--accent);
+      margin: 0;
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .input-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .input-field {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'Courier New', monospace;
+    }
+
+    .input-field:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(79, 195, 247, 0.15);
+    }
+
+    .btn {
+      padding: 12px 20px;
+      background: linear-gradient(135deg, var(--accent), #0288d1);
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(79, 195, 247, 0.4);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+    }
+
+    .btn-large {
+      padding: 18px 24px;
+      font-size: 16px;
+      border-radius: 14px;
+    }
+
+    .connection-status {
+      padding: 16px;
+      background: rgba(76, 175, 80, 0.1);
+      border: 1px solid var(--success);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+    }
+
+    .connection-status.disconnected {
+      background: rgba(255, 152, 0, 0.1);
+      border-color: var(--warning);
+    }
+
+    .info-box {
+      padding: 12px 16px;
+      background: rgba(79, 195, 247, 0.08);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* Stage */
+    .stage {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+      background: radial-gradient(800px at 50% 30%, rgba(79, 195, 247, 0.08), transparent);
+    }
+
+    .visualizer {
+      width: 320px;
+      height: 320px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(79, 195, 247, 0.15), transparent);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      filter: var(--glow);
+    }
+
+    .visualizer-inner {
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      border: 1px dashed var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 72px;
+      opacity: 0.6;
+    }
+
+    .recording-indicator {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      padding: 10px 18px;
+      background: rgba(244, 67, 54, 0.2);
+      border: 1px solid #f44336;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .recording-indicator.active {
+      display: flex;
+    }
+
+    .rec-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #f44336;
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .transcription-output {
+      width: 100%;
+      max-width: 800px;
+      padding: 24px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      min-height: 120px;
+      font-size: 18px;
+      line-height: 1.8;
+      color: var(--text);
+      text-align: center;
+    }
+
+    .transcription-output.empty {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 14px;
+    }
+
+    /* Footer */
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .footer-stats {
+      display: flex;
+      gap: 32px;
+    }
+
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+    }
+
+    .stat-value {
+      color: var(--text);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">☁️</div>
+      <div class="brand-text">
+        <div class="brand-name">MVP-Echo Light</div>
+        <div class="brand-version">Version 1.1.0 · Cloud Edition</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span>Cloud Connected</span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Sidebar -->
+    <aside class="panel sidebar">
+      <!-- Cloud Configuration -->
+      <section class="section">
+        <div class="section-header">
+          <span class="section-icon">🌐</span>
+          <h2 class="section-title">Cloud Configuration</h2>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Endpoint URL</label>
+          <input
+            type="text"
+            class="input-field"
+            placeholder="https://your-api.com/transcribe"
+            value="https://stt.example.com/v1/transcribe"
+          />
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">API Key (Optional)</label>
+          <input
+            type="password"
+            class="input-field"
+            placeholder="sk-..."
+          />
+        </div>
+
+        <button class="btn">
+          <span>🔌</span>
+          <span>Test Connection</span>
+        </button>
+
+        <div class="connection-status">
+          <span>✅</span>
+          <div>
+            <div style="font-weight: 600;">Connected</div>
+            <div style="font-size: 11px; opacity: 0.8;">Latency: 45ms</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Model Selection -->
+      <section class="section">
+        <div class="section-header">
+          <span class="section-icon">🤖</span>
+          <h2 class="section-title">Model Settings</h2>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Whisper Model</label>
+          <select class="input-field">
+            <option>tiny (fastest)</option>
+            <option selected>base (recommended)</option>
+            <option>small (better quality)</option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Language</label>
+          <select class="input-field">
+            <option selected>Auto-detect</option>
+            <option>English</option>
+            <option>Spanish</option>
+            <option>French</option>
+            <option>German</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Info -->
+      <div class="info-box">
+        <strong>☁️ Cloud Processing</strong><br/>
+        Audio is securely sent to your configured endpoint for transcription. Requires active internet connection. Fast, minimal local resources.
+      </div>
+    </aside>
+
+    <!-- Stage -->
+    <main class="panel stage">
+      <div class="recording-indicator active">
+        <div class="rec-dot"></div>
+        <span>RECORDING</span>
+      </div>
+
+      <div class="visualizer">
+        <div class="visualizer-inner">
+          🎤
+        </div>
+      </div>
+
+      <button class="btn btn-large">
+        <span>⏺️</span>
+        <span>Start Recording</span>
+      </button>
+
+      <div class="transcription-output empty">
+        Your transcription will appear here...
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-stats">
+      <div class="stat">
+        <span class="stat-label">Mode:</span>
+        <span class="stat-value">☁️ Cloud</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Endpoint:</span>
+        <span class="stat-value">stt.example.com</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Latency:</span>
+        <span class="stat-value">45ms</span>
+      </div>
+    </div>
+    <div>
+      <span>Ctrl+Alt+Z to start/stop</span>
+    </div>
+  </footer>
+
+  <script>
+    // Simple demo interactions
+    const visualizer = document.querySelector('.visualizer');
+    const recordingIndicator = document.querySelector('.recording-indicator');
+    const recordBtn = document.querySelector('.btn-large');
+    const transcriptionOutput = document.querySelector('.transcription-output');
+
+    let isRecording = false;
+
+    recordBtn.addEventListener('click', () => {
+      isRecording = !isRecording;
+
+      if (isRecording) {
+        recordBtn.innerHTML = '<span>⏹️</span><span>Stop Recording</span>';
+        recordBtn.style.background = 'linear-gradient(135deg, #f44336, #d32f2f)';
+        recordingIndicator.classList.add('active');
+        visualizer.style.animation = 'pulse 1.5s ease-in-out infinite';
+
+        // Simulate transcription after 3 seconds
+        setTimeout(() => {
+          transcriptionOutput.classList.remove('empty');
+          transcriptionOutput.textContent = 'This is a demo transcription from the cloud endpoint. The audio was processed remotely and returned via the configured API.';
+        }, 3000);
+      } else {
+        recordBtn.innerHTML = '<span>⏺️</span><span>Start Recording</span>';
+        recordBtn.style.background = 'linear-gradient(135deg, var(--accent), #0288d1)';
+        recordingIndicator.classList.remove('active');
+        visualizer.style.animation = '';
+      }
+    });
+  </script>
+</body>
+</html>

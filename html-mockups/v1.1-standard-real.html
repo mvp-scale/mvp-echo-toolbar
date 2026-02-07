@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MVP-Echo v1.1.0 - Standard Edition</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            border: 'hsl(0 0% 90%)',
+            background: 'hsl(0 0% 100%)',
+            foreground: 'hsl(0 0% 14.5%)',
+            primary: { DEFAULT: 'hsl(227 100% 55%)', foreground: 'hsl(0 0% 100%)' },
+            muted: { DEFAULT: 'hsl(0 0% 95%)', foreground: 'hsl(0 0% 55.6%)' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; }
+    .draggable { -webkit-app-region: drag; app-region: drag; }
+    .non-draggable { -webkit-app-region: no-drag; app-region: no-drag; }
+    .title-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 40px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid hsl(0 0% 90%);
+    }
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .recording-pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
+  </style>
+</head>
+<body class="min-h-screen bg-background text-foreground">
+  <!-- Modern Windows 11 Title Bar -->
+  <div class="title-bar draggable">
+    <div class="flex items-center gap-3 px-4 h-full non-draggable">
+      <div class="w-6 h-6 rounded-md bg-primary flex items-center justify-center">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="text-primary-foreground">
+          <path d="M12 1L3 7V10C3 16 9 21 12 22C15 21 21 16 21 10V7L12 1Z" stroke="currentColor" stroke-width="2" fill="currentColor" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="flex items-center gap-2">
+        <h1 class="text-sm font-semibold text-foreground">MVP-Echo</h1>
+        <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">⚡ GPU</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="pt-[40px] flex flex-col min-h-screen">
+    <main class="flex-1 container max-w-4xl mx-auto p-4 flex flex-col space-y-4">
+
+      <!-- Compute Mode Configuration - NEW FOR STANDARD -->
+      <div class="bg-muted/30 border-2 border-dashed border-green-300 rounded-lg p-4">
+        <div class="flex items-start gap-3">
+          <div class="text-2xl">🎯</div>
+          <div class="flex-1 space-y-3">
+            <div>
+              <h3 class="text-sm font-semibold text-foreground mb-1">Compute Mode</h3>
+              <p class="text-xs text-muted-foreground">Select how MVP-Echo processes transcriptions</p>
+            </div>
+
+            <!-- Mode Selection Radio Buttons -->
+            <div class="space-y-2">
+              <!-- Auto-Detect -->
+              <label class="flex items-center gap-3 p-3 bg-white border-2 border-primary rounded-lg cursor-pointer hover:shadow-md transition-shadow">
+                <input type="radio" name="mode" value="auto" checked class="w-4 h-4 text-primary" />
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-foreground">🎯 Auto-Detect</span>
+                    <span class="text-[9px] px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-bold uppercase">Recommended</span>
+                  </div>
+                  <p class="text-xs text-muted-foreground mt-0.5">Automatically use GPU if available, fallback to CPU</p>
+                </div>
+              </label>
+
+              <!-- Force GPU -->
+              <label class="flex items-center gap-3 p-3 bg-white border-2 border-border rounded-lg cursor-pointer hover:border-green-500 hover:shadow-md transition-all">
+                <input type="radio" name="mode" value="gpu" class="w-4 h-4 text-green-500" onchange="updateMode('gpu')" />
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-foreground">⚡ Force GPU</span>
+                    <span class="text-[9px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold uppercase">Detected</span>
+                  </div>
+                  <p class="text-xs text-muted-foreground mt-0.5">Always use GPU acceleration (faster, requires NVIDIA)</p>
+                </div>
+              </label>
+
+              <!-- Force CPU -->
+              <label class="flex items-center gap-3 p-3 bg-white border-2 border-border rounded-lg cursor-pointer hover:border-orange-500 hover:shadow-md transition-all">
+                <input type="radio" name="mode" value="cpu" class="w-4 h-4 text-orange-500" onchange="updateMode('cpu')" />
+                <div class="flex-1">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold text-foreground">💻 Force CPU</span>
+                  </div>
+                  <p class="text-xs text-muted-foreground mt-0.5">Use CPU even if GPU available (lower power usage)</p>
+                </div>
+              </label>
+            </div>
+
+            <!-- System Detection Info -->
+            <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+              <div class="text-xs space-y-1">
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">GPU Detected:</span>
+                  <span class="font-semibold text-foreground">✅ NVIDIA RTX 3080</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">CUDA Available:</span>
+                  <span class="font-semibold text-foreground">✅ Version 12.1</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">Processing:</span>
+                  <span class="font-semibold text-foreground">🔒 Fully Local</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ocean Visualizer with Microphone Control -->
+      <div class="relative flex-1 min-h-[250px]">
+        <!-- Ocean Visualizer -->
+        <div class="absolute inset-0 bg-gradient-to-br from-blue-50 to-white rounded-lg border-2 border-border overflow-hidden">
+          <div class="absolute inset-0 flex items-center justify-center">
+            <div class="w-64 h-64 rounded-full border-2 border-dashed border-border flex items-center justify-center">
+              <div class="text-6xl opacity-30">🌊</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Microphone Button - Bottom Right -->
+        <div class="absolute bottom-4 right-4">
+          <button
+            onclick="toggleRecording()"
+            id="micBtn"
+            class="w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 opacity-60 hover:opacity-100 bg-primary/80 hover:bg-primary text-primary-foreground shadow-md shadow-primary/20"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C10.9 2 10 2.9 10 4V12C10 13.1 10.9 14 12 14C13.1 14 14 13.1 14 12V4C14 2.9 13.1 2 12 2Z"/>
+              <path d="M18 12C18 15.3 15.3 18 12 18C8.7 18 6 15.3 6 12H4C4 16.4 7.6 20 12 20C16.4 20 20 16.4 20 12H18Z"/>
+              <path d="M11 21V23H13V21H11Z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Transcription Display -->
+      <div class="h-[180px] p-4 bg-muted/50 rounded-lg border-2 border-dashed border-border overflow-y-auto">
+        <div class="flex flex-col items-center justify-center h-full space-y-4">
+          <div class="text-center space-y-3 max-w-md">
+            <h3 class="text-lg font-semibold text-foreground">How to Use MVP-Echo</h3>
+            <div class="space-y-2">
+              <div class="flex items-center justify-center gap-2">
+                <span class="font-bold text-primary">Hold Ctrl+Alt</span>
+                <span class="text-muted-foreground">→</span>
+                <span class="font-bold text-green-600">Tap Z</span>
+                <span class="text-muted-foreground">to start recording</span>
+              </div>
+              <div class="flex items-center justify-center gap-2">
+                <span class="font-bold text-primary">Hold Ctrl+Alt</span>
+                <span class="text-muted-foreground">→</span>
+                <span class="font-bold text-red-600">Tap Z</span>
+                <span class="text-muted-foreground">to stop recording</span>
+              </div>
+              <div class="flex items-center justify-center gap-2">
+                <span class="font-bold text-primary">Press Ctrl+V</span>
+                <span class="text-muted-foreground">to paste anywhere</span>
+              </div>
+            </div>
+            <p class="text-xs text-green-600 mt-3 font-medium">
+              🔒 All processing happens locally on your device
+            </p>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer Status Bar -->
+    <footer class="bg-muted/30 border-t border-border px-4 py-2">
+      <div class="container max-w-4xl mx-auto">
+        <div class="flex items-center justify-between text-[10px]">
+          <!-- System Info -->
+          <div class="flex items-center gap-2 text-muted-foreground">
+            <span>v1.1.0</span>
+            <span>•</span>
+            <span id="footerMode">⚡ GPU (CUDA)</span>
+            <span>•</span>
+            <span>base model</span>
+            <span>•</span>
+            <span>NVIDIA RTX 3080</span>
+          </div>
+
+          <!-- Status and Controls -->
+          <div class="flex items-center gap-3">
+            <div class="flex items-center gap-1.5">
+              <div class="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+              <span class="text-green-600 font-medium">Ready</span>
+            </div>
+
+            <button
+              class="px-2 py-0.5 rounded text-[9px] font-medium transition-all duration-200 cursor-pointer border text-slate-600 hover:text-slate-900 hover:bg-slate-200 border-transparent hover:border-slate-300"
+            >
+              Privacy
+            </button>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    let isRecording = false;
+
+    function toggleRecording() {
+      isRecording = !isRecording;
+      const btn = document.getElementById('micBtn');
+
+      if (isRecording) {
+        btn.classList.remove('bg-primary/80', 'hover:bg-primary');
+        btn.classList.add('bg-red-500/80', 'hover:bg-red-500', 'recording-pulse');
+        btn.innerHTML = '<div class="w-3 h-3 bg-current rounded-sm"></div>';
+      } else {
+        btn.classList.add('bg-primary/80', 'hover:bg-primary');
+        btn.classList.remove('bg-red-500/80', 'hover:bg-red-500', 'recording-pulse');
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C10.9 2 10 2.9 10 4V12C10 13.1 10.9 14 12 14C13.1 14 14 13.1 14 12V4C14 2.9 13.1 2 12 2Z"/>
+          <path d="M18 12C18 15.3 15.3 18 12 18C8.7 18 6 15.3 6 12H4C4 16.4 7.6 20 12 20C16.4 20 20 16.4 20 12H18Z"/>
+          <path d="M11 21V23H13V21H11Z"/>
+        </svg>`;
+      }
+    }
+
+    function updateMode(mode) {
+      const badge = document.querySelector('.title-bar span');
+      const footerMode = document.getElementById('footerMode');
+
+      if (mode === 'gpu') {
+        badge.className = 'text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium';
+        badge.textContent = '⚡ GPU';
+        footerMode.textContent = '⚡ GPU (CUDA)';
+      } else if (mode === 'cpu') {
+        badge.className = 'text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full font-medium';
+        badge.textContent = '💻 CPU';
+        footerMode.textContent = '💻 CPU Only';
+      }
+    }
+  </script>
+</body>
+</html>

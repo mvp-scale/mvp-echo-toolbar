@@ -1,0 +1,39 @@
+{
+  "name": "mvp-echo",
+  "version": "1.0.0",
+  "description": "MVP-Echo - Windows 11 Voice-to-Text Transcription App",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --port 5173",
+    "dev:electron": "electron app/main/main.js",
+    "build": "vite build",
+    "start": "electron .",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "voice-to-text",
+    "transcription",
+    "electron",
+    "windows11"
+  ],
+  "author": "MVP-Echo Team",
+  "license": "MIT",
+  "dependencies": {
+    "electron": "^28.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

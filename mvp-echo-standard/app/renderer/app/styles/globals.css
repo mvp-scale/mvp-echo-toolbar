@@ -1,0 +1,197 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+@layer base {
+  :root {
+    /* MVP Scale light theme - clean whites and grays */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 14.5%;
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 14.5%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 14.5%;
+    /* MVP Scale bright electric blue primary color */
+    --primary: 227 100% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 14.5%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 55.6%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 14.5%;
+    --destructive: 0 84% 57.7%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 90%;
+    --input: 0 0% 95%;
+    --ring: 227 100% 55%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    /* MVP Scale exact dark theme - very dark navy background with bright blue accents */
+    --background: 228 20% 8%;
+    --foreground: 0 0% 98%;
+    --card: 228 20% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 228 20% 12%;
+    --popover-foreground: 0 0% 98%;
+    /* Bright electric blue matching MVP Scale exactly */
+    --primary: 227 100% 65%;
+    --primary-foreground: 228 20% 8%;
+    --secondary: 228 20% 18%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 228 20% 15%;
+    --muted-foreground: 0 0% 65%;
+    --accent: 228 20% 18%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 15 100% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 228 20% 18%;
+    --input: 228 20% 15%;
+    --ring: 227 100% 65%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  }
+  
+  /* MVP Scale typography styles */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-semibold tracking-tight;
+  }
+  h1 {
+    @apply text-3xl font-bold;
+  }
+  h2 {
+    @apply text-2xl font-semibold;
+  }
+}
+
+/* MVP Scale specific animations and effects */
+@keyframes recording-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.recording-pulse {
+  animation: recording-pulse 1.5s ease-in-out infinite;
+}
+
+/* Enhanced MVP Scale card styles with exact hover effects */
+.mvp-card {
+  @apply bg-card border border-border rounded-xl transition-all duration-200 ease-out;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.mvp-card:hover {
+  /* Added bright blue border on hover matching MVP Scale design */
+  @apply border-primary;
+  box-shadow: 0 4px 20px rgba(66, 133, 244, 0.15);
+  transform: translateY(-1px);
+}
+
+/* MVP Scale button styles matching their exact design */
+.mvp-button-primary {
+  @apply bg-primary text-primary-foreground font-semibold rounded-xl px-6 py-3 transition-all duration-200 ease-out;
+  box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);
+}
+
+.mvp-button-primary:hover {
+  @apply bg-primary/90;
+  box-shadow: 0 4px 16px rgba(66, 133, 244, 0.4);
+  transform: translateY(-1px);
+}
+
+.mvp-button-secondary {
+  /* Updated to match MVP Scale's gray "View Docs" button style with white text */
+  @apply bg-slate-600 text-white font-semibold rounded-xl px-6 py-3 transition-all duration-200 ease-out border-0;
+}
+
+.mvp-button-secondary:hover {
+  /* Updated hover state to match MVP Scale secondary button behavior */
+  @apply bg-slate-500;
+  transform: translateY(-1px);
+}
+
+/* Added dark mode support for secondary buttons */
+.dark .mvp-button-secondary {
+  @apply bg-slate-600 text-white;
+}
+
+.dark .mvp-button-secondary:hover {
+  @apply bg-slate-500;
+}
+
+/* Window Controls Overlay Support - Modern Windows 11 styling */
+:root {
+  --fallback-title-bar-height: 40px;
+}
+
+/* Drag regions for custom title bar */
+.draggable {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.non-draggable {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* Title bar layout for Window Controls Overlay */
+.title-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(titlebar-area-height, var(--fallback-title-bar-height));
+  width: 100%;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.title-bar-content {
+  position: absolute;
+  top: 0;
+  left: env(titlebar-area-x, 0);
+  width: env(titlebar-area-width, 100%);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+
+/* Main content offset for title bar */
+.main-content {
+  padding-top: env(titlebar-area-height, var(--fallback-title-bar-height));
+}
+
+/* Dark mode title bar */
+.dark .title-bar {
+  background: rgba(30, 32, 47, 0.85);
+}
+
+/* Windows 11 style - subtle transparency and blur effects */
+@supports (backdrop-filter: blur(20px)) {
+  .title-bar {
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+}

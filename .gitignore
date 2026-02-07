@@ -1,0 +1,79 @@
+styleGuide/
+node_modules/
+dist/
+build/
+out/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+.DS_Store
+.cursorignore
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Coverage directories
+coverage/
+.coverage/
+.nyc_output/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+.vs/
+*.sublime-workspace
+*.sublime-project
+
+# Temp files
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# System files
+Thumbs.db
+desktop.ini
+
+# Package files
+*.tgz
+yarn.lock
+package-lock.json
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+
+_images/
+StylGuide2/
+python-embedded/
+
+temp/
+models/
+
+# Python virtual environments
+venv/
+standalone-whisper/venv/
+standalone-whisper/build/
+standalone-whisper/dist/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Whisper binary builds
+whisper-bin/

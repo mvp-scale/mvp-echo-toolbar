@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ultra³‑Modern Audio Wave Analyzer — Color Flow Edition</title>
+  <style>
+    :root {
+      --panel: rgba(255,255,255,.08);
+      --border: rgba(255,255,255,.15);
+      --text: #e8e9ff;
+      --muted: #9aa0b3;
+      --accent: #9b87f5;
+      --radius: 20px;
+      --glow: drop-shadow(0 0 15px rgba(155,135,245,.5));
+      --primary: oklch(0.55 0.25 264);
+      --accent-pink: oklch(0.70 0.25 330);
+      --accent-cyan: oklch(0.75 0.20 200);
+    }
+    
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    
+    body {
+      margin: 0; 
+      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable', Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+      background: 
+        radial-gradient(circle at 25% 25%, rgba(255,105,180,0.15) 0%, transparent 50%),
+        radial-gradient(circle at 75% 75%, rgba(64,224,255,0.15) 0%, transparent 50%),
+        radial-gradient(ellipse at 20% 80%, #0f0f23 0%, #0b0b12 50%, #06070a 100%);
+      display: grid; 
+      grid-template-rows: auto 1fr auto; 
+      gap: 20px; 
+      padding: 20px; 
+      overflow: hidden;
+    }
+    
+    header { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      backdrop-filter: blur(12px) saturate(140%);
+    }
+    
+    .brand { 
+      font-weight: 800; 
+      letter-spacing: .8px; 
+      font-size: 15px; 
+      opacity: .95;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .header-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .wrap { 
+      display: grid; 
+      grid-template-columns: 420px 1fr 360px; 
+      gap: 20px; 
+      height: calc(100vh - 140px); 
+    }
+    
+    .panel { 
+      background: var(--panel); 
+      border: 1px solid var(--border); 
+      border-radius: var(--radius); 
+      backdrop-filter: blur(12px) saturate(140%); 
+      box-shadow: 0 25px 80px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.1); 
+    }
+
+    /* Enhanced Controls */
+    .controls { 
+      padding: 18px; 
+      overflow: auto; 
+    }
+    
+    .section-title { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      gap: 10px; 
+      margin: 12px 0 8px; 
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    
+    .section-title h2 { 
+      font-size: 13px; 
+      font-weight: 900; 
+      text-transform: uppercase; 
+      color: var(--accent); 
+      letter-spacing: .15em; 
+      margin: 0; 
+    }
+    
+    .help { 
+      font-size: 11px; 
+      color: var(--muted); 
+      opacity: .9; 
+      font-style: italic;
+    }
+    
+    .row { 
+      display: grid; 
+      grid-template-columns: 170px 1fr 80px; 
+      gap: 10px; 
+      align-items: center; 
+      padding: 10px 6px; 
+      border-bottom: 1px dashed rgba(255,255,255,.06); 
+      transition: background 0.2s ease;
+    }
+    
+    .row:hover {
+      background: rgba(255,255,255,.03);
+      border-radius: 8px;
+    }
+    
+    .row:last-child { border-bottom: 0; }
+    
+    label { 
+      font-size: 13px; 
+      color: var(--text); 
+      font-weight: 500;
+    }
+    
+    select, input[type="range"], input[type="number"], input[type="checkbox"], input[type="text"] { 
+      accent-color: var(--accent); 
+      background: rgba(255,255,255,.08); 
+      border: 1px solid rgba(255,255,255,.2); 
+      color: var(--text); 
+      border-radius: 12px; 
+      padding: 8px 10px;
+      transition: all 0.2s ease;
+    }
+    
+    input[type="range"] { 
+      width: 100%; 
+      height: 6px;
+      background: rgba(255,255,255,.1);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    
+    input[type="range"]::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      cursor: pointer;
+      border: none;
+    }
+    
+    select:focus, input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(155,135,245,.2);
+    }
+    
+    output { 
+      font-size: 12px; 
+      color: var(--accent); 
+      text-align: right; 
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    
+    .btn { 
+      appearance: none; 
+      border: 1px solid rgba(255,255,255,.25); 
+      color: var(--text); 
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05)); 
+      border-radius: 14px; 
+      padding: 12px 16px; 
+      font-weight: 700; 
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      font-size: 13px;
+      letter-spacing: .3px;
+    }
+    
+    .btn:hover {
+      background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(0,0,0,.2);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn.primary {
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      border: none;
+      color: #fff;
+      font-weight: 800;
+    }
+    
+    .btn.recording {
+      background: linear-gradient(135deg, #ff4444, #cc0000);
+      animation: pulse-btn 2s ease-in-out infinite;
+    }
+
+    /* Enhanced Stage with Static Color Flow Background */
+    .stage { 
+      position: relative; 
+      display: grid; 
+      place-items: center; 
+      overflow: hidden; 
+      background: 
+        radial-gradient(800px 600px at 30% 20%, rgba(255,105,180,0.08) 0%, transparent 50%),
+        radial-gradient(1000px 800px at 80% 80%, rgba(64,224,255,0.08) 0%, transparent 50%),
+        radial-gradient(1200px 800px at 80% 10%, #111626 0%, #0b0b12 40%, #06070a 100%);
+    }
+    
+    canvas { 
+      width: 100%; 
+      height: 100%; 
+      filter: var(--glow); 
+      border-radius: 16px;
+    }
+    
+    .hud { 
+      position: absolute; 
+      inset: 0; 
+      display: grid; 
+      place-items: center; 
+      pointer-events: none; 
+    }
+    
+    .ring { 
+      position: absolute; 
+      width: 60vmin; 
+      height: 60vmin; 
+      border-radius: 50%; 
+      border: 1px dashed rgba(155,135,245,.2); 
+    }
+    
+    .record-button {
+      position: absolute;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(255,68,68,.9), rgba(204,0,0,.7));
+      border: 3px solid rgba(255,255,255,.3);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      pointer-events: auto;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 8px 32px rgba(255,68,68,.3);
+    }
+    
+    .record-button:hover {
+      transform: scale(1.1);
+      box-shadow: 0 12px 48px rgba(255,68,68,.5);
+    }
+    
+    .record-button.recording {
+      animation: pulse-record 2s ease-in-out infinite;
+    }
+    
+    .record-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      transition: all 0.3s ease;
+    }
+    
+    .record-button.recording .record-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+    }
+    
+    .meters { 
+      position: absolute; 
+      left: 20px; 
+      bottom: 20px; 
+      display: flex; 
+      gap: 10px; 
+      opacity: .95; 
+    }
+    
+    .meter { 
+      width: 10px; 
+      height: 45px; 
+      border-radius: 10px; 
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); 
+      border: 1px solid rgba(255,255,255,.15); 
+      overflow: hidden; 
+      position: relative;
+    }
+    
+    .meter > i { 
+      display: block; 
+      width: 100%; 
+      height: 0%; 
+      background: linear-gradient(180deg, var(--accent-cyan), var(--accent)); 
+      position: absolute;
+      bottom: 0;
+      transition: height 0.1s ease;
+    }
+
+    /* Enhanced Snapshot panel */
+    .snapshot { 
+      padding: 16px; 
+      display: grid; 
+      grid-template-rows: auto 1fr auto; 
+      gap: 12px; 
+    }
+    
+    .codebox { 
+      background: rgba(0,0,0,.4); 
+      border: 1px solid rgba(255,255,255,.2); 
+      border-radius: 16px; 
+      padding: 14px; 
+      font-family: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; 
+      font-size: 12px; 
+      color: #cfe0ff; 
+      overflow: auto;
+      line-height: 1.5;
+    }
+    
+    footer { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      backdrop-filter: blur(12px);
+    }
+    
+    .kbd { 
+      padding: .2rem .6rem; 
+      border: 1px solid rgba(255,255,255,.3); 
+      border-radius: 8px; 
+      font-size: 12px; 
+      opacity: .9;
+      background: rgba(255,255,255,.05);
+      font-family: ui-monospace, monospace;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    
+    .preset-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+    }
+    
+    .preset-btn {
+      padding: 8px 12px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .preset-btn:hover {
+      background: rgba(255,255,255,.1);
+    }
+    
+    .color-flow-selector {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin: 8px 0;
+    }
+    
+    .flow-swatch {
+      height: 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: all 0.2s ease;
+    }
+    
+    .flow-swatch:hover, .flow-swatch.active {
+      border-color: var(--accent);
+      transform: scale(1.05);
+    }
+    
+    @keyframes pulse-record {
+      0%, 100% { 
+        box-shadow: 0 8px 32px rgba(255,68,68,.3);
+      }
+      50% { 
+        box-shadow: 0 12px 48px rgba(255,68,68,.6);
+      }
+    }
+    
+    @keyframes pulse-btn {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.8; }
+    }
+    
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    @keyframes flow-shift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">MVP Scale · Wave Analyzer Ultra³</div>
+    <div class="header-controls">
+      <div class="status-indicator">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Ready</span>
+      </div>
+      <button id="btnMic" class="btn primary">🎤 Start Microphone</button>
+      <button id="btnDemo" class="btn">🎵 Demo Signal</button>
+      <button id="btnPause" class="btn" title="Space">⏸ Pause</button>
+      <button id="btnSnapshot" class="btn" title="Save PNG">📸 Snapshot</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- Left: Enhanced Controls Sidebar -->
+    <section class="panel controls" id="controls">
+      <div class="section-title"><h2>Display Mode</h2><span class="help">Primary visualizer</span></div>
+      <div class="row"><label for="mode">Visualizer</label>
+        <select id="mode">
+          <option value="radial">Radial Ring</option>
+          <option value="linear">Linear Oscilloscope</option>
+          <option value="bars">Spectrum Bars</option>
+          <option value="composite" selected>Flow Composite</option>
+          <option value="enhanced">Enhanced Flow</option>
+        </select>
+        <span></span>
+      </div>
+      
+      <div class="section-title"><h2>Color Flow</h2><span class="help">Dynamic gradients</span></div>
+      <div class="row"><label for="colorFlow">Flow Type</label>
+        <select id="colorFlow">
+          <option value="aurora" selected>Aurora Flow</option>
+          <option value="plasma">Plasma Flow</option>
+          <option value="ocean">Ocean Current</option>
+          <option value="fire">Fire Stream</option>
+          <option value="cosmic">Cosmic Drift</option>
+          <option value="neon">Neon Pulse</option>
+          <option value="sunset">Sunset Fade</option>
+        </select>
+        <span class="help">Palette</span>
+      </div>
+      <div class="color-flow-selector" id="flowSwatches"></div>
+      <div class="row"><label for="flowSpeed">Flow Speed</label>
+        <input id="flowSpeed" type="range" min="0.1" max="5" step="0.1" value="1" />
+        <output id="flowSpeedOut">1</output>
+      </div>
+      <div class="row"><label for="flowIntensity">Flow Intensity</label>
+        <input id="flowIntensity" type="range" min="0.3" max="3" step="0.1" value="1" />
+        <output id="flowIntensityOut">1</output>
+      </div>
+      
+      <div class="preset-buttons">
+        <button class="preset-btn" onclick="loadPreset('minimal')">Minimal Flow</button>
+        <button class="preset-btn" onclick="loadPreset('intense')">Intense Flow</button>
+        <button class="preset-btn" onclick="loadPreset('pro')">Professional</button>
+        <button class="preset-btn" onclick="loadPreset('cyberpunk')">Cyberpunk</button>
+      </div>
+
+      <div class="section-title"><h2>Ring Layers</h2><span class="help">Individual ring control</span></div>
+      <div class="row"><label for="ringCount">Ring Count</label>
+        <input id="ringCount" type="range" min="2" max="6" step="1" value="4" />
+        <output id="ringCountOut">4</output>
+      </div>
+      <div class="row"><label for="innerStyle">Inner Ring Style</label>
+        <select id="innerStyle">
+          <option value="smooth" selected>Smooth Wave</option>
+          <option value="peaks">Sharp Peaks</option>
+          <option value="breathe">Breathing Effect</option>
+          <option value="ripple">Ripple Wave</option>
+          <option value="elastic">Elastic Bounce</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="middleStyle">Middle Ring Style</label>
+        <select id="middleStyle">
+          <option value="smooth">Smooth Wave</option>
+          <option value="peaks">Sharp Peaks</option>
+          <option value="crystalline" selected>Crystalline</option>
+          <option value="organic">Organic Flow</option>
+          <option value="digital">Digital Steps</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="outerStyle">Outer Ring Style</label>
+        <select id="outerStyle">
+          <option value="smooth" selected>Smooth Wave</option>
+          <option value="peaks">Sharp Peaks</option>
+          <option value="whisper">Whisper Soft</option>
+          <option value="shimmer">Shimmer Effect</option>
+          <option value="gentle">Gentle Pulse</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="ringSpacing">Ring Spacing</label>
+        <input id="ringSpacing" type="range" min="0.04" max="0.25" step="0.005" value="0.08" />
+        <output id="ringSpacingOut">0.08</output>
+      </div>
+
+      <div class="section-title"><h2>Transparency Effects</h2><span class="help">Fade controls</span></div>
+      <div class="row"><label for="barFade">Bar Fade Distance</label>
+        <input id="barFade" type="range" min="0.3" max="0.9" step="0.05" value="0.7" />
+        <output id="barFadeOut">0.7</output>
+      </div>
+      <div class="row"><label for="ringFade">Ring Edge Fade</label>
+        <input id="ringFade" type="range" min="0.1" max="0.8" step="0.05" value="0.4" />
+        <output id="ringFadeOut">0.4</output>
+      </div>
+      <div class="row"><label for="centerTransparency">Center Transparency</label>
+        <input id="centerTransparency" type="range" min="0.1" max="1" step="0.05" value="0.8" />
+        <output id="centerTransparencyOut">0.8</output>
+      </div>
+
+      <div class="section-title"><h2>Bar Variations</h2><span class="help">Central spectrum display</span></div>
+      <div class="row"><label for="barStyle">Bar Style</label>
+        <select id="barStyle">
+          <option value="classic" selected>Classic Bars</option>
+          <option value="rounded">Rounded Bars</option>
+          <option value="gradient">Gradient Bars</option>
+          <option value="outlined">Outlined Bars</option>
+          <option value="neon">Neon Glow</option>
+          <option value="minimal">Minimal Lines</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="barThickness">Bar Thickness</label>
+        <input id="barThickness" type="range" min="0.5" max="4" step="0.1" value="1.5" />
+        <output id="barThicknessOut">1.5</output>
+      </div>
+      
+      <div class="section-title"><h2>Audio Analysis</h2><span class="help">Signal processing</span></div>
+      <div class="row"><label for="noiseGate">Noise Gate</label>
+        <input id="noiseGate" type="range" min="0" max="0.3" step="0.01" value="0.08" />
+        <output id="noiseGateOut">0.08</output>
+      </div>
+      <div class="row"><label for="voiceThreshold">Voice Threshold</label>
+        <input id="voiceThreshold" type="range" min="0.1" max="0.6" step="0.01" value="0.25" />
+        <output id="voiceThresholdOut">0.25</output>
+      </div>
+      <div class="row"><label for="fft">FFT Resolution</label>
+        <input id="fft" type="range" min="512" max="32768" step="512" value="8192" />
+        <output id="fftOut">8192</output>
+      </div>
+      <div class="row"><label for="smoothing">Temporal Smoothing</label>
+        <input id="smoothing" type="range" min="0" max="0.98" step="0.01" value="0.75" />
+        <output id="smoothingOut">0.75</output>
+      </div>
+      <div class="row"><label for="gain">Visual Gain</label>
+        <input id="gain" type="range" min="0.1" max="5" step="0.05" value="1.8" />
+        <output id="gainOut">1.8</output>
+      </div>
+
+      <div class="section-title"><h2>Visual Style</h2><span class="help">Rendering options</span></div>
+      <div class="row"><label for="line">Line Thickness</label>
+        <input id="line" type="range" min="0.2" max="6" step="0.1" value="1.2" />
+        <output id="lineOut">1.2</output>
+      </div>
+      <div class="row"><label for="trail">Motion Blur</label>
+        <input id="trail" type="range" min="0" max="0.5" step="0.01" value="0.1" />
+        <output id="trailOut">0.1</output>
+      </div>
+      <div class="row"><label for="glow">Enhanced Glow</label>
+        <input id="glow" type="checkbox" checked />
+        <span class="help">Color bloom</span>
+      </div>
+    </section>
+
+    <!-- Center: Enhanced Stage -->
+    <section class="panel stage" id="stage">
+      <canvas id="viz"></canvas>
+      <div class="hud" aria-hidden="true">
+        <div class="ring" id="ring"></div>
+        <button class="record-button" id="recordButton">
+          <div class="record-icon"></div>
+        </button>
+        <div class="meters">
+          <div class="meter" title="Left Channel"><i id="meterL"></i></div>
+          <div class="meter" title="Right Channel"><i id="meterR"></i></div>
+          <div class="meter" title="Bass"><i id="meterBass"></i></div>
+          <div class="meter" title="Treble"><i id="meterTreble"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Enhanced Settings -->
+    <section class="panel snapshot">
+      <div class="section-title"><h2>Live Configuration</h2><span class="help">Real-time JSON</span></div>
+      <div class="codebox" id="jsonBox">{}</div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+        <button id="btnCopyJSON" class="btn">📋 Copy JSON</button>
+        <button id="btnDownload" class="btn">⬇️ Save PNG</button>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+        <button id="btnFullscreen" class="btn">🔍 Fullscreen</button>
+        <button id="btnReset" class="btn">🔄 Reset All</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <small>
+      Enhanced with color flow animations • Ultra-thin fade effects • Individual ring control • 
+      Press <span class="kbd">Space</span> to pause • <span class="kbd">Ctrl+Alt+Z</span> for push-to-talk
+    </small>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <span style="font-size:12px; opacity:0.7;">FPS: <span id="fpsCounter">60</span></span>
+      <span style="font-size:12px; opacity:0.7;">Flow: <span id="flowIndicator">Aurora</span></span>
+    </div>
+  </footer>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+  let width, height, dpr;
+  let frameCount = 0;
+  let lastFrameTime = performance.now();
+  let isRecording = false;
+  let flowTime = 0;
+  
+  const analyser = { node: null, dataF: null, dataT: null };
+
+  const ui = {
+    mode: document.getElementById('mode'),
+    colorFlow: document.getElementById('colorFlow'),
+    flowSpeed: document.getElementById('flowSpeed'),
+    flowIntensity: document.getElementById('flowIntensity'),
+    ringCount: document.getElementById('ringCount'),
+    innerStyle: document.getElementById('innerStyle'),
+    middleStyle: document.getElementById('middleStyle'),
+    outerStyle: document.getElementById('outerStyle'),
+    ringSpacing: document.getElementById('ringSpacing'),
+    barFade: document.getElementById('barFade'),
+    ringFade: document.getElementById('ringFade'),
+    centerTransparency: document.getElementById('centerTransparency'),
+    barStyle: document.getElementById('barStyle'),
+    barThickness: document.getElementById('barThickness'),
+    noiseGate: document.getElementById('noiseGate'),
+    voiceThreshold: document.getElementById('voiceThreshold'),
+    fft: document.getElementById('fft'),
+    smoothing: document.getElementById('smoothing'),
+    gain: document.getElementById('gain'),
+    line: document.getElementById('line'),
+    glow: document.getElementById('glow'),
+    trail: document.getElementById('trail'),
+  };
+  
+  const out = {
+    flowSpeed: document.getElementById('flowSpeedOut'),
+    flowIntensity: document.getElementById('flowIntensityOut'),
+    ringCount: document.getElementById('ringCountOut'),
+    ringSpacing: document.getElementById('ringSpacingOut'),
+    barFade: document.getElementById('barFadeOut'),
+    ringFade: document.getElementById('ringFadeOut'),
+    centerTransparency: document.getElementById('centerTransparencyOut'),
+    barThickness: document.getElementById('barThicknessOut'),
+    noiseGate: document.getElementById('noiseGateOut'),
+    voiceThreshold: document.getElementById('voiceThresholdOut'),
+    fft: document.getElementById('fftOut'),
+    smoothing: document.getElementById('smoothingOut'),
+    gain: document.getElementById('gainOut'),
+    line: document.getElementById('lineOut'),
+    trail: document.getElementById('trailOut'),
+  };
+
+  // Enhanced color flow palettes with transparency
+  const colorFlows = {
+    aurora: {
+      colors: ['rgba(64,224,208,0.9)', 'rgba(255,105,180,0.8)', 'rgba(138,43,226,0.7)', 'rgba(64,224,255,0.6)'],
+      speed: 1.2,
+      name: 'Aurora Flow'
+    },
+    plasma: {
+      colors: ['rgba(255,20,147,0.9)', 'rgba(255,69,0,0.8)', 'rgba(255,215,0,0.7)', 'rgba(255,20,147,0.6)'],
+      speed: 1.8,
+      name: 'Plasma Flow'
+    },
+    ocean: {
+      colors: ['rgba(0,119,190,0.9)', 'rgba(0,180,216,0.8)', 'rgba(144,224,239,0.7)', 'rgba(0,119,190,0.6)'],
+      speed: 0.8,
+      name: 'Ocean Current'
+    },
+    fire: {
+      colors: ['rgba(255,69,0,0.9)', 'rgba(255,140,0,0.8)', 'rgba(255,215,0,0.7)', 'rgba(220,20,60,0.6)'],
+      speed: 2.0,
+      name: 'Fire Stream'
+    },
+    cosmic: {
+      colors: ['rgba(75,0,130,0.9)', 'rgba(138,43,226,0.8)', 'rgba(147,112,219,0.7)', 'rgba(255,20,147,0.6)'],
+      speed: 0.6,
+      name: 'Cosmic Drift'
+    },
+    neon: {
+      colors: ['rgba(57,255,20,0.9)', 'rgba(255,20,147,0.8)', 'rgba(0,191,255,0.7)', 'rgba(255,215,0,0.6)'],
+      speed: 2.5,
+      name: 'Neon Pulse'
+    },
+    sunset: {
+      colors: ['rgba(255,94,77,0.9)', 'rgba(255,154,0,0.8)', 'rgba(255,206,84,0.7)', 'rgba(255,154,0,0.6)'],
+      speed: 1.0,
+      name: 'Sunset Fade'
+    }
+  };
+
+  // Enhanced presets
+  const presets = {
+    minimal: { line: 0.4, trail: 0.02, ringCount: 2, gain: 0.8, flowIntensity: 0.5 },
+    intense: { line: 2.8, trail: 0.2, ringCount: 6, gain: 3.5, flowIntensity: 2.5 },
+    pro: { line: 1.2, trail: 0.08, ringCount: 4, gain: 1.8, flowIntensity: 1.5 },
+    cyberpunk: { colorFlow: 'neon', line: 2.0, trail: 0.15, ringCount: 5, gain: 2.5 }
+  };
+
+  window.loadPreset = function(presetName) {
+    const preset = presets[presetName];
+    if (!preset) return;
+    
+    Object.entries(preset).forEach(([key, value]) => {
+      if (ui[key]) {
+        if (ui[key].type === 'checkbox') {
+          ui[key].checked = value;
+        } else {
+          ui[key].value = value;
+        }
+        ui[key].dispatchEvent(new Event('input'));
+      }
+    });
+  };
+
+  // Initialize flow swatches
+  function initFlowSwatches() {
+    const container = document.getElementById('flowSwatches');
+    Object.entries(colorFlows).forEach(([key, flow]) => {
+      const swatch = document.createElement('div');
+      swatch.className = 'flow-swatch';
+      swatch.style.background = `linear-gradient(135deg, ${flow.colors.join(', ')})`;
+      swatch.title = flow.name;
+      swatch.addEventListener('click', () => {
+        ui.colorFlow.value = key;
+        ui.colorFlow.dispatchEvent(new Event('change'));
+        updateFlowSwatches();
+      });
+      container.appendChild(swatch);
+    });
+    updateFlowSwatches();
+  }
+
+  function updateFlowSwatches() {
+    const swatches = document.querySelectorAll('.flow-swatch');
+    const currentFlow = ui.colorFlow.value;
+    swatches.forEach((swatch, index) => {
+      const flowKey = Object.keys(colorFlows)[index];
+      swatch.classList.toggle('active', flowKey === currentFlow);
+    });
+    document.getElementById('flowIndicator').textContent = colorFlows[currentFlow]?.name || 'Custom';
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2); 
+    width = canvas.clientWidth; 
+    height = canvas.clientHeight; 
+    canvas.width = Math.floor(width * dpr); 
+    canvas.height = Math.floor(height * dpr); 
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); 
+  }
+  
+  window.addEventListener('resize', resize, { passive: true }); 
+  resize();
+
+  // Enhanced audio setup
+  let audioCtx; 
+  let paused = false; 
+  let rms = 0; 
+  let demoStarted = false;
+  let bassLevel = 0, trebleLevel = 0;
+
+  async function startMic() { 
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)(); 
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: true, 
+          noiseSuppression: true,
+          sampleRate: 48000
+        } 
+      }); 
+      const src = audioCtx.createMediaStreamSource(stream); 
+      setupAnalyser(src); 
+      updateStatus('Recording', '#10b981');
+      tick(); 
+    } catch(err) { 
+      console.warn('Mic unavailable, demo fallback', err); 
+      startDemo(); 
+    }
+  }
+
+  function startDemo() { 
+    if (demoStarted) return; 
+    demoStarted = true; 
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); 
+    const an = audioCtx.createAnalyser(); 
+    an.fftSize = clampPow2(+ui.fft.value); 
+    an.smoothingTimeConstant = +ui.smoothing.value; 
+    analyser.node = an; 
+    analyser.dataF = new Uint8Array(an.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(an.fftSize); 
+    
+    // Enhanced demo with flowing oscillators
+    const master = audioCtx.createGain(); 
+    master.gain.value = 0.0; 
+    
+    // Create flowing oscillators
+    const oscs = [];
+    const freqs = [140, 280, 420, 560, 700];
+    
+    freqs.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const types = ['sine', 'triangle', 'sawtooth', 'square'];
+      osc.type = types[i % types.length];
+      osc.frequency.value = freq;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.1 + Math.random() * 0.15;
+      
+      // Add slight detuning for richer sound
+      const detune = audioCtx.createOscillator();
+      detune.type = 'sine';
+      detune.frequency.value = freq + (Math.random() - 0.5) * 10;
+      const detuneGain = audioCtx.createGain();
+      detuneGain.gain.value = 0.05;
+      
+      osc.connect(gain);
+      detune.connect(detuneGain);
+      gain.connect(master);
+      detuneGain.connect(master);
+      
+      oscs.push({ osc, detune, gain, detuneGain, freq });
+      osc.start();
+      detune.start();
+    });
+    
+    master.connect(an);
+    updateStatus('Demo Mode', '#f59e0b');
+    
+    // Flowing demo animation
+    (function flow() {
+      const now = audioCtx.currentTime; 
+      const seg = 0.1 + Math.random() * 0.3; 
+      master.gain.cancelScheduledValues(now); 
+      master.gain.setTargetAtTime(0.02, now, 0.04); 
+      master.gain.setTargetAtTime(0.3 + Math.random() * 0.7, now + 0.02, 0.1); 
+      
+      oscs.forEach((o, i) => {
+        const flowFactor = Math.sin(now * 0.5 + i) * 0.5 + 0.5;
+        const newFreq = o.freq * (0.7 + flowFactor * 0.6);
+        o.osc.frequency.exponentialRampToValueAtTime(newFreq, now + seg);
+        o.detune.frequency.exponentialRampToValueAtTime(newFreq + 5, now + seg);
+        o.gain.gain.setTargetAtTime(0.08 + flowFactor * 0.12, now, seg * 0.4);
+      });
+      
+      setTimeout(flow, seg * 1000); 
+    })();
+    
+    tick(); 
+  }
+
+  function setupAnalyser(input) { 
+    const n = audioCtx.createAnalyser(); 
+    n.fftSize = clampPow2(+ui.fft.value); 
+    n.smoothingTimeConstant = +ui.smoothing.value; 
+    analyser.node = n; 
+    analyser.dataF = new Uint8Array(n.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(n.fftSize); 
+    input.connect(n); 
+  }
+
+  function updateStatus(text, color = '#10b981') {
+    document.getElementById('statusText').textContent = text;
+    document.getElementById('statusDot').style.background = color;
+  }
+
+  function clampPow2(v) { 
+    const p = Math.round(Math.log2(Math.max(512, Math.min(32768, v)))); 
+    return 2 ** p; 
+  }
+  
+  // Enhanced gradient creation with color flows
+  function createFlowGradient(x0, y0, x1, y1, flowType = 'aurora', time = 0, intensity = 1) {
+    const flow = colorFlows[flowType] || colorFlows.aurora;
+    const g = ctx.createLinearGradient(x0, y0, x1, y1);
+    
+    const colors = flow.colors;
+    const speed = flow.speed * intensity;
+    
+    colors.forEach((color, i) => {
+      const offset = (i / (colors.length - 1) + Math.sin(time * speed + i) * 0.1) % 1;
+      const clampedOffset = Math.max(0, Math.min(1, offset));
+      g.addColorStop(clampedOffset, color);
+    });
+    
+    return g;
+  }
+  
+  function clearTrail(a) { 
+    if (a <= 0) { 
+      ctx.clearRect(0, 0, width, height); 
+      return; 
+    } 
+    // Enhanced fade with slight color tint
+    ctx.fillStyle = `rgba(11,11,18,${a})`; 
+    ctx.fillRect(0, 0, width, height); 
+  }
+  
+  function computeRMS(td) { 
+    let s = 0; 
+    for (let i = 0; i < td.length; i++) { 
+      const v = (td[i] - 128) / 128; 
+      s += v * v; 
+    } 
+    return Math.sqrt(s / td.length); 
+  }
+
+  function updateMeters() {
+    if (!analyser.dataF) return;
+    
+    const bassRange = analyser.dataF.slice(0, 12);
+    const trebleRange = analyser.dataF.slice(80, 120);
+    
+    bassLevel = bassRange.reduce((a, b) => a + b, 0) / (bassRange.length * 255);
+    trebleLevel = trebleRange.reduce((a, b) => a + b, 0) / (trebleRange.length * 255);
+    
+    document.getElementById('meterL').style.height = Math.min(100, Math.max(6, rms * 220)) + '%';
+    document.getElementById('meterR').style.height = Math.min(100, Math.max(6, rms * 200)) + '%';
+    document.getElementById('meterBass').style.height = Math.min(100, Math.max(6, bassLevel * 100)) + '%';
+    document.getElementById('meterTreble').style.height = Math.min(100, Math.max(6, trebleLevel * 100)) + '%';
+  }
+
+  function updatePerformanceCounters() {
+    const now = performance.now();
+    const deltaTime = now - lastFrameTime;
+    const fps = Math.round(1000 / deltaTime);
+    
+    if (frameCount % 30 === 0) {
+      document.getElementById('fpsCounter').textContent = fps;
+    }
+    
+    lastFrameTime = now;
+    frameCount++;
+  }
+
+  function updateSnapshot() { 
+    const snap = { 
+      mode: ui.mode.value, 
+      colorFlow: ui.colorFlow.value,
+      flowSpeed: +ui.flowSpeed.value,
+      flowIntensity: +ui.flowIntensity.value,
+      ringCount: +ui.ringCount.value, 
+      innerStyle: ui.innerStyle.value,
+      middleStyle: ui.middleStyle.value,
+      outerStyle: ui.outerStyle.value,
+      ringSpacing: +ui.ringSpacing.value,
+      barFade: +ui.barFade.value,
+      ringFade: +ui.ringFade.value,
+      centerTransparency: +ui.centerTransparency.value,
+      barStyle: ui.barStyle.value,
+      barThickness: +ui.barThickness.value,
+      noiseGate: +ui.noiseGate.value,
+      voiceThreshold: +ui.voiceThreshold.value,
+      fft: +ui.fft.value, 
+      smoothing: +ui.smoothing.value, 
+      gain: +ui.gain.value, 
+      line: +ui.line.value, 
+      trail: +ui.trail.value, 
+      glow: ui.glow.checked 
+    }; 
+    document.getElementById('jsonBox').textContent = JSON.stringify(snap, null, 2); 
+  }
+
+  function tick() { 
+    if (!analyser.node) return; 
+    requestAnimationFrame(tick); 
+    if (paused) return; 
+    
+    analyser.node.getByteTimeDomainData(analyser.dataT); 
+    analyser.node.getByteFrequencyData(analyser.dataF); 
+    rms = computeRMS(analyser.dataT); 
+    
+    updateMeters();
+    updatePerformanceCounters();
+    
+    flowTime += +ui.flowSpeed.value * 0.016; // ~60fps
+    
+    clearTrail(+ui.trail.value); 
+    
+    const currentFlow = ui.colorFlow.value;
+    const flowIntensity = +ui.flowIntensity.value;
+    const g = createFlowGradient(0, 0, width, height, currentFlow, flowTime, flowIntensity);
+    
+    ctx.lineWidth = +ui.line.value; 
+    ctx.lineCap = 'round'; 
+    ctx.lineJoin = 'round'; 
+    ctx.strokeStyle = g; 
+    
+    const gain = +ui.gain.value * (1 + Math.max(0, (rms - 0.1) * 2)); 
+    const mode = ui.mode.value; 
+    
+    if (mode === 'radial') drawStaticRadial(gain); 
+    else if (mode === 'linear') drawFlowLinear(gain); 
+    else if (mode === 'bars') drawCenterStageHorizontalBars(gain); 
+    else if (mode === 'enhanced') drawEnhancedFlow(gain);
+    else drawFlowComposite(gain); 
+    
+    updateSnapshot(); 
+  }
+
+  // Enhanced audio filtering for noise reduction
+  function applyNoiseGate(audioData, gateLevel, voiceThreshold) {
+    const processed = new Float32Array(audioData.length);
+    let totalEnergy = 0;
+    
+    // Calculate total energy
+    for (let i = 0; i < audioData.length; i++) {
+      const sample = (audioData[i] - 128) / 128;
+      totalEnergy += sample * sample;
+    }
+    
+    const avgEnergy = Math.sqrt(totalEnergy / audioData.length);
+    
+    // Apply noise gate if below threshold
+    if (avgEnergy < voiceThreshold) {
+      const gateMultiplier = Math.max(0, (avgEnergy - gateLevel) / (voiceThreshold - gateLevel));
+      for (let i = 0; i < audioData.length; i++) {
+        processed[i] = ((audioData[i] - 128) / 128) * gateMultiplier;
+      }
+    } else {
+      // Above voice threshold, apply light filtering only
+      for (let i = 0; i < audioData.length; i++) {
+        const sample = (audioData[i] - 128) / 128;
+        processed[i] = Math.abs(sample) > gateLevel ? sample : sample * 0.3;
+      }
+    }
+    
+    return processed;
+  }
+
+  // Enhanced drawing functions with new style variations
+  function applyRingStyle(data, style, intensity = 1) {
+    const processed = new Array(data.length);
+    
+    switch (style) {
+      case 'peaks':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          processed[i] = Math.sign(base) * Math.pow(Math.abs(base), 0.7) * intensity;
+        }
+        break;
+      case 'breathe':
+        const breatheRate = Math.sin(flowTime * 0.8) * 0.4 + 0.6;
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          processed[i] = base * intensity * breatheRate;
+        }
+        break;
+      case 'ripple':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const ripple = Math.sin(i * 0.2 + flowTime * 2) * 0.3 + 0.7;
+          processed[i] = base * intensity * ripple;
+        }
+        break;
+      case 'elastic':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const elastic = Math.abs(base) > 0.1 ? 
+            base * (1 + Math.sin(flowTime * 4) * 0.5) : base;
+          processed[i] = elastic * intensity;
+        }
+        break;
+      case 'crystalline':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const crystal = Math.abs(base) > 0.2 ? 
+            Math.sign(base) * (Math.floor(Math.abs(base) * 8) / 8) : base * 0.5;
+          processed[i] = crystal * intensity;
+        }
+        break;
+      case 'organic':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const organic = base + Math.sin(i * 0.15 + flowTime) * Math.abs(base) * 0.4;
+          processed[i] = organic * intensity;
+        }
+        break;
+      case 'digital':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const digital = Math.round(base * 6) / 6; // Quantize to steps
+          processed[i] = digital * intensity;
+        }
+        break;
+      case 'whisper':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          processed[i] = base * intensity * 0.4 * (1 + Math.sin(i * 0.1) * 0.3);
+        }
+        break;
+      case 'shimmer':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const shimmer = 1 + Math.sin(i * 0.5 + flowTime * 3) * 0.6;
+          processed[i] = base * intensity * shimmer;
+        }
+        break;
+      case 'gentle':
+        for (let i = 0; i < data.length; i++) {
+          const base = data[i];
+          const gentle = Math.tanh(base * 2) * 0.7; // Soft compression
+          processed[i] = gentle * intensity;
+        }
+        break;
+      default: // smooth
+        for (let i = 0; i < data.length; i++) {
+          processed[i] = data[i] * intensity;
+        }
+    }
+    return processed;
+  }
+
+  function drawStaticRadial(gain, baseR, ringStyle = 'smooth', alpha = 1, offsetAngle = 0) { 
+    const rawData = analyser.dataT;
+    
+    // Apply noise filtering first
+    const filteredData = applyNoiseGate(rawData, +ui.noiseGate.value, +ui.voiceThreshold.value);
+    const processed = applyRingStyle(filteredData, ringStyle, gain);
+    const len = processed.length; 
+    const cx = width / 2, cy = height / 2; 
+    const r = baseR || (Math.min(width, height) * 0.2); 
+    
+    const fadeAmount = +ui.ringFade.value;
+    
+    ctx.save(); 
+    ctx.globalAlpha = alpha * (+ui.centerTransparency.value * 0.7);
+    
+    // Guide ring - more subtle
+    ctx.save(); 
+    ctx.globalAlpha = 0.15 * alpha; 
+    ctx.beginPath(); 
+    ctx.arc(cx, cy, r, 0, Math.PI * 2); 
+    ctx.stroke(); 
+    ctx.restore(); 
+    
+    // Main waveform ring - NO ROTATION
+    const gradient = createFlowGradient(cx - r, cy - r, cx + r, cy + r, ui.colorFlow.value, flowTime, +ui.flowIntensity.value);
+    ctx.strokeStyle = gradient;
+    
+    ctx.beginPath(); 
+    for (let i = 0; i < len; i++) { 
+      const t = (i / len * Math.PI * 2) + offsetAngle; 
+      const v = processed[i];
+      const rr = r + v * (r * 0.6);
+      const x = cx + Math.cos(t) * rr; 
+      const y = cy + Math.sin(t) * rr; 
+      
+      // Apply edge fade
+      const edgeFactor = 1 - Math.abs(v) * fadeAmount;
+      ctx.globalAlpha = alpha * Math.max(0.05, edgeFactor * 0.6);
+      
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
+    } 
+    ctx.closePath(); 
+    ctx.stroke(); 
+    
+    ctx.restore();
+  }
+
+  function drawCenterStageHorizontalBars(gain) { 
+    const rawFreqData = analyser.dataF;
+    const n = rawFreqData.length; 
+    const fadeDistance = +ui.barFade.value;
+    const maxBars = Math.floor(n * fadeDistance * 0.8);
+    
+    // Apply noise filtering to frequency data
+    let totalEnergy = 0;
+    for (let i = 0; i < n; i++) {
+      totalEnergy += (rawFreqData[i] / 255) * (rawFreqData[i] / 255);
+    }
+    const avgEnergy = Math.sqrt(totalEnergy / n);
+    
+    const noiseGate = +ui.noiseGate.value;
+    const voiceThreshold = +ui.voiceThreshold.value;
+    const energyMultiplier = avgEnergy > voiceThreshold ? 1.0 : 
+                           Math.max(0.1, (avgEnergy - noiseGate) / (voiceThreshold - noiseGate));
+    
+    const cx = width / 2; 
+    const cy = height / 2;
+    const barStyle = ui.barStyle.value;
+    const baseBarWidth = +ui.barThickness.value;
+    const barSpacing = (width * 0.7) / (maxBars * 2);
+    
+    ctx.save();
+    
+    for (let i = 0; i < maxBars; i++) { 
+      let mag = rawFreqData[i] / 255 * gain * energyMultiplier; 
+      const h = mag * (height * 0.7);
+      const x = i * barSpacing; 
+      
+      // Calculate smooth fade
+      const distanceFromCenter = x / (width * 0.35);
+      const fadeAlpha = Math.max(0.05, 1 - Math.pow(distanceFromCenter, 1.8));
+      
+      // Create flowing gradient
+      const barGradient = createFlowGradient(
+        cx, cy - h/2, 
+        cx, cy + h/2, 
+        ui.colorFlow.value, 
+        flowTime + i * 0.05, 
+        +ui.flowIntensity.value
+      );
+      
+      ctx.globalAlpha = fadeAlpha;
+      
+      // Apply different bar styles
+      drawBarWithStyle(cx - x, cy, h, baseBarWidth, barGradient, barStyle, i > 0);
+      drawBarWithStyle(cx + x, cy, h, baseBarWidth, barGradient, barStyle, true);
+    } 
+    
+    ctx.restore();
+  }
+  
+  function drawBarWithStyle(x, cy, height, width, gradient, style, shouldDraw) {
+    if (!shouldDraw && x === width/2) return; // Skip center duplicate
+    
+    ctx.strokeStyle = gradient;
+    
+    switch (style) {
+      case 'rounded':
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        break;
+      case 'gradient':
+        ctx.lineWidth = width * 1.2;
+        ctx.lineCap = 'butt';
+        const grd = ctx.createLinearGradient(x, cy - height/2, x, cy + height/2);
+        grd.addColorStop(0, gradient);
+        grd.addColorStop(0.5, 'rgba(255,255,255,0.3)');
+        grd.addColorStop(1, gradient);
+        ctx.strokeStyle = grd;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        break;
+      case 'outlined':
+        ctx.lineWidth = width;
+        ctx.lineCap = 'butt';
+        // Inner bar
+        ctx.globalAlpha *= 0.7;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        // Outline
+        ctx.globalAlpha /= 0.7;
+        ctx.lineWidth = width + 2;
+        ctx.globalAlpha *= 0.3;
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        break;
+      case 'neon':
+        ctx.lineWidth = width * 0.8;
+        ctx.lineCap = 'round';
+        ctx.shadowColor = gradient;
+        ctx.shadowBlur = width * 2;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        break;
+      case 'minimal':
+        ctx.lineWidth = Math.max(0.5, width * 0.6);
+        ctx.lineCap = 'butt';
+        ctx.globalAlpha *= 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+        break;
+      default: // classic
+        ctx.lineWidth = width;
+        ctx.lineCap = 'butt';
+        ctx.beginPath();
+        ctx.moveTo(x, cy - height/2);
+        ctx.lineTo(x, cy + height/2);
+        ctx.stroke();
+    }
+    
+    ctx.lineCap = 'round'; // Reset
+  }
+
+  function drawFlowLinear(gain) {
+    const d = analyser.dataT, len = d.length; 
+    const processed = applyRingStyle(d, 'smooth', gain);
+    
+    const gradient = createFlowGradient(0, 0, width, 0, ui.colorFlow.value, flowTime, +ui.flowIntensity.value);
+    ctx.strokeStyle = gradient;
+    
+    ctx.beginPath(); 
+    for (let i = 0; i < len; i++) { 
+      const x = (i / (len - 1)) * width; 
+      const v = processed[i]; 
+      const y = height / 2 + v * (height * 0.4); 
+      
+      // Apply transparency based on amplitude
+      const alpha = Math.max(0.3, 1 - Math.abs(v) * +ui.ringFade.value);
+      ctx.globalAlpha = alpha;
+      
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
+    } 
+    ctx.stroke(); 
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFlowComposite(gain) {
+    // FIRST: Draw CENTER STAGE horizontal bars (main focus)
+    ctx.save(); 
+    ctx.globalAlpha = 1.0; // Full prominence for main bars
+    drawCenterStageHorizontalBars(gain); 
+    ctx.restore();
+    
+    // SECOND: Draw subtle background rings (supporting elements)
+    const base = Math.min(width, height);
+    const spacing = base * (+ui.ringSpacing.value);
+    const ringCount = +ui.ringCount.value;
+    const styles = [ui.innerStyle.value, ui.middleStyle.value, ui.outerStyle.value];
+    
+    // Static offset angles for variety without spinning
+    const offsetAngles = [0, Math.PI / 6, Math.PI / 3, Math.PI / 2, Math.PI / 4, Math.PI / 8];
+    
+    for (let i = 0; i < ringCount; i++) {
+      const r = base * 0.12 + i * spacing; // Smaller base radius
+      const style = styles[Math.min(i, styles.length - 1)];
+      const alpha = 0.4 - i * 0.06; // Much more subtle
+      const ringGain = gain * (0.6 - i * 0.08); // Reduced amplitude
+      const offset = offsetAngles[i] || 0; // Static offset for variety
+      
+      drawStaticRadial(ringGain, r, style, alpha, offset);
+    }
+  }
+
+  function drawEnhancedFlow(gain) {
+    drawFlowComposite(gain);
+    
+    // Additional static flowing elements (NO SPINNING)
+    const cx = width / 2, cy = height / 2;
+    
+    // Static positioned particles that pulse with audio
+    ctx.save();
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2; // STATIC angle positions
+      const intensity = (analyser.dataF[i * 6] || 0) / 255;
+      const baseRadius = 320 + i * 8; // Fixed radius positions
+      const radius = baseRadius + intensity * 25; // Only pulse with audio
+      const alpha = intensity * 0.6;
+      
+      if (alpha > 0.05) {
+        const x = cx + Math.cos(angle) * radius;
+        const y = cy + Math.sin(angle) * radius;
+        
+        const particleGradient = createFlowGradient(x-4, y-4, x+4, y+4, ui.colorFlow.value, flowTime + i, +ui.flowIntensity.value);
+        ctx.fillStyle = particleGradient;
+        ctx.globalAlpha = alpha;
+        
+        ctx.beginPath();
+        ctx.arc(x, y, 1 + intensity * 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Enhanced UI synchronization
+  function syncOut(id, outEl) { 
+    const el = ui[id]; 
+    const w = () => { 
+      outEl.textContent = (el.type === 'checkbox') ? el.checked : el.value; 
+    }; 
+    el.addEventListener('input', w); 
+    el.addEventListener('change', w); 
+    w(); 
+  }
+  
+  // Initialize all outputs
+  Object.keys(out).forEach(key => {
+    if (ui[key] && out[key]) {
+      syncOut(key, out[key]);
+    }
+  });
+
+  // Enhanced event listeners
+  document.getElementById('btnMic').addEventListener('click', startMic);
+  document.getElementById('btnDemo').addEventListener('click', startDemo);
+  document.getElementById('btnPause').addEventListener('click', () => { 
+    paused = !paused; 
+    updateStatus(paused ? 'Paused' : 'Running', paused ? '#f59e0b' : '#10b981');
+  });
+  
+  document.getElementById('btnSnapshot').addEventListener('click', () => { 
+    const a = document.createElement('a'); 
+    a.download = `ultra3-flow-${Date.now()}.png`; 
+    a.href = canvas.toDataURL('image/png'); 
+    a.click(); 
+  });
+  
+  document.getElementById('btnDownload').addEventListener('click', () => { 
+    const a = document.createElement('a'); 
+    a.download = `ultra3-flow-${Date.now()}.png`; 
+    a.href = canvas.toDataURL('image/png'); 
+    a.click(); 
+  });
+  
+  document.getElementById('btnCopyJSON').addEventListener('click', () => { 
+    navigator.clipboard.writeText(document.getElementById('jsonBox').textContent);
+    updateStatus('JSON Copied', '#10b981');
+    setTimeout(() => updateStatus('Running'), 2000);
+  });
+
+  document.getElementById('btnFullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      stage.requestFullscreen();
+    }
+  });
+
+  document.getElementById('btnReset').addEventListener('click', () => {
+    if (confirm('Reset all settings to defaults?')) {
+      Object.entries(ui).forEach(([key, element]) => {
+        if (element.type === 'range') {
+          element.value = element.getAttribute('value') || element.min;
+        } else if (element.type === 'checkbox') {
+          element.checked = element.hasAttribute('checked');
+        } else if (element.tagName === 'SELECT') {
+          const selected = element.querySelector('[selected]');
+          element.value = selected ? selected.value : element.options[0].value;
+        }
+        element.dispatchEvent(new Event('input'));
+      });
+    }
+  });
+
+  // Record button functionality
+  document.getElementById('recordButton').addEventListener('click', function() {
+    const button = this;
+    isRecording = !isRecording;
+    
+    if (isRecording) {
+      button.classList.add('recording');
+      updateStatus('Recording Active', '#dc2626');
+      if (!audioCtx) startMic();
+    } else {
+      button.classList.remove('recording');
+      updateStatus('Recording Stopped', '#10b981');
+    }
+  });
+
+  // Color flow change handler
+  ui.colorFlow.addEventListener('change', updateFlowSwatches);
+
+  // React to analyser changes
+  ui.fft.addEventListener('change', () => { 
+    if (!analyser.node) return; 
+    analyser.node.fftSize = clampPow2(+ui.fft.value); 
+    analyser.dataF = new Uint8Array(analyser.node.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(analyser.node.fftSize); 
+  });
+  
+  ui.smoothing.addEventListener('input', () => { 
+    if (analyser.node) analyser.node.smoothingTimeConstant = +ui.smoothing.value; 
+  });
+  
+  // Enhanced glow control
+  function updateGlow() {
+    const glowValue = ui.glow.checked ? 
+      'drop-shadow(0 0 15px rgba(155,135,245,.5))' : 'none';
+    document.documentElement.style.setProperty('--glow', glowValue);
+  }
+  
+  ui.glow.addEventListener('change', updateGlow);
+  updateGlow();
+
+  // Enhanced keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { 
+      e.preventDefault(); 
+      document.getElementById('btnPause').click(); 
+    } else if (e.code === 'KeyF') {
+      e.preventDefault();
+      document.getElementById('btnFullscreen').click();
+    } else if (e.code === 'KeyR') {
+      e.preventDefault();
+      document.getElementById('recordButton').click();
+    } else if (e.ctrlKey && e.altKey && e.code === 'KeyZ') {
+      e.preventDefault();
+      document.getElementById('recordButton').click();
+    }
+  });
+
+  // Initialize
+  initFlowSwatches();
+  updateStatus('Ready');
+  startDemo();
+})();
+</script>
+</body>
+</html>

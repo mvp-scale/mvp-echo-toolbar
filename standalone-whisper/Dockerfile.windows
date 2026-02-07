@@ -1,0 +1,17 @@
+# Windows Docker container for building whisper-standalone.exe from Ubuntu
+FROM python:3.11-windowsservercore-ltsc2022
+
+# Set working directory
+WORKDIR C:\\build
+
+# Install build dependencies
+RUN python -m pip install --upgrade pip
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Copy build files
+COPY whisper-cli.py .
+COPY build-windows.ps1 .
+
+# Set default command
+CMD ["powershell", "-ExecutionPolicy", "Bypass", "-File", "build-windows.ps1"]

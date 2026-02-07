@@ -1,0 +1,61 @@
+appId: com.mvpecho.app
+productName: MVP-Echo
+directories:
+  output: dist
+  buildResources: build
+
+asar: true
+asarUnpack:
+  - "**/node_modules/onnxruntime-node/**/*"
+
+files:
+  - "dist/**/*"
+  - "package.json"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md}"
+  - "!**/node_modules/.bin"
+  - "!**/*.map"
+
+extraResources:
+  - from: "app/models/manifest.json"
+    to: "models/manifest.json"
+  - from: "python"
+    to: "python"
+  - from: "python-embedded"
+    to: "python-embedded"
+    filter: 
+      - "**/*"
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: packaging/icon.ico
+  certificateFile: "${env.CERT_FILE}"
+  certificatePassword: "${env.CERT_PASSWORD}"
+  publisherName: "MVP-Echo"
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  displayLanguageSelector: false
+  installerIcon: packaging/icon.ico
+  uninstallerIcon: packaging/icon.ico
+  installerHeader: packaging/header.bmp
+  installerSidebar: packaging/sidebar.bmp
+  license: LICENSE.txt
+  artifactName: MVP-Echo-Setup-${version}.exe
+  include: packaging/installer.nsh
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+portable:
+  artifactName: MVP-Echo-Portable-${version}.exe
+
+publish:
+  provider: github
+  owner: mvp-echo
+  repo: mvp-echo

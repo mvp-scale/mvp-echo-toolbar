@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ultra‑Modern Audio Wave Analyzer — Composite Rings & Mirrored Bars</title>
+  <style>
+    :root {
+      --panel: rgba(255,255,255,.06);
+      --border: rgba(255,255,255,.12);
+      --text: #e8e9ff;
+      --muted: #9aa0b3;
+      --radius: 18px;
+      --glow: drop-shadow(0 0 8px rgba(255,255,255,.25));
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+      background: #0b0b12;
+      display: grid; grid-template-rows: auto 1fr auto; gap: 16px; padding: 18px; overflow: hidden;
+    }
+    header { display:flex; align-items:center; justify-content:space-between; }
+    .brand { font-weight: 700; letter-spacing: .5px; font-size: 14px; opacity:.9 }
+    .wrap { display: grid; grid-template-columns: 380px 1fr 320px; gap: 18px; height: calc(100vh - 110px); }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(8px) saturate(130%); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+
+    /* Controls */
+    .controls { padding: 14px; overflow:auto; }
+    .section-title { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:10px 0 6px; }
+    .section-title h2 { font-size: 12px; font-weight: 800; text-transform: uppercase; color: var(--muted); letter-spacing:.12em; margin:0; }
+    .help { font-size: 11px; color: var(--muted); opacity:.85 }
+    .row { display:grid; grid-template-columns: 150px 1fr 60px; gap:8px; align-items:center; padding:8px 4px; border-bottom:1px dashed rgba(255,255,255,.06); }
+    .row:last-child { border-bottom:0; }
+    label { font-size: 12px; color: var(--muted); }
+    select, input[type="range"], input[type="number"], input[type="checkbox"], input[type="text"] { accent-color:#9b87f5; background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.15); color:var(--text); border-radius:10px; padding:6px 8px; }
+    input[type="range"]{ width:100%; }
+    output { font-size:12px; color:var(--muted); text-align:right; }
+    .btn { appearance:none; border:1px solid rgba(255,255,255,.18); color:var(--text); background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03)); border-radius: 12px; padding: 10px 12px; font-weight: 600; cursor: pointer; }
+
+    /* Stage */
+    .stage { position: relative; display:grid; place-items:center; overflow:hidden; background: radial-gradient(1200px 800px at 80% 10%, #111626 0%, #0b0b12 40%, #06070a 100%); }
+    canvas { width: 100%; height: 100%; filter: var(--glow); }
+    .hud { position:absolute; inset: 0; display:grid; place-items:center; pointer-events:none; }
+    .ring { position:absolute; width: 64vmin; height: 64vmin; border-radius: 50%; border: 1px dashed rgba(255,255,255,.14); }
+    .meters { position:absolute; left: 18px; bottom: 18px; display:flex; gap:8px; opacity:.9; }
+    .meter { width: 8px; height: 38px; border-radius: 8px; background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border:1px solid rgba(255,255,255,.12); overflow:hidden; }
+    .meter > i { display:block; width:100%; height: 0%; background: linear-gradient(180deg, #6ee7ff, #9b87f5); }
+
+    /* Snapshot panel */
+    .snapshot { padding: 12px; display:grid; grid-template-rows: auto 1fr auto; gap:10px; }
+    .codebox { background: rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.15); border-radius: 12px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:12px; color:#cfe0ff; overflow:auto; }
+    footer { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .kbd { padding:.1rem .4rem; border:1px solid rgba(255,255,255,.25); border-radius:6px; font-size:12px; opacity:.85 }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">MVP Scale · Wave Analyzer Mock</div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="btnMic" class="btn">🎤 Start microphone</button>
+      <button id="btnDemo" class="btn">🎵 Demo signal</button>
+      <button id="btnPause" class="btn" title="Space">⏸ Pause</button>
+      <button id="btnSnapshot" class="btn" title="Save PNG">📸 Snapshot</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- Left: Controls Sidebar -->
+    <section class="panel controls" id="controls">
+      <div class="section-title"><h2>Display</h2><span class="help">Visualizer + palette</span></div>
+      <div class="row"><label for="mode">Visualizer</label>
+        <select id="mode">
+          <option value="radial">Radial ring</option>
+          <option value="linear">Linear oscilloscope</option>
+          <option value="bars">Bars (spectrum)</option>
+          <option value="composite" selected>Composite (rings + bars + circular osc)</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="palette">Palette</label>
+        <select id="palette"></select>
+        <span class="help">Stroke gradient</span>
+      </div>
+
+      <div class="section-title"><h2>Rings</h2><span class="help">Concentric radial layers</span></div>
+      <div class="row"><label for="ringLayers">Ring layers</label>
+        <input id="ringLayers" type="range" min="1" max="4" step="1" value="3" />
+        <output id="ringLayersOut">3</output>
+      </div>
+      <div class="row"><label for="ringInner">Inner scale</label>
+        <input id="ringInner" type="range" min="0.12" max="0.5" step="0.01" value="0.22" />
+        <output id="ringInnerOut">0.22</output>
+      </div>
+      <div class="row"><label for="ringGap">Ring spacing</label>
+        <input id="ringGap" type="range" min="0.05" max="0.22" step="0.005" value="0.09" />
+        <output id="ringGapOut">0.09</output>
+      </div>
+
+      <div class="section-title"><h2>Bars</h2><span class="help">Center‑out mirrored</span></div>
+      <div class="row"><label for="barsMirror">Mirror bars</label>
+        <input id="barsMirror" type="checkbox" checked />
+        <span class="help">From center</span>
+      </div>
+      <div class="row"><label for="barThin">Bar width</label>
+        <input id="barThin" type="range" min="1" max="6" step="1" value="2" />
+        <output id="barThinOut">2</output>
+      </div>
+
+      <div class="section-title"><h2>Signal</h2><span class="help">Analyser</span></div>
+      <div class="row"><label for="fft">FFT size</label>
+        <input id="fft" type="range" min="32" max="32768" step="1" value="8192" />
+        <output id="fftOut">8192</output>
+      </div>
+      <div class="row"><label for="smoothing">Smoothing</label>
+        <input id="smoothing" type="range" min="0" max="0.95" step="0.01" value="0.65" />
+        <output id="smoothingOut">0.65</output>
+      </div>
+      <div class="row"><label for="gain">Visual gain</label>
+        <input id="gain" type="range" min="0.2" max="4" step="0.05" value="1.2" />
+        <output id="gainOut">1.2</output>
+      </div>
+      <div class="row"><label for="gate">Voice gate (RMS)</label>
+        <input id="gate" type="range" min="0" max="1" step="0.01" value="0.12" />
+        <output id="gateOut">0.12</output>
+      </div>
+
+      <div class="section-title"><h2>Style</h2><span class="help">Ultra‑thin lines</span></div>
+      <div class="row"><label for="line">Line width</label>
+        <input id="line" type="range" min="0.4" max="4" step="0.1" value="1.2" />
+        <output id="lineOut">1.2</output>
+      </div>
+      <div class="row"><label for="trail">Trail</label>
+        <input id="trail" type="range" min="0" max="0.3" step="0.01" value="0.06" />
+        <output id="trailOut">0.06</output>
+      </div>
+      <div class="row"><label for="mirror">Mirror (linear)</label>
+        <input id="mirror" type="checkbox" checked />
+        <span class="help">Symmetry</span>
+      </div>
+      <div class="row"><label for="glow">Glow</label>
+        <input id="glow" type="checkbox" checked />
+        <span class="help">Drop‑shadow</span>
+      </div>
+    </section>
+
+    <!-- Center: Stage / Canvas -->
+    <section class="panel stage" id="stage">
+      <canvas id="viz"></canvas>
+      <div class="hud" aria-hidden="true">
+        <div class="ring" id="ring"></div>
+        <div class="meters">
+          <div class="meter"><i id="meterL"></i></div>
+          <div class="meter"><i id="meterR"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Settings Snapshot -->
+    <section class="panel snapshot">
+      <div class="section-title"><h2>Settings Snapshot</h2><span class="help">Live JSON</span></div>
+      <div class="codebox" id="jsonBox">{}</div>
+      <div style="display:flex; gap:8px;">
+        <button id="btnCopyJSON" class="btn" style="flex:1;">Copy JSON</button>
+        <button id="btnDownload" class="btn" style="flex:1;">⬇️ Download PNG</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <small>Mic permissions required on https/localhost. Or click “Demo signal” to preview. Press <span class="kbd">Space</span> to pause/resume.</small>
+  </footer>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+  let width, height, dpr;
+  const analyser = { node: null, dataF: null, dataT: null };
+
+  const ui = {
+    mode: document.getElementById('mode'),
+    palette: document.getElementById('palette'),
+    ringLayers: document.getElementById('ringLayers'),
+    ringInner: document.getElementById('ringInner'),
+    ringGap: document.getElementById('ringGap'),
+    barsMirror: document.getElementById('barsMirror'),
+    barThin: document.getElementById('barThin'),
+    mirror: document.getElementById('mirror'),
+    fft: document.getElementById('fft'),
+    smoothing: document.getElementById('smoothing'),
+    gain: document.getElementById('gain'),
+    gate: document.getElementById('gate'),
+    line: document.getElementById('line'),
+    glow: document.getElementById('glow'),
+    trail: document.getElementById('trail'),
+  };
+  const out = {
+    ringLayers: document.getElementById('ringLayersOut'),
+    ringInner: document.getElementById('ringInnerOut'),
+    ringGap: document.getElementById('ringGapOut'),
+    barThin: document.getElementById('barThinOut'),
+    fft: document.getElementById('fftOut'),
+    smoothing: document.getElementById('smoothingOut'),
+    gain: document.getElementById('gainOut'),
+    gate: document.getElementById('gateOut'),
+    line: document.getElementById('lineOut'),
+    trail: document.getElementById('trailOut'),
+  };
+
+  const palettes = {
+    cyberpunk: ['#ff3cac','#784ba0','#2b86c5'],
+    neon: ['#7df9ff','#00ffa3','#ffd200'],
+    sunset: ['#ff5f6d','#ffc371','#ffd3a5'],
+    aurora: ['#a1ffce','#faffd1','#6ee7ff'],
+    ocean: ['#00c6ff','#0072ff','#00e1ff'],
+    ultraviolet: ['#a18cd1','#fbc2eb','#9b87f5'],
+    fire: ['#ff6a00','#ee0979','#ffd200'],
+    mint: ['#d4fc79','#96e6a1','#5eead4'],
+    monochrome: ['#eaeaea','#8a8a8a','#ffffff']
+  };
+
+  for (const k of Object.keys(palettes)) { const o=document.createElement('option'); o.value=k; o.textContent=k; ui.palette.appendChild(o); }
+  ui.palette.value='cyberpunk';
+
+  function resize(){ dpr=Math.min(window.devicePixelRatio||1, 2); width=canvas.clientWidth; height=canvas.clientHeight; canvas.width=Math.floor(width*dpr); canvas.height=Math.floor(height*dpr); ctx.setTransform(dpr,0,0,dpr,0,0); }
+  window.addEventListener('resize', resize, { passive:true }); resize();
+
+  // Audio plumbing
+  let audioCtx; let paused=false; let rms=0; let demoStarted=false;
+  async function startMic(){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); const stream=await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true } }); const src=audioCtx.createMediaStreamSource(stream); setupAnalyser(src); tick(); } catch(err){ console.warn('Mic unavailable, demo fallback', err); startDemo(); } }
+  function startDemo(){ if(demoStarted) return; demoStarted=true; audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); const an=audioCtx.createAnalyser(); an.fftSize=clampPow2(+ui.fft.value); an.smoothingTimeConstant=+ui.smoothing.value; analyser.node=an; analyser.dataF=new Uint8Array(an.frequencyBinCount); analyser.dataT=new Uint8Array(an.fftSize); const master=audioCtx.createGain(); master.gain.value=0.0; const o1=audioCtx.createOscillator(); o1.type='sawtooth'; o1.frequency.value=180; const o2=audioCtx.createOscillator(); o2.type='triangle'; o2.frequency.value=310; const nb=audioCtx.createBuffer(1, audioCtx.sampleRate*2, audioCtx.sampleRate); const nd=nb.getChannelData(0); for(let i=0;i<nd.length;i++) nd[i]=(Math.random()*2-1)*0.35; const noise=audioCtx.createBufferSource(); noise.buffer=nb; noise.loop=true; const bp=audioCtx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1400; bp.Q.value=0.7; o1.connect(master); o2.connect(master); noise.connect(bp).connect(master); master.connect(an); o1.start(); o2.start(); noise.start(); (function wander(){ const now=audioCtx.currentTime; const seg=0.12+Math.random()*0.25; master.gain.cancelScheduledValues(now); master.gain.setTargetAtTime(0.02, now, 0.05); master.gain.setTargetAtTime(0.35+Math.random()*0.5, now+0.02, 0.08); o1.frequency.exponentialRampToValueAtTime(140+Math.random()*220, now+seg); o2.frequency.exponentialRampToValueAtTime(280+Math.random()*360, now+seg); setTimeout(wander, seg*1000); })(); tick(); }
+  function setupAnalyser(input){ const n=audioCtx.createAnalyser(); n.fftSize=clampPow2(+ui.fft.value); n.smoothingTimeConstant=+ui.smoothing.value; analyser.node=n; analyser.dataF=new Uint8Array(n.frequencyBinCount); analyser.dataT=new Uint8Array(n.fftSize); input.connect(n); }
+
+  function clampPow2(v){ const p=Math.round(Math.log2(Math.max(32, Math.min(32768, v)))); return 2**p; }
+  function gradientFor(name, x0,y0,x1,y1){ const p=palettes[name]||palettes.cyberpunk; const g=ctx.createLinearGradient(x0,y0,x1,y1); const n=p.length; p.forEach((c,i)=>g.addColorStop(i/(n-1), c)); return g; }
+  function clearTrail(a){ if(a<=0){ ctx.clearRect(0,0,width,height); return; } ctx.fillStyle=`rgba(0,0,0,${a})`; ctx.fillRect(0,0,width,height); }
+  function computeRMS(td){ let s=0; for(let i=0;i<td.length;i++){ const v=(td[i]-128)/128; s+=v*v; } return Math.sqrt(s/td.length); }
+
+  function updateSnapshot(){ const snap={ mode: ui.mode.value, palette: ui.palette.value, ringLayers:+ui.ringLayers.value, ringInner:+ui.ringInner.value, ringGap:+ui.ringGap.value, barsMirror: ui.barsMirror.checked, barWidth:+ui.barThin.value, fft:+ui.fft.value, smoothing:+ui.smoothing.value, gain:+ui.gain.value, gate:+ui.gate.value, line:+ui.line.value, trail:+ui.trail.value, mirror: ui.mirror.checked, glow: ui.glow.checked }; document.getElementById('jsonBox').textContent = JSON.stringify(snap, null, 2); }
+
+  function tick(){ if(!analyser.node) return; requestAnimationFrame(tick); if(paused) return; analyser.node.getByteTimeDomainData(analyser.dataT); analyser.node.getByteFrequencyData(analyser.dataF); rms=computeRMS(analyser.dataT); const gate=+ui.gate.value; document.getElementById('meterL').style.height=Math.min(100, Math.max(6, rms*180))+'%'; document.getElementById('meterR').style.height=Math.min(100, Math.max(6, rms*160))+'%'; clearTrail(+ui.trail.value); const g=gradientFor(ui.palette.value, 0,0, width,0); ctx.lineWidth=+ui.line.value; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle=g; const gain=+ui.gain.value * (1 + Math.max(0, (rms - gate)*2)); const mode=ui.mode.value; if(mode==='radial') drawRadial(gain); else if(mode==='linear') drawLinear(gain, ui.mirror.checked); else if(mode==='bars') drawBars(gain, ui.barsMirror.checked); else drawComposite(gain); updateSnapshot(); }
+
+  function drawLinear(gain, mirror){ const d=analyser.dataT, len=d.length; ctx.beginPath(); for(let i=0;i<len;i++){ const x=(i/(len-1))*width; const v=(d[i]-128)/128*gain; const y=height/2 + v*(height*0.36); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.stroke(); if(mirror){ ctx.save(); ctx.globalAlpha=.45; ctx.scale(1,-1); ctx.translate(0,-height); ctx.stroke(); ctx.restore(); } }
+
+  function drawBars(gain, mirrored=true){ const d=analyser.dataF, n=d.length; const bw=Math.max(1, +ui.barThin.value); if(mirrored){ const cx=width/2; for(let i=0;i<n/2;i++){ const mag=d[i]/255*gain; const h=mag*(height*0.6); const x=i*(width/n); ctx.beginPath(); ctx.moveTo(cx-x, height/2 - h/2); ctx.lineTo(cx-x, height/2 + h/2); ctx.stroke(); ctx.beginPath(); ctx.moveTo(cx+x, height/2 - h/2); ctx.lineTo(cx+x, height/2 + h/2); ctx.stroke(); } } else { for(let i=0;i<n;i++){ const mag=d[i]/255*gain; const h=mag*(height*0.6); const x=i*(width/n); ctx.beginPath(); ctx.moveTo(x, height/2 - h/2); ctx.lineTo(x, height/2 + h/2); ctx.stroke(); } }
+  }
+
+  function drawRadial(gain, baseR){ const data=analyser.dataT, len=data.length; const cx=width/2, cy=height/2; const r=(baseR!==undefined?baseR:Math.min(width,height)*(+ui.ringInner.value)); ctx.save(); ctx.globalAlpha=.35; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke(); ctx.restore(); ctx.beginPath(); for(let i=0;i<len;i++){ const t=i/len*Math.PI*2; const v=(data[i]-128)/128*gain; const rr=r + v*(r*0.7); const x=cx + Math.cos(t)*rr; const y=cy + Math.sin(t)*rr; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.closePath(); ctx.stroke(); }
+
+  // circular oscilloscope (secondary ring with ultra‑thin line)
+  function drawCircularOsc(gain, radius){ const d=analyser.dataT, len=d.length; const cx=width/2, cy=height/2; ctx.save(); const prev=ctx.lineWidth; ctx.lineWidth=Math.max(0.6, +ui.line.value*0.7); ctx.beginPath(); for(let i=0;i<len;i++){ const t=i/len*Math.PI*2; const v=(d[i]-128)/128*gain*0.7; const rr=radius + v*(radius*0.45); const x=cx + Math.cos(t)*rr; const y=cy + Math.sin(t)*rr; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.closePath(); ctx.stroke(); ctx.lineWidth=prev; ctx.restore(); }
+
+  function drawComposite(gain){
+    // 1) multi concentric rings
+    const base = Math.min(width,height);
+    const inner = base * (+ui.ringInner.value);
+    const gap = base * (+ui.ringGap.value);
+    const layers = +ui.ringLayers.value;
+    for (let i=0; i<layers; i++){
+      const r = inner + i*gap;
+      ctx.save(); ctx.globalAlpha = 0.9 - i*0.18; drawRadial(gain*(1- i*0.06), r); ctx.restore();
+    }
+    // 2) circular oscilloscope layer
+    drawCircularOsc(gain, inner + (layers-0.5)*gap);
+    // 3) mirrored spectrum bars from center
+    ctx.save(); ctx.globalAlpha = 0.75; drawBars(gain*0.9, ui.barsMirror.checked); ctx.restore();
+  }
+
+  // Outputs
+  function syncOut(id, outEl){ const el=ui[id]; const w=()=>{ outEl.textContent = (el.type==='checkbox') ? el.checked : el.value; }; el.addEventListener('input', w); el.addEventListener('change', w); w(); }
+  syncOut('ringLayers', out.ringLayers); syncOut('ringInner', out.ringInner); syncOut('ringGap', out.ringGap); syncOut('barThin', out.barThin); syncOut('fft', out.fft); syncOut('smoothing', out.smoothing); syncOut('gain', out.gain); syncOut('gate', out.gate); syncOut('line', out.line); syncOut('trail', out.trail);
+
+  // Buttons
+  document.getElementById('btnMic').addEventListener('click', startMic);
+  document.getElementById('btnDemo').addEventListener('click', startDemo);
+  document.getElementById('btnPause').addEventListener('click', () => { paused=!paused; });
+  document.getElementById('btnSnapshot').addEventListener('click', () => { const a=document.createElement('a'); a.download='waveviz.png'; a.href=canvas.toDataURL('image/png'); a.click(); });
+  document.getElementById('btnDownload').addEventListener('click', () => { const a=document.createElement('a'); a.download='waveviz.png'; a.href=canvas.toDataURL('image/png'); a.click(); });
+  document.getElementById('btnCopyJSON').addEventListener('click', () => { navigator.clipboard.writeText(document.getElementById('jsonBox').textContent); });
+
+  // React to analyser changes
+  ui.fft.addEventListener('change', () => { if (!analyser.node) return; analyser.node.fftSize = clampPow2(+ui.fft.value); analyser.dataF = new Uint8Array(analyser.node.frequencyBinCount); analyser.dataT = new Uint8Array(analyser.node.fftSize); });
+  ui.smoothing.addEventListener('input', () => { if (analyser.node) analyser.node.smoothingTimeConstant = +ui.smoothing.value; });
+  document.documentElement.style.setProperty('--glow', ui.glow.checked ? 'drop-shadow(0 0 8px rgba(255,255,255,.25))' : 'none');
+  ui.glow.addEventListener('change', ()=>{ document.documentElement.style.setProperty('--glow', ui.glow.checked ? 'drop-shadow(0 0 8px rgba(255,255,255,.25))' : 'none'); });
+
+  // Keyboard
+  window.addEventListener('keydown', (e)=>{ if (e.code==='Space'){ e.preventDefault(); document.getElementById('btnPause').click(); }});
+
+  // Start with demo so the canvas is alive immediately
+  startDemo();
+})();
+</script>
+</body>
+</html>

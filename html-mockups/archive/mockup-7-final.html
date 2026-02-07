@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mockup 7: Final - Three-Layer Audio Visualization</title>
+    <style>
+        :root {
+            --primary: oklch(0.55 0.25 264);
+            --primary-dark: oklch(0.65 0.25 264);
+            --background: oklch(0.02 0.01 264);
+            --accent-pink: oklch(0.70 0.25 330);
+            --accent-cyan: oklch(0.75 0.20 200);
+            --accent-purple: oklch(0.65 0.25 280);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--background);
+            color: white;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .visualization-container {
+            position: relative;
+            width: 800px;
+            height: 800px;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        .record-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: radial-gradient(circle, rgba(255, 68, 68, 0.8), rgba(204, 0, 0, 0.6));
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: auto;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 0 30px rgba(255, 68, 68, 0.3);
+        }
+
+        .record-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 50px rgba(255, 68, 68, 0.5);
+        }
+
+        .record-button.recording {
+            animation: pulse-recording 2s ease-in-out infinite;
+        }
+
+        .record-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #fff;
+            transition: all 0.3s ease;
+        }
+
+        .record-button.recording .record-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 1rem;
+            z-index: 15;
+        }
+
+        .control-btn {
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            font-size: 0.85rem;
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 2rem;
+            left: 2rem;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            max-width: 300px;
+            z-index: 15;
+        }
+
+        .info-panel h3 {
+            margin-bottom: 1rem;
+            color: var(--accent-cyan);
+            font-size: 1.1rem;
+        }
+
+        .layer-info {
+            font-size: 0.85rem;
+            line-height: 1.6;
+            opacity: 0.9;
+            margin-bottom: 0.5rem;
+        }
+
+        .status {
+            position: absolute;
+            bottom: 2rem;
+            right: 2rem;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            border-radius: 8px;
+            padding: 1rem;
+            font-size: 0.9rem;
+            z-index: 15;
+        }
+
+        @keyframes pulse-recording {
+            0%, 100% { box-shadow: 0 0 30px rgba(255, 68, 68, 0.3); }
+            50% { box-shadow: 0 0 60px rgba(255, 68, 68, 0.6); }
+        }
+    </style>
+</head>
+<body>
+    <div class="visualization-container">
+        <canvas id="canvas"></canvas>
+        
+        <div class="ui-overlay">
+            <button class="record-button" id="recordButton">
+                <div class="record-icon"></div>
+            </button>
+        </div>
+
+        <div class="info-panel">
+            <h3>Three-Layer Audio System</h3>
+            <div class="layer-info"><strong>Layer 1:</strong> Concentric radial rings (inner core)</div>
+            <div class="layer-info"><strong>Layer 2:</strong> Mirrored spectrum analyzer (center-split)</div>
+            <div class="layer-info"><strong>Layer 3:</strong> Circular oscillation waveform</div>
+            <div style="margin-top: 1rem; font-size: 0.8rem; opacity: 0.7;">
+                Ultra-thin lines • High-resolution analysis • Real-time audio reactive
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="control-btn" id="layer1Toggle">Radial Rings</button>
+            <button class="control-btn" id="layer2Toggle">Spectrum Bars</button>
+            <button class="control-btn" id="layer3Toggle">Oscillation</button>
+            <button class="control-btn" id="intensityToggle">Intensity</button>
+        </div>
+
+        <div class="status" id="statusText">Ready to Record</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let audioContext, analyser, dataArray;
+        let isRecording = false;
+        let animationId;
+        
+        // Layer visibility controls
+        let showLayer1 = true; // Radial rings
+        let showLayer2 = true; // Mirrored spectrum
+        let showLayer3 = true; // Circular oscillation
+        let highIntensity = false;
+        
+        // Audio data
+        let spectrumData = new Array(128).fill(0);
+        let waveformData = new Array(1024).fill(0);
+        let smoothedSpectrum = new Array(128).fill(0);
+        
+        // Canvas setup
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth * devicePixelRatio;
+            canvas.height = container.clientHeight * devicePixelRatio;
+            canvas.style.width = container.clientWidth + 'px';
+            canvas.style.height = container.clientHeight + 'px';
+            ctx.scale(devicePixelRatio, devicePixelRatio);
+        }
+
+        // Audio setup
+        async function setupAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.8;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                console.log('Audio setup complete');
+            } catch (error) {
+                console.error('Audio setup failed:', error);
+                // Generate mock data for demo
+                generateMockAudio();
+            }
+        }
+
+        function generateMockAudio() {
+            const time = Date.now() * 0.001;
+            
+            // Mock spectrum data
+            for (let i = 0; i < 128; i++) {
+                const freq = i / 128;
+                const intensity = Math.sin(time * 2 + freq * 10) * 0.5 + 0.5;
+                spectrumData[i] = intensity * 255 * (0.3 + Math.random() * 0.7);
+            }
+            
+            // Mock waveform data
+            for (let i = 0; i < 1024; i++) {
+                const t = (i / 1024) * Math.PI * 2;
+                waveformData[i] = Math.sin(t * 3 + time * 5) * 128 + 128;
+            }
+        }
+
+        function updateAudioData() {
+            if (analyser && dataArray) {
+                analyser.getByteFrequencyData(dataArray);
+                
+                // Update spectrum data (first 128 frequencies)
+                for (let i = 0; i < 128; i++) {
+                    spectrumData[i] = dataArray[i] || 0;
+                    smoothedSpectrum[i] += (spectrumData[i] - smoothedSpectrum[i]) * 0.1;
+                }
+                
+                // Get time domain data for waveform
+                const timeData = new Uint8Array(analyser.fftSize);
+                analyser.getByteTimeDomainData(timeData);
+                for (let i = 0; i < Math.min(1024, timeData.length); i++) {
+                    waveformData[i] = timeData[i];
+                }
+            } else {
+                generateMockAudio();
+            }
+        }
+
+        function drawLayer1RadialRings() {
+            if (!showLayer1) return;
+            
+            const centerX = canvas.width / (2 * devicePixelRatio);
+            const centerY = canvas.height / (2 * devicePixelRatio);
+            const maxRadius = 200;
+            const ringCount = 4;
+            
+            ctx.strokeStyle = `rgba(255, 105, 180, 0.8)`; // Pink
+            ctx.lineWidth = 0.5;
+            
+            for (let ring = 0; ring < ringCount; ring++) {
+                const baseRadius = (ring + 1) * (maxRadius / ringCount);
+                const segments = 64;
+                
+                ctx.beginPath();
+                for (let i = 0; i <= segments; i++) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    const specIndex = Math.floor((i / segments) * 32) + ring * 8;
+                    const intensity = smoothedSpectrum[specIndex] / 255;
+                    const radius = baseRadius + intensity * 20 * (highIntensity ? 2 : 1);
+                    
+                    const x = centerX + Math.cos(angle) * radius;
+                    const y = centerY + Math.sin(angle) * radius;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.closePath();
+                ctx.stroke();
+                
+                // Add radial tick marks
+                ctx.lineWidth = 0.3;
+                for (let i = 0; i < segments; i += 4) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    const specIndex = Math.floor((i / segments) * 32) + ring * 8;
+                    const intensity = smoothedSpectrum[specIndex] / 255;
+                    const innerRadius = baseRadius + intensity * 20 * (highIntensity ? 2 : 1);
+                    const outerRadius = innerRadius + 8;
+                    
+                    const x1 = centerX + Math.cos(angle) * innerRadius;
+                    const y1 = centerY + Math.sin(angle) * innerRadius;
+                    const x2 = centerX + Math.cos(angle) * outerRadius;
+                    const y2 = centerY + Math.sin(angle) * outerRadius;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                }
+                ctx.lineWidth = 0.5;
+            }
+        }
+
+        function drawLayer2MirroredSpectrum() {
+            if (!showLayer2) return;
+            
+            const centerX = canvas.width / (2 * devicePixelRatio);
+            const centerY = canvas.height / (2 * devicePixelRatio);
+            const barWidth = 1.5;
+            const maxHeight = 150;
+            const barCount = 64;
+            
+            ctx.lineWidth = 0.8;
+            
+            for (let i = 0; i < barCount; i++) {
+                const intensity = smoothedSpectrum[i] / 255;
+                const height = intensity * maxHeight * (highIntensity ? 1.5 : 1);
+                
+                // Color gradient from pink to cyan
+                const hue = 330 - (i / barCount) * 130; // 330 (pink) to 200 (cyan)
+                ctx.strokeStyle = `hsl(${hue}, 70%, ${60 + intensity * 40}%)`;
+                
+                // Left side (mirrored)
+                const leftX = centerX - (i * barWidth + barWidth/2);
+                ctx.beginPath();
+                ctx.moveTo(leftX, centerY - height/2);
+                ctx.lineTo(leftX, centerY + height/2);
+                ctx.stroke();
+                
+                // Right side
+                const rightX = centerX + (i * barWidth + barWidth/2);
+                ctx.beginPath();
+                ctx.moveTo(rightX, centerY - height/2);
+                ctx.lineTo(rightX, centerY + height/2);
+                ctx.stroke();
+            }
+        }
+
+        function drawLayer3CircularOscillation() {
+            if (!showLayer3) return;
+            
+            const centerX = canvas.width / (2 * devicePixelRatio);
+            const centerY = canvas.height / (2 * devicePixelRatio);
+            const baseRadius = 280;
+            const samples = 360;
+            
+            ctx.strokeStyle = `rgba(138, 43, 226, 0.9)`; // Purple
+            ctx.lineWidth = 1.0;
+            
+            ctx.beginPath();
+            for (let i = 0; i <= samples; i++) {
+                const angle = (i / samples) * Math.PI * 2;
+                const waveIndex = Math.floor((i / samples) * waveformData.length);
+                const waveValue = (waveformData[waveIndex] - 128) / 128;
+                const radius = baseRadius + waveValue * 40 * (highIntensity ? 2 : 1);
+                
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.closePath();
+            ctx.stroke();
+            
+            // Add additional oscillation rings
+            for (let ring = 1; ring <= 2; ring++) {
+                const ringRadius = baseRadius + ring * 25;
+                ctx.strokeStyle = `rgba(138, 43, 226, ${0.4 - ring * 0.1})`;
+                ctx.lineWidth = 0.6;
+                
+                ctx.beginPath();
+                for (let i = 0; i <= samples; i++) {
+                    const angle = (i / samples) * Math.PI * 2 + ring * 0.1;
+                    const waveIndex = Math.floor((i / samples) * waveformData.length);
+                    const waveValue = (waveformData[waveIndex] - 128) / 128;
+                    const radius = ringRadius + waveValue * 15 * (highIntensity ? 1.5 : 1);
+                    
+                    const x = centerX + Math.cos(angle) * radius;
+                    const y = centerY + Math.sin(angle) * radius;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.closePath();
+                ctx.stroke();
+            }
+        }
+
+        function draw() {
+            // Clear canvas with fade effect
+            ctx.fillStyle = 'rgba(5, 5, 15, 0.1)';
+            ctx.fillRect(0, 0, canvas.width / devicePixelRatio, canvas.height / devicePixelRatio);
+            
+            updateAudioData();
+            
+            // Draw all three layers
+            drawLayer3CircularOscillation(); // Background layer
+            drawLayer1RadialRings();          // Middle layer
+            drawLayer2MirroredSpectrum();     // Foreground layer
+            
+            animationId = requestAnimationFrame(draw);
+        }
+
+        // Event listeners
+        document.getElementById('recordButton').addEventListener('click', function() {
+            const button = this;
+            const status = document.getElementById('statusText');
+            
+            if (!isRecording) {
+                button.classList.add('recording');
+                status.textContent = 'Recording... (Ctrl+Alt+Z to stop)';
+                isRecording = true;
+                
+                if (!audioContext) setupAudio();
+            } else {
+                button.classList.remove('recording');
+                status.textContent = 'Processing... Copied to clipboard!';
+                isRecording = false;
+                
+                setTimeout(() => {
+                    status.textContent = 'Ready to Record';
+                }, 2000);
+            }
+        });
+
+        document.getElementById('layer1Toggle').addEventListener('click', function() {
+            showLayer1 = !showLayer1;
+            this.style.opacity = showLayer1 ? '1' : '0.5';
+        });
+
+        document.getElementById('layer2Toggle').addEventListener('click', function() {
+            showLayer2 = !showLayer2;
+            this.style.opacity = showLayer2 ? '1' : '0.5';
+        });
+
+        document.getElementById('layer3Toggle').addEventListener('click', function() {
+            showLayer3 = !showLayer3;
+            this.style.opacity = showLayer3 ? '1' : '0.5';
+        });
+
+        document.getElementById('intensityToggle').addEventListener('click', function() {
+            highIntensity = !highIntensity;
+            this.textContent = highIntensity ? 'Normal' : 'Intensity';
+        });
+
+        // Keyboard shortcut
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.altKey && e.code === 'KeyZ') {
+                e.preventDefault();
+                document.getElementById('recordButton').click();
+            }
+        });
+
+        // Initialize
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        setupAudio();
+        draw();
+    </script>
+</body>
+</html>

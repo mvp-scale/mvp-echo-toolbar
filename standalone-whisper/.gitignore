@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+env/
+
+# Build artifacts  
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Version info (generated)
+version_info.py
+
+# Models (downloaded on first use)
+models/
+
+# PyInstaller cache
+.PyInstaller/

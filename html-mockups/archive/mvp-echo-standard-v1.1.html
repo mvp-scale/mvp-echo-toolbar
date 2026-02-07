@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MVP-Echo v1.1.0 — Local GPU/CPU Transcription</title>
+  <style>
+    :root {
+      --panel: rgba(155, 135, 245, 0.08);
+      --border: rgba(155, 135, 245, 0.20);
+      --text: #e8e9ff;
+      --muted: #9aa0b3;
+      --accent: #9b87f5;
+      --gpu-color: #4ade80;
+      --cpu-color: #fb923c;
+      --success: #4caf50;
+      --radius: 16px;
+      --glow: drop-shadow(0 0 12px rgba(155, 135, 245, .4));
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, #0b0b12 0%, #1a1a2e 50%, #16213e 100%);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 16px;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 24px;
+      backdrop-filter: blur(10px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-icon {
+      font-size: 28px;
+    }
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+    .brand-name {
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
+    .brand-version {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: rgba(155, 135, 245, 0.15);
+      border: 1px solid var(--accent);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .status-badge.gpu {
+      background: rgba(74, 222, 128, 0.15);
+      border-color: var(--gpu-color);
+      color: var(--gpu-color);
+    }
+    .status-badge.cpu {
+      background: rgba(251, 146, 60, 0.15);
+      border-color: var(--cpu-color);
+      color: var(--cpu-color);
+    }
+    .status-icon {
+      font-size: 16px;
+    }
+
+    /* Main Layout */
+    .main-content {
+      display: grid;
+      grid-template-columns: 400px 1fr;
+      gap: 20px;
+      height: 100%;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(12px);
+      padding: 24px;
+      overflow: auto;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .section-icon {
+      font-size: 20px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--accent);
+      margin: 0;
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .input-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .radio-option:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--accent);
+    }
+
+    .radio-option.selected {
+      background: rgba(155, 135, 245, 0.12);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(155, 135, 245, 0.15);
+    }
+
+    .radio-option.selected.gpu {
+      background: rgba(74, 222, 128, 0.12);
+      border-color: var(--gpu-color);
+      box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.15);
+    }
+
+    .radio-option.selected.cpu {
+      background: rgba(251, 146, 60, 0.12);
+      border-color: var(--cpu-color);
+      box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.15);
+    }
+
+    .radio-option.disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .radio-option input[type="radio"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    .radio-label {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .radio-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .radio-desc {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .radio-badge {
+      padding: 4px 10px;
+      background: rgba(74, 222, 128, 0.2);
+      border: 1px solid var(--gpu-color);
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--gpu-color);
+    }
+
+    .radio-badge.recommended {
+      background: rgba(155, 135, 245, 0.2);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .system-info {
+      padding: 16px;
+      background: rgba(74, 222, 128, 0.08);
+      border: 1px solid var(--gpu-color);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .system-info.cpu-mode {
+      background: rgba(251, 146, 60, 0.08);
+      border-color: var(--cpu-color);
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .info-label {
+      color: var(--muted);
+    }
+
+    .info-value {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .input-field {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .input-field:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(155, 135, 245, 0.15);
+    }
+
+    .info-box {
+      padding: 12px 16px;
+      background: rgba(155, 135, 245, 0.08);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* Stage */
+    .stage {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 32px;
+      background: radial-gradient(800px at 50% 30%, rgba(155, 135, 245, 0.10), transparent);
+    }
+
+    .visualizer {
+      width: 320px;
+      height: 320px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(155, 135, 245, 0.20), transparent);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      filter: var(--glow);
+    }
+
+    .visualizer-inner {
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      border: 1px dashed var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 72px;
+      opacity: 0.6;
+    }
+
+    .recording-indicator {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      padding: 10px 18px;
+      background: rgba(244, 67, 54, 0.2);
+      border: 1px solid #f44336;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .recording-indicator.active {
+      display: flex;
+    }
+
+    .rec-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #f44336;
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .btn {
+      padding: 18px 24px;
+      background: linear-gradient(135deg, var(--accent), #7c3aed);
+      border: none;
+      border-radius: 14px;
+      color: white;
+      font-weight: 600;
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(155, 135, 245, 0.5);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .transcription-output {
+      width: 100%;
+      max-width: 800px;
+      padding: 24px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      min-height: 120px;
+      font-size: 18px;
+      line-height: 1.8;
+      color: var(--text);
+      text-align: center;
+    }
+
+    .transcription-output.empty {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 14px;
+    }
+
+    /* Footer */
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .footer-stats {
+      display: flex;
+      gap: 32px;
+    }
+
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+    }
+
+    .stat-value {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .performance-bars {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .perf-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .perf-label {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .perf-meter {
+      width: 60px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .perf-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--gpu-color), var(--accent));
+      width: 45%;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div class="brand-text">
+        <div class="brand-name">MVP-Echo</div>
+        <div class="brand-version">Version 1.1.0 · Standard Edition</div>
+      </div>
+    </div>
+    <div class="status-badge gpu">
+      <span class="status-icon">🎮</span>
+      <span>GPU Accelerated</span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Sidebar -->
+    <aside class="panel sidebar">
+      <!-- Compute Mode -->
+      <section class="section">
+        <div class="section-header">
+          <span class="section-icon">🎯</span>
+          <h2 class="section-title">Compute Mode</h2>
+        </div>
+
+        <div class="radio-group">
+          <!-- Auto-Detect -->
+          <label class="radio-option selected">
+            <input type="radio" name="mode" value="auto" checked />
+            <div class="radio-label">
+              <div class="radio-title">🎯 Auto-Detect</div>
+              <div class="radio-desc">Automatically use GPU if available, fallback to CPU</div>
+            </div>
+            <span class="radio-badge recommended">Recommended</span>
+          </label>
+
+          <!-- GPU Force -->
+          <label class="radio-option gpu">
+            <input type="radio" name="mode" value="gpu" />
+            <div class="radio-label">
+              <div class="radio-title">⚡ Force GPU</div>
+              <div class="radio-desc">Always use GPU acceleration (faster, requires NVIDIA)</div>
+            </div>
+            <span class="radio-badge">Detected</span>
+          </label>
+
+          <!-- CPU Force -->
+          <label class="radio-option">
+            <input type="radio" name="mode" value="cpu" />
+            <div class="radio-label">
+              <div class="radio-title">💻 Force CPU</div>
+              <div class="radio-desc">Use CPU even if GPU available (lower power usage)</div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <!-- System Detection -->
+      <section class="section">
+        <div class="section-header">
+          <span class="section-icon">🖥️</span>
+          <h2 class="section-title">System Detection</h2>
+        </div>
+
+        <div class="system-info">
+          <div class="info-row">
+            <span class="info-label">GPU Detected:</span>
+            <span class="info-value">✅ NVIDIA RTX 3080</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">CUDA Available:</span>
+            <span class="info-value">✅ Version 12.1</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">CPU Cores:</span>
+            <span class="info-value">16 cores</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Memory:</span>
+            <span class="info-value">32 GB</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Model Selection -->
+      <section class="section">
+        <div class="section-header">
+          <span class="section-icon">🤖</span>
+          <h2 class="section-title">Model Settings</h2>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Whisper Model</label>
+          <select class="input-field">
+            <option>tiny (fastest, 39M params)</option>
+            <option selected>base (balanced, 74M params)</option>
+            <option>small (accurate, 244M params)</option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Language</label>
+          <select class="input-field">
+            <option selected>Auto-detect</option>
+            <option>English</option>
+            <option>Spanish</option>
+            <option>French</option>
+            <option>German</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Info -->
+      <div class="info-box">
+        <strong>🔒 Fully Local Processing</strong><br/>
+        All transcription happens on your device. No internet required. Your audio never leaves your computer.
+      </div>
+    </aside>
+
+    <!-- Stage -->
+    <main class="panel stage">
+      <div class="recording-indicator">
+        <div class="rec-dot"></div>
+        <span>RECORDING</span>
+      </div>
+
+      <div class="visualizer">
+        <div class="visualizer-inner">
+          🎤
+        </div>
+      </div>
+
+      <button class="btn">
+        <span>⏺️</span>
+        <span>Start Recording</span>
+      </button>
+
+      <div class="transcription-output empty">
+        Your transcription will appear here...
+      </div>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-stats">
+      <div class="stat">
+        <span class="stat-label">Mode:</span>
+        <span class="stat-value">⚡ GPU (CUDA)</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Device:</span>
+        <span class="stat-value">NVIDIA RTX 3080</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Processing:</span>
+        <span class="stat-value">🔒 Local</span>
+      </div>
+    </div>
+    <div class="performance-bars">
+      <div class="perf-bar">
+        <div class="perf-label">GPU</div>
+        <div class="perf-meter">
+          <div class="perf-fill" style="width: 45%;"></div>
+        </div>
+      </div>
+      <div class="perf-bar">
+        <div class="perf-label">VRAM</div>
+        <div class="perf-meter">
+          <div class="perf-fill" style="width: 28%;"></div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Simple demo interactions
+    const visualizer = document.querySelector('.visualizer');
+    const recordingIndicator = document.querySelector('.recording-indicator');
+    const recordBtn = document.querySelector('.btn');
+    const transcriptionOutput = document.querySelector('.transcription-output');
+    const radioOptions = document.querySelectorAll('.radio-option');
+    const statusBadge = document.querySelector('.status-badge');
+    const systemInfo = document.querySelector('.system-info');
+    const footerMode = document.querySelectorAll('.stat-value')[0];
+
+    let isRecording = false;
+
+    // Radio button handling
+    radioOptions.forEach(option => {
+      option.addEventListener('click', () => {
+        if (option.classList.contains('disabled')) return;
+
+        radioOptions.forEach(opt => opt.classList.remove('selected'));
+        option.classList.add('selected');
+        option.querySelector('input').checked = true;
+
+        const mode = option.querySelector('input').value;
+        updateMode(mode);
+      });
+    });
+
+    function updateMode(mode) {
+      if (mode === 'gpu') {
+        statusBadge.className = 'status-badge gpu';
+        statusBadge.innerHTML = '<span class="status-icon">⚡</span><span>GPU Accelerated</span>';
+        footerMode.textContent = '⚡ GPU (CUDA)';
+        systemInfo.className = 'system-info';
+      } else if (mode === 'cpu') {
+        statusBadge.className = 'status-badge cpu';
+        statusBadge.innerHTML = '<span class="status-icon">💻</span><span>CPU Mode</span>';
+        footerMode.textContent = '💻 CPU Only';
+        systemInfo.className = 'system-info cpu-mode';
+      } else {
+        statusBadge.className = 'status-badge gpu';
+        statusBadge.innerHTML = '<span class="status-icon">🎮</span><span>GPU Accelerated</span>';
+        footerMode.textContent = '⚡ GPU (CUDA)';
+        systemInfo.className = 'system-info';
+      }
+    }
+
+    recordBtn.addEventListener('click', () => {
+      isRecording = !isRecording;
+
+      if (isRecording) {
+        recordBtn.innerHTML = '<span>⏹️</span><span>Stop Recording</span>';
+        recordBtn.style.background = 'linear-gradient(135deg, #f44336, #d32f2f)';
+        recordingIndicator.classList.add('active');
+        visualizer.style.animation = 'pulse 1.5s ease-in-out infinite';
+
+        // Simulate transcription after 2 seconds (faster with GPU!)
+        setTimeout(() => {
+          transcriptionOutput.classList.remove('empty');
+          transcriptionOutput.textContent = 'This is a demo transcription processed locally on your GPU. Fast, private, and completely offline.';
+        }, 2000);
+      } else {
+        recordBtn.innerHTML = '<span>⏺️</span><span>Start Recording</span>';
+        recordBtn.style.background = 'linear-gradient(135deg, var(--accent), #7c3aed)';
+        recordingIndicator.classList.remove('active');
+        visualizer.style.animation = '';
+      }
+    });
+  </script>
+</body>
+</html>

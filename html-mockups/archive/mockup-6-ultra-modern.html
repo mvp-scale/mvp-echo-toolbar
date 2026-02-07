@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mockup 6: Ultra-Modern WebGL Particle System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <style>
+        :root {
+            --primary: oklch(0.55 0.25 264);
+            --primary-dark: oklch(0.65 0.25 264);
+            --background: oklch(0.02 0.01 264);
+            --accent-pink: oklch(0.70 0.25 330);
+            --accent-cyan: oklch(0.75 0.20 200);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: radial-gradient(ellipse at center, var(--background) 0%, oklch(0.01 0.02 264) 100%);
+            color: white;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #webgl-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .ui-overlay {
+            position: relative;
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        .record-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .record-button {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            border: 4px solid transparent;
+            background: linear-gradient(135deg, var(--accent-pink), var(--primary), var(--accent-cyan));
+            background-clip: padding-box;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            pointer-events: auto;
+            backdrop-filter: blur(20px);
+            box-shadow: 
+                0 0 60px rgba(66, 165, 245, 0.3),
+                inset 0 0 60px rgba(255, 255, 255, 0.1);
+        }
+
+        .record-button::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: inherit;
+            padding: 4px;
+            background: linear-gradient(135deg, var(--accent-pink), var(--primary), var(--accent-cyan));
+            mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            mask-composite: subtract;
+            animation: rotate 4s linear infinite;
+        }
+
+        .record-button:hover {
+            transform: scale(1.05);
+            box-shadow: 
+                0 0 100px rgba(66, 165, 245, 0.5),
+                inset 0 0 60px rgba(255, 255, 255, 0.2);
+        }
+
+        .record-button.recording {
+            animation: pulse-recording 2s ease-in-out infinite;
+        }
+
+        .record-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #ff4444, #cc0000);
+            transition: all 0.3s ease;
+        }
+
+        .record-button.recording .record-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+        }
+
+        .audio-info {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            align-items: center;
+            pointer-events: auto;
+        }
+
+        .spectrum-display {
+            display: flex;
+            gap: 2px;
+            height: 60px;
+            align-items: end;
+            justify-content: center;
+            width: 300px;
+        }
+
+        .spectrum-bar {
+            width: 4px;
+            background: linear-gradient(0deg, var(--accent-pink), var(--primary), var(--accent-cyan));
+            border-radius: 2px;
+            transition: height 0.1s ease;
+            opacity: 0.8;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+            pointer-events: auto;
+        }
+
+        .control-btn {
+            padding: 0.75rem 1.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .status {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+
+        @keyframes rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse-recording {
+            0%, 100% { 
+                box-shadow: 
+                    0 0 60px rgba(255, 68, 68, 0.3),
+                    inset 0 0 60px rgba(255, 255, 255, 0.1);
+            }
+            50% { 
+                box-shadow: 
+                    0 0 120px rgba(255, 68, 68, 0.6),
+                    inset 0 0 80px rgba(255, 255, 255, 0.2);
+            }
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 2rem;
+            right: 2rem;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 1.5rem;
+            max-width: 300px;
+            z-index: 15;
+        }
+
+        .info-panel h3 {
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        .tech-list {
+            font-size: 0.85rem;
+            line-height: 1.6;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <canvas id="webgl-canvas"></canvas>
+        
+        <div class="ui-overlay">
+            <div class="record-section">
+                <button class="record-button" id="recordButton">
+                    <div class="record-icon"></div>
+                </button>
+                
+                <div class="audio-info">
+                    <div class="spectrum-display" id="spectrumDisplay"></div>
+                    <div class="status" id="statusText">Ready to Record</div>
+                </div>
+                
+                <div class="controls">
+                    <button class="control-btn" id="particleToggle">Toggle Particles</button>
+                    <button class="control-btn" id="shaderToggle">Switch Shader</button>
+                    <button class="control-btn" id="intensityToggle">High Intensity</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h3>Ultra-Modern Tech Stack</h3>
+            <div class="tech-list">
+                <strong>WebGL Shaders:</strong> Custom vertex/fragment shaders for particle physics<br>
+                <strong>Three.js:</strong> 50,000+ particles with real-time audio reactivity<br>
+                <strong>GSAP:</strong> Smooth morphing and physics-based animations<br>
+                <strong>Features:</strong> GPU-accelerated rendering, fluid dynamics, audio spectrum analysis
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebGL Particle System with Three.js
+        let scene, camera, renderer, particleSystem;
+        let audioContext, analyser, dataArray;
+        let isRecording = false;
+        let particleCount = 50000;
+        let currentShader = 0;
+        let highIntensity = false;
+
+        // Custom Vertex Shader
+        const vertexShader = `
+            attribute float size;
+            attribute vec3 customColor;
+            attribute float alpha;
+            varying vec3 vColor;
+            varying float vAlpha;
+            uniform float time;
+            uniform float audioIntensity;
+            uniform vec3 audioSpectrum;
+            
+            void main() {
+                vColor = customColor;
+                vAlpha = alpha;
+                
+                vec3 pos = position;
+                
+                // Audio-reactive movement
+                float wave = sin(time * 2.0 + position.x * 0.1) * audioIntensity * 10.0;
+                pos.y += wave;
+                
+                // Spectrum-based color shift
+                pos += normalize(position) * audioSpectrum.x * 50.0;
+                
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_PointSize = size * (300.0 / -mvPosition.z) * (1.0 + audioIntensity);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        // Custom Fragment Shader
+        const fragmentShader = `
+            uniform float time;
+            uniform float audioIntensity;
+            uniform int shaderMode;
+            varying vec3 vColor;
+            varying float vAlpha;
+            
+            void main() {
+                vec2 center = gl_PointCoord - 0.5;
+                float dist = length(center);
+                
+                if (shaderMode == 0) {
+                    // Plasma orb effect
+                    float intensity = 1.0 - smoothstep(0.0, 0.5, dist);
+                    vec3 color = vColor * intensity * (1.0 + audioIntensity * 2.0);
+                    gl_FragColor = vec4(color, intensity * vAlpha);
+                } else if (shaderMode == 1) {
+                    // Ring effect
+                    float ring = smoothstep(0.3, 0.4, dist) - smoothstep(0.4, 0.5, dist);
+                    ring += smoothstep(0.1, 0.2, dist) - smoothstep(0.2, 0.3, dist);
+                    vec3 color = vColor * ring * (1.0 + audioIntensity);
+                    gl_FragColor = vec4(color, ring * vAlpha);
+                } else {
+                    // Fluid effect
+                    float noise = sin(dist * 20.0 + time * 5.0) * 0.5 + 0.5;
+                    float intensity = 1.0 - dist;
+                    vec3 color = vColor * intensity * noise * (1.0 + audioIntensity);
+                    gl_FragColor = vec4(color, intensity * vAlpha * 0.8);
+                }
+            }
+        `;
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ 
+                canvas: document.getElementById('webgl-canvas'),
+                alpha: true,
+                antialias: true
+            });
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000, 0);
+            
+            // Create particle system
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
+            const sizes = new Float32Array(particleCount);
+            const alphas = new Float32Array(particleCount);
+            
+            // Initialize particles
+            for (let i = 0; i < particleCount; i++) {
+                // Spherical distribution
+                const radius = Math.random() * 400 + 100;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(Math.random() * 2 - 1);
+                
+                positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                positions[i * 3 + 2] = radius * Math.cos(phi);
+                
+                // Color gradient from pink to blue
+                const t = Math.random();
+                colors[i * 3] = 0.8 + t * 0.2;     // R
+                colors[i * 3 + 1] = 0.3 + t * 0.4; // G
+                colors[i * 3 + 2] = 0.9;           // B
+                
+                sizes[i] = Math.random() * 4 + 1;
+                alphas[i] = Math.random() * 0.8 + 0.2;
+            }
+            
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+            geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+            
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    audioIntensity: { value: 0 },
+                    audioSpectrum: { value: new THREE.Vector3(0, 0, 0) },
+                    shaderMode: { value: 0 }
+                },
+                vertexShader,
+                fragmentShader,
+                blending: THREE.AdditiveBlending,
+                transparent: true,
+                depthWrite: false
+            });
+            
+            particleSystem = new THREE.Points(geometry, material);
+            scene.add(particleSystem);
+            
+            camera.position.z = 500;
+            
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const time = performance.now() * 0.001;
+            let audioIntensity = 0;
+            let spectrum = new THREE.Vector3(0, 0, 0);
+            
+            if (analyser && dataArray) {
+                analyser.getByteFrequencyData(dataArray);
+                
+                // Calculate audio intensity
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                audioIntensity = (sum / (dataArray.length * 255)) * (highIntensity ? 3 : 1);
+                
+                // Spectrum analysis
+                spectrum.x = (dataArray[10] || 0) / 255; // Bass
+                spectrum.y = (dataArray[50] || 0) / 255; // Mid
+                spectrum.z = (dataArray[100] || 0) / 255; // Treble
+            }
+            
+            // Update shader uniforms
+            if (particleSystem) {
+                particleSystem.material.uniforms.time.value = time;
+                particleSystem.material.uniforms.audioIntensity.value = audioIntensity;
+                particleSystem.material.uniforms.audioSpectrum.value = spectrum;
+                particleSystem.material.uniforms.shaderMode.value = currentShader;
+                
+                // Rotate particle system
+                particleSystem.rotation.y += 0.002 + audioIntensity * 0.01;
+                particleSystem.rotation.x += 0.001 + audioIntensity * 0.005;
+            }
+            
+            renderer.render(scene, camera);
+            updateSpectrumDisplay();
+        }
+
+        function updateSpectrumDisplay() {
+            const spectrumDisplay = document.getElementById('spectrumDisplay');
+            
+            if (!spectrumDisplay.children.length) {
+                // Create spectrum bars
+                for (let i = 0; i < 64; i++) {
+                    const bar = document.createElement('div');
+                    bar.className = 'spectrum-bar';
+                    bar.style.height = '2px';
+                    spectrumDisplay.appendChild(bar);
+                }
+            }
+            
+            if (analyser && dataArray) {
+                const bars = spectrumDisplay.children;
+                for (let i = 0; i < bars.length; i++) {
+                    const value = dataArray[i] || 0;
+                    const height = (value / 255) * 60;
+                    bars[i].style.height = `${Math.max(2, height)}px`;
+                }
+            }
+        }
+
+        async function setupAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                
+                analyser.fftSize = 256;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                console.log('Audio setup complete');
+            } catch (error) {
+                console.error('Audio setup failed:', error);
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('recordButton').addEventListener('click', function() {
+            const button = this;
+            const icon = button.querySelector('.record-icon');
+            const status = document.getElementById('statusText');
+            
+            if (!isRecording) {
+                button.classList.add('recording');
+                status.textContent = 'Recording... (Ctrl+Alt+Z to stop)';
+                isRecording = true;
+                
+                // GSAP animation for button press
+                gsap.to(button, { 
+                    scale: 0.95, 
+                    duration: 0.1, 
+                    yoyo: true, 
+                    repeat: 1 
+                });
+                
+                if (!audioContext) setupAudio();
+            } else {
+                button.classList.remove('recording');
+                status.textContent = 'Processing... Copied to clipboard!';
+                isRecording = false;
+                
+                // Simulate clipboard copy
+                setTimeout(() => {
+                    status.textContent = 'Ready to Record';
+                }, 2000);
+            }
+        });
+
+        document.getElementById('particleToggle').addEventListener('click', function() {
+            if (particleSystem) {
+                particleSystem.visible = !particleSystem.visible;
+                this.textContent = particleSystem.visible ? 'Hide Particles' : 'Show Particles';
+            }
+        });
+
+        document.getElementById('shaderToggle').addEventListener('click', function() {
+            currentShader = (currentShader + 1) % 3;
+            const modes = ['Plasma', 'Rings', 'Fluid'];
+            this.textContent = `Shader: ${modes[currentShader]}`;
+        });
+
+        document.getElementById('intensityToggle').addEventListener('click', function() {
+            highIntensity = !highIntensity;
+            this.textContent = highIntensity ? 'Normal Intensity' : 'High Intensity';
+        });
+
+        // Keyboard shortcut
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.altKey && e.code === 'KeyZ') {
+                e.preventDefault();
+                document.getElementById('recordButton').click();
+            }
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', function() {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        // Initialize
+        initThreeJS();
+        setupAudio();
+    </script>
+</body>
+</html>

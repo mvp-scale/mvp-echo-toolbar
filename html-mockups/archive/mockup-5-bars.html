@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mockup 5: Radial Bars - MVP-Echo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0020 100%);
+            color: #fff;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        /* Control Panel */
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            width: 300px;
+            z-index: 1000;
+        }
+        
+        .controls h3 {
+            margin-bottom: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        
+        .control-group select {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+        }
+        
+        .state-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .state-buttons button {
+            flex: 1;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .state-buttons button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .state-buttons button.active {
+            background: #667eea;
+            border-color: #667eea;
+        }
+        
+        /* Canvas Container */
+        .visualizer {
+            position: relative;
+            width: 500px;
+            height: 500px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #barsCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            filter: drop-shadow(0 0 20px rgba(255, 100, 150, 0.3));
+        }
+        
+        /* Outer rings inspired by reference images */
+        .outer-ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 100, 150, 0.2);
+            animation: rotate-slow 30s linear infinite;
+        }
+        
+        .ring-1 { width: 480px; height: 480px; animation-duration: 40s; }
+        .ring-2 { width: 460px; height: 460px; animation-duration: 35s; animation-direction: reverse; }
+        .ring-3 { width: 440px; height: 440px; animation-duration: 45s; }
+        
+        .scale-markers {
+            position: absolute;
+            width: 420px;
+            height: 420px;
+            border-radius: 50%;
+        }
+        
+        .scale-marker {
+            position: absolute;
+            width: 2px;
+            height: 10px;
+            background: rgba(255, 100, 150, 0.4);
+            transform-origin: center 210px;
+        }
+        
+        /* Center Record Button */
+        .record-button {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            transition: all 0.3s ease;
+            z-index: 10;
+            box-shadow: 0 0 40px rgba(255, 68, 68, 0.6);
+        }
+        
+        .record-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 60px rgba(255, 68, 68, 0.9);
+        }
+        
+        .record-button.recording {
+            background: linear-gradient(135deg, #ff6666, #ff0000);
+            animation: pulse 1s ease-in-out infinite;
+        }
+        
+        .record-button svg {
+            width: 24px;
+            height: 24px;
+        }
+        
+        /* Waveform strip across center */
+        .waveform-strip {
+            position: absolute;
+            width: 400px;
+            height: 80px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 100, 150, 0.3);
+        }
+        
+        .waveform-bars {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            height: 60px;
+        }
+        
+        .waveform-bar {
+            width: 3px;
+            background: linear-gradient(to top, #ff6464, #ff64c8, #6464ff);
+            border-radius: 2px;
+            transition: height 0.1s ease;
+        }
+        
+        /* Animations */
+        @keyframes rotate-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .visualizer.recording .outer-ring {
+            border-color: rgba(255, 100, 150, 0.6);
+        }
+        
+        .visualizer.recording .ring-1 { animation-duration: 15s; }
+        .visualizer.recording .ring-2 { animation-duration: 12s; }
+        .visualizer.recording .ring-3 { animation-duration: 18s; }
+        
+        .visualizer.processing .outer-ring {
+            animation-duration: 2s !important;
+            border-color: rgba(100, 255, 100, 0.8);
+        }
+        
+        /* Keyboard Hint */
+        .keyboard-hint {
+            position: absolute;
+            bottom: -60px;
+            text-align: center;
+            width: 100%;
+        }
+        
+        .keyboard-hint .shortcut {
+            font-family: monospace;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .keyboard-hint .description {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 5px;
+        }
+        
+        /* Parameters Display */
+        .params-display {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .params-display div {
+            margin-bottom: 5px;
+        }
+        
+        .params-display span {
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <!-- Control Panel -->
+    <div class="controls">
+        <h3>Controls</h3>
+        
+        <div class="control-group">
+            <label>State</label>
+            <div class="state-buttons">
+                <button class="state-btn active" data-state="idle">Idle</button>
+                <button class="state-btn" data-state="recording">Recording</button>
+                <button class="state-btn" data-state="processing">Processing</button>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <label>Color Palette</label>
+            <select id="palette-select">
+                <option value="pink-blue">Pink to Blue (Reference Style)</option>
+                <option value="magenta">Magenta Burst</option>
+                <option value="spectrum">Full Spectrum</option>
+                <option value="fire">Fire Gradient</option>
+                <option value="ocean">Ocean Waves</option>
+            </select>
+        </div>
+        
+        <h3 style="margin-top: 20px;">Audio Parameters</h3>
+        
+        <div class="control-group">
+            <label>Amplitude (Overall Volume) <span id="amp-value">0.5</span></label>
+            <input type="range" id="amplitude" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Bass (20-250 Hz) <span id="bass-value">0.3</span></label>
+            <input type="range" id="bass" min="0" max="1" step="0.01" value="0.3">
+        </div>
+        
+        <div class="control-group">
+            <label>Mid (250-4000 Hz) <span id="mid-value">0.5</span></label>
+            <input type="range" id="mid" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Treble (4000+ Hz) <span id="treble-value">0.7</span></label>
+            <input type="range" id="treble" min="0" max="1" step="0.01" value="0.7">
+        </div>
+        
+        <h3 style="margin-top: 20px;">Radial Settings</h3>
+        
+        <div class="control-group">
+            <label>Bar Count <span id="bar-count-value">64</span></label>
+            <input type="range" id="bar-count" min="32" max="128" step="8" value="64">
+        </div>
+        
+        <div class="control-group">
+            <label>Inner Radius <span id="inner-radius-value">80</span></label>
+            <input type="range" id="inner-radius" min="50" max="120" step="10" value="80">
+        </div>
+    </div>
+    
+    <!-- Parameters Display -->
+    <div class="params-display">
+        <div>Bar Height: <span>spectrum array → radial length</span></div>
+        <div>Bass Response: <span>bass → inner bar emphasis</span></div>
+        <div>Mid Response: <span>mid → middle bar heights</span></div>
+        <div>Treble Response: <span>treble → outer bar details</span></div>
+        <div>Rotation Speed: <span>amplitude → ring rotation</span></div>
+        <div>Waveform Strip: <span>real-time audio → center display</span></div>
+    </div>
+    
+    <!-- Main Visualizer -->
+    <div class="visualizer" id="visualizer">
+        <!-- Outer rings inspired by reference images -->
+        <div class="outer-ring ring-1"></div>
+        <div class="outer-ring ring-2"></div>
+        <div class="outer-ring ring-3"></div>
+        
+        <!-- Scale markers like in reference image -->
+        <div class="scale-markers" id="scale-markers"></div>
+        
+        <!-- Canvas for radial bars -->
+        <canvas id="barsCanvas" width="500" height="500"></canvas>
+        
+        <!-- Waveform strip across center -->
+        <div class="waveform-strip">
+            <div class="waveform-bars" id="waveform-bars"></div>
+        </div>
+        
+        <button class="record-button" id="record-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+        </button>
+        
+        <div class="keyboard-hint">
+            <div class="shortcut">Ctrl + Alt + Z</div>
+            <div class="description">Hold to record • Release to copy</div>
+        </div>
+    </div>
+    
+    <script>
+        // Canvas Setup
+        const canvas = document.getElementById('barsCanvas');
+        const ctx = canvas.getContext('2d');
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        // Visualization Parameters
+        let barCount = 64;
+        let innerRadius = 80;
+        let spectrumData = new Array(barCount).fill(0);
+        let smoothedSpectrum = new Array(barCount).fill(0);
+        let currentState = 'idle';
+        
+        // Color Palettes inspired by reference images
+        const palettes = {
+            'pink-blue': {
+                colors: ['#ff4d6d', '#ff6b9d', '#ff8cc8', '#c4a7ff', '#8b7fff', '#667eea'],
+                name: 'Pink to Blue'
+            },
+            'magenta': {
+                colors: ['#ff1744', '#ff4081', '#e91e63', '#c2185b', '#ad1457', '#880e4f'],
+                name: 'Magenta Burst'
+            },
+            'spectrum': {
+                colors: ['#ff4d4d', '#ff8c4d', '#ffd84d', '#8cff4d', '#4dff8c', '#4d8cff'],
+                name: 'Full Spectrum'
+            },
+            'fire': {
+                colors: ['#ffeb3b', '#ffc107', '#ff9800', '#ff5722', '#f44336', '#e91e63'],
+                name: 'Fire Gradient'
+            },
+            'ocean': {
+                colors: ['#e3f2fd', '#90caf9', '#42a5f5', '#1e88e5', '#1565c0', '#0d47a1'],
+                name: 'Ocean Waves'
+            }
+        };
+        
+        let currentPalette = palettes['pink-blue'];
+        
+        // Initialize scale markers
+        function initScaleMarkers() {
+            const scaleContainer = document.getElementById('scale-markers');
+            scaleContainer.innerHTML = '';
+            
+            for (let i = 0; i < 72; i++) {
+                const marker = document.createElement('div');
+                marker.className = 'scale-marker';
+                marker.style.transform = `rotate(${i * 5}deg)`;
+                
+                // Larger markers every 15 degrees
+                if (i % 3 === 0) {
+                    marker.style.height = '15px';
+                    marker.style.background = 'rgba(255, 100, 150, 0.6)';
+                }
+                
+                scaleContainer.appendChild(marker);
+            }
+        }
+        
+        // Initialize waveform bars
+        function initWaveformBars() {
+            const container = document.getElementById('waveform-bars');
+            container.innerHTML = '';
+            
+            for (let i = 0; i < 80; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'waveform-bar';
+                bar.style.height = '4px';
+                container.appendChild(bar);
+            }
+        }
+        
+        // Generate spectrum data
+        function generateSpectrum(amplitude, bass, mid, treble) {
+            for (let i = 0; i < barCount; i++) {
+                const frequency = i / barCount;
+                let value = 0;
+                
+                // Bass frequencies (low indices)
+                if (frequency < 0.2) {
+                    value += bass * 60 * (1 - frequency * 5);
+                }
+                
+                // Mid frequencies
+                if (frequency >= 0.2 && frequency < 0.7) {
+                    const midPos = (frequency - 0.2) / 0.5;
+                    value += mid * 50 * Math.sin(midPos * Math.PI);
+                }
+                
+                // Treble frequencies (high indices)
+                if (frequency >= 0.7) {
+                    value += treble * 40 * (frequency - 0.6);
+                }
+                
+                // Add amplitude variation
+                value *= (0.5 + amplitude * 0.5);
+                value += Math.random() * amplitude * 20;
+                
+                // Smooth the data
+                const smoothing = 0.7;
+                smoothedSpectrum[i] = smoothedSpectrum[i] * smoothing + value * (1 - smoothing);
+                spectrumData[i] = Math.max(0, smoothedSpectrum[i]);
+            }
+        }
+        
+        // Draw radial bars
+        function drawRadialBars() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const amplitude = parseFloat(document.getElementById('amplitude').value);
+            const bass = parseFloat(document.getElementById('bass').value);
+            const mid = parseFloat(document.getElementById('mid').value);
+            const treble = parseFloat(document.getElementById('treble').value);
+            
+            generateSpectrum(amplitude, bass, mid, treble);
+            
+            // Draw each radial bar
+            for (let i = 0; i < barCount; i++) {
+                const angle = (i / barCount) * Math.PI * 2;
+                const barHeight = spectrumData[i];
+                const maxRadius = innerRadius + barHeight;
+                
+                // Color based on frequency and palette
+                const colorIndex = Math.floor((i / barCount) * (currentPalette.colors.length - 1));
+                const color = currentPalette.colors[colorIndex];
+                
+                // Draw bar
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.rotate(angle);
+                
+                // Create gradient for the bar
+                const gradient = ctx.createLinearGradient(0, -innerRadius, 0, -maxRadius);
+                gradient.addColorStop(0, color + '80');
+                gradient.addColorStop(0.5, color);
+                gradient.addColorStop(1, color + '40');
+                
+                ctx.fillStyle = gradient;
+                ctx.fillRect(-1, -maxRadius, 2, barHeight);
+                
+                // Add glow effect for high energy
+                if (barHeight > 30) {
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = color;
+                    ctx.fillRect(-1, -maxRadius, 2, barHeight);
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.restore();
+            }
+            
+            // Draw center circle
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, innerRadius - 10, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, innerRadius - 10, 0, Math.PI * 2);
+            ctx.strokeStyle = currentPalette.colors[0] + '60';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        
+        // Update waveform bars
+        function updateWaveformBars() {
+            const bars = document.querySelectorAll('.waveform-bar');
+            const amplitude = parseFloat(document.getElementById('amplitude').value);
+            
+            bars.forEach((bar, i) => {
+                const height = 4 + Math.random() * amplitude * 50;
+                bar.style.height = height + 'px';
+            });
+        }
+        
+        // Animation loop
+        function animate() {
+            drawRadialBars();
+            if (currentState === 'recording') {
+                updateWaveformBars();
+            }
+            requestAnimationFrame(animate);
+        }
+        
+        // State Management
+        document.querySelectorAll('.state-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                setState(e.target.dataset.state);
+            });
+        });
+        
+        function setState(state) {
+            currentState = state;
+            const visualizer = document.getElementById('visualizer');
+            const recordBtn = document.getElementById('record-btn');
+            
+            visualizer.className = 'visualizer ' + state;
+            recordBtn.className = 'record-button ' + (state === 'recording' ? 'recording' : '');
+            
+            if (state === 'recording') {
+                startSimulation();
+            } else if (state === 'idle') {
+                stopSimulation();
+            }
+        }
+        
+        // Palette Selection
+        document.getElementById('palette-select').addEventListener('change', (e) => {
+            currentPalette = palettes[e.target.value];
+        });
+        
+        // Settings Controls
+        document.getElementById('bar-count').addEventListener('input', (e) => {
+            barCount = parseInt(e.target.value);
+            document.getElementById('bar-count-value').textContent = barCount;
+            spectrumData = new Array(barCount).fill(0);
+            smoothedSpectrum = new Array(barCount).fill(0);
+        });
+        
+        document.getElementById('inner-radius').addEventListener('input', (e) => {
+            innerRadius = parseInt(e.target.value);
+            document.getElementById('inner-radius-value').textContent = innerRadius;
+        });
+        
+        // Audio Controls
+        const controls = {
+            amplitude: document.getElementById('amplitude'),
+            bass: document.getElementById('bass'),
+            mid: document.getElementById('mid'),
+            treble: document.getElementById('treble')
+        };
+        
+        Object.keys(controls).forEach(key => {
+            controls[key].addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                document.getElementById(key === 'amplitude' ? 'amp-value' : key + '-value').textContent = value.toFixed(2);
+            });
+        });
+        
+        // Simulation
+        let simulationInterval;
+        
+        function startSimulation() {
+            simulationInterval = setInterval(() => {
+                const t = Date.now() / 1000;
+                
+                // Musical beat simulation
+                const beat = Math.sin(t * Math.PI * 2 * 1.2) * 0.5 + 0.5; // 1.2 Hz beat
+                const harmony = Math.sin(t * Math.PI * 6) * 0.3; // Harmonic variation
+                
+                controls.amplitude.value = 0.4 + beat * 0.5 + Math.random() * 0.1;
+                controls.bass.value = 0.3 + beat * 0.6 + Math.random() * 0.1;
+                controls.mid.value = 0.5 + harmony + Math.random() * 0.1;
+                controls.treble.value = 0.6 + Math.sin(t * 8) * 0.2 + Math.random() * 0.2;
+                
+                // Update displays
+                document.getElementById('amp-value').textContent = controls.amplitude.value.toFixed(2);
+                document.getElementById('bass-value').textContent = controls.bass.value.toFixed(2);
+                document.getElementById('mid-value').textContent = controls.mid.value.toFixed(2);
+                document.getElementById('treble-value').textContent = controls.treble.value.toFixed(2);
+            }, 50);
+        }
+        
+        function stopSimulation() {
+            if (simulationInterval) {
+                clearInterval(simulationInterval);
+                controls.amplitude.value = 0.5;
+                controls.bass.value = 0.3;
+                controls.mid.value = 0.5;
+                controls.treble.value = 0.7;
+            }
+        }
+        
+        // Keyboard Handler
+        let isHoldingKey = false;
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.altKey && e.key === 'z' && !isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = true;
+                setState('recording');
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'z' && isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = false;
+                setState('processing');
+                
+                setTimeout(() => {
+                    setState('idle');
+                    alert('Transcription copied to clipboard!');
+                }, 1500);
+            }
+        });
+        
+        // Record Button
+        document.getElementById('record-btn').addEventListener('click', () => {
+            if (currentState === 'idle') {
+                setState('recording');
+            } else if (currentState === 'recording') {
+                setState('processing');
+                setTimeout(() => setState('idle'), 1500);
+            }
+        });
+        
+        // Initialize
+        initScaleMarkers();
+        initWaveformBars();
+        animate();
+    </script>
+</body>
+</html>

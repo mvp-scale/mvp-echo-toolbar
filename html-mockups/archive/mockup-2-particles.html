@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mockup 2: Particle Field - MVP-Echo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: radial-gradient(ellipse at center, #0a0a0a 0%, #000000 100%);
+            color: #fff;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        /* Control Panel */
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            width: 300px;
+            z-index: 1000;
+        }
+        
+        .controls h3 {
+            margin-bottom: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        
+        .control-group select {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+        }
+        
+        .state-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .state-buttons button {
+            flex: 1;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .state-buttons button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .state-buttons button.active {
+            background: #667eea;
+            border-color: #667eea;
+        }
+        
+        /* Canvas Container */
+        .visualizer {
+            position: relative;
+            width: 600px;
+            height: 600px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #particleCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        
+        /* Center Button */
+        .record-button {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            transition: all 0.3s ease;
+            z-index: 10;
+            box-shadow: 0 0 40px rgba(255, 68, 68, 0.6);
+        }
+        
+        .record-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 60px rgba(255, 68, 68, 0.9);
+        }
+        
+        .record-button.recording {
+            background: linear-gradient(135deg, #ff6666, #ff0000);
+            animation: pulse 1s ease-in-out infinite;
+        }
+        
+        .record-button svg {
+            width: 24px;
+            height: 24px;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(255, 68, 68, 0.6); }
+            50% { transform: scale(1.05); box-shadow: 0 0 60px rgba(255, 68, 68, 1); }
+        }
+        
+        /* Keyboard Hint */
+        .keyboard-hint {
+            position: absolute;
+            bottom: -60px;
+            text-align: center;
+            width: 100%;
+        }
+        
+        .keyboard-hint .shortcut {
+            font-family: monospace;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .keyboard-hint .description {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 5px;
+        }
+        
+        /* Parameters Display */
+        .params-display {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .params-display div {
+            margin-bottom: 5px;
+        }
+        
+        .params-display span {
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <!-- Control Panel -->
+    <div class="controls">
+        <h3>Controls</h3>
+        
+        <div class="control-group">
+            <label>State</label>
+            <div class="state-buttons">
+                <button class="state-btn active" data-state="idle">Idle</button>
+                <button class="state-btn" data-state="recording">Recording</button>
+                <button class="state-btn" data-state="processing">Processing</button>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <label>Color Palette</label>
+            <select id="palette-select">
+                <option value="spectrum">Spectrum (Rainbow)</option>
+                <option value="ocean">Ocean (Blue-Green)</option>
+                <option value="sunset">Sunset (Red-Orange)</option>
+                <option value="purple">Purple Dream</option>
+                <option value="neon">Neon Glow</option>
+            </select>
+        </div>
+        
+        <h3 style="margin-top: 20px;">Audio Parameters</h3>
+        
+        <div class="control-group">
+            <label>Amplitude (Overall Volume) <span id="amp-value">0.5</span></label>
+            <input type="range" id="amplitude" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Bass (20-250 Hz) <span id="bass-value">0.3</span></label>
+            <input type="range" id="bass" min="0" max="1" step="0.01" value="0.3">
+        </div>
+        
+        <div class="control-group">
+            <label>Mid (250-4000 Hz) <span id="mid-value">0.5</span></label>
+            <input type="range" id="mid" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Treble (4000+ Hz) <span id="treble-value">0.7</span></label>
+            <input type="range" id="treble" min="0" max="1" step="0.01" value="0.7">
+        </div>
+        
+        <h3 style="margin-top: 20px;">Particle Settings</h3>
+        
+        <div class="control-group">
+            <label>Particle Count <span id="particle-count-value">150</span></label>
+            <input type="range" id="particle-count" min="50" max="500" step="10" value="150">
+        </div>
+    </div>
+    
+    <!-- Parameters Display -->
+    <div class="params-display">
+        <div>Particle Speed: <span>amplitude → velocity</span></div>
+        <div>Attraction Force: <span>bass → center pull</span></div>
+        <div>Particle Size: <span>mid → radius</span></div>
+        <div>Color Shift: <span>treble → hue rotation</span></div>
+        <div>Spread: <span>overall energy → dispersion</span></div>
+    </div>
+    
+    <!-- Main Visualizer -->
+    <div class="visualizer" id="visualizer">
+        <canvas id="particleCanvas" width="600" height="600"></canvas>
+        
+        <button class="record-button" id="record-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+        </button>
+        
+        <div class="keyboard-hint">
+            <div class="shortcut">Ctrl + Alt + Z</div>
+            <div class="description">Hold to record • Release to copy</div>
+        </div>
+    </div>
+    
+    <script>
+        // Canvas Setup
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        // Particle System
+        class Particle {
+            constructor() {
+                this.reset();
+            }
+            
+            reset() {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = Math.random() * 250 + 50;
+                this.x = centerX + Math.cos(angle) * distance;
+                this.y = centerY + Math.sin(angle) * distance;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.radius = Math.random() * 3 + 1;
+                this.hue = Math.random() * 360;
+                this.alpha = Math.random() * 0.5 + 0.5;
+            }
+            
+            update(amplitude, bass, mid, treble) {
+                // Attraction to center based on bass
+                const dx = centerX - this.x;
+                const dy = centerY - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance > 10) {
+                    const force = bass * 0.5;
+                    this.vx += (dx / distance) * force;
+                    this.vy += (dy / distance) * force;
+                }
+                
+                // Random movement based on amplitude
+                this.vx += (Math.random() - 0.5) * amplitude * 0.5;
+                this.vy += (Math.random() - 0.5) * amplitude * 0.5;
+                
+                // Size based on mid frequencies
+                this.radius = 1 + mid * 4;
+                
+                // Color shift based on treble
+                this.hue += treble * 5;
+                if (this.hue > 360) this.hue -= 360;
+                
+                // Apply velocity with damping
+                this.vx *= 0.98;
+                this.vy *= 0.98;
+                this.x += this.vx;
+                this.y += this.vy;
+                
+                // Wrap around screen
+                if (this.x < 0) this.x = canvas.width;
+                if (this.x > canvas.width) this.x = 0;
+                if (this.y < 0) this.y = canvas.height;
+                if (this.y > canvas.height) this.y = 0;
+                
+                // Fade based on distance from center
+                const fade = Math.max(0, 1 - distance / 300);
+                this.alpha = 0.3 + fade * 0.7 + amplitude * 0.3;
+            }
+            
+            draw(ctx, palette) {
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = `hsl(${this.hue + palette.shift}, ${palette.saturation}%, ${palette.lightness}%)`;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = ctx.fillStyle;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+        
+        // Color Palettes
+        const palettes = {
+            spectrum: { shift: 0, saturation: 70, lightness: 60 },
+            ocean: { shift: 180, saturation: 60, lightness: 50 },
+            sunset: { shift: 30, saturation: 80, lightness: 55 },
+            purple: { shift: 280, saturation: 65, lightness: 55 },
+            neon: { shift: 0, saturation: 100, lightness: 50 }
+        };
+        
+        let currentPalette = palettes.spectrum;
+        let particles = [];
+        let particleCount = 150;
+        let animationId;
+        let currentState = 'idle';
+        
+        // Initialize particles
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle());
+            }
+        }
+        
+        // Audio Parameters
+        const controls = {
+            amplitude: document.getElementById('amplitude'),
+            bass: document.getElementById('bass'),
+            mid: document.getElementById('mid'),
+            treble: document.getElementById('treble')
+        };
+        
+        // Animation Loop
+        function animate() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const amplitude = parseFloat(controls.amplitude.value);
+            const bass = parseFloat(controls.bass.value);
+            const mid = parseFloat(controls.mid.value);
+            const treble = parseFloat(controls.treble.value);
+            
+            // Draw connections between nearby particles
+            ctx.strokeStyle = `rgba(102, 126, 234, ${amplitude * 0.2})`;
+            ctx.lineWidth = 0.5;
+            
+            for (let i = 0; i < particles.length; i++) {
+                for (let j = i + 1; j < particles.length; j++) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 100 * (1 + bass)) {
+                        ctx.globalAlpha = (1 - distance / (100 * (1 + bass))) * amplitude;
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            
+            // Update and draw particles
+            particles.forEach(particle => {
+                particle.update(amplitude, bass, mid, treble);
+                particle.draw(ctx, currentPalette);
+            });
+            
+            animationId = requestAnimationFrame(animate);
+        }
+        
+        // State Management
+        document.querySelectorAll('.state-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                setState(e.target.dataset.state);
+            });
+        });
+        
+        function setState(state) {
+            currentState = state;
+            const recordBtn = document.getElementById('record-btn');
+            recordBtn.className = 'record-button ' + (state === 'recording' ? 'recording' : '');
+            
+            if (state === 'recording') {
+                startSimulation();
+            } else if (state === 'idle') {
+                stopSimulation();
+            }
+        }
+        
+        // Palette Selection
+        document.getElementById('palette-select').addEventListener('change', (e) => {
+            currentPalette = palettes[e.target.value];
+        });
+        
+        // Particle Count
+        document.getElementById('particle-count').addEventListener('input', (e) => {
+            particleCount = parseInt(e.target.value);
+            document.getElementById('particle-count-value').textContent = particleCount;
+            initParticles();
+        });
+        
+        // Update displays
+        Object.keys(controls).forEach(key => {
+            controls[key].addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                document.getElementById(key === 'amplitude' ? 'amp-value' : key + '-value').textContent = value.toFixed(2);
+            });
+        });
+        
+        // Simulation
+        let simulationInterval;
+        
+        function startSimulation() {
+            simulationInterval = setInterval(() => {
+                // Simulate random audio changes with smooth transitions
+                const t = Date.now() / 1000;
+                controls.amplitude.value = 0.5 + Math.sin(t * 2) * 0.3 + Math.random() * 0.2;
+                controls.bass.value = 0.4 + Math.sin(t * 0.5) * 0.3 + Math.random() * 0.1;
+                controls.mid.value = 0.5 + Math.sin(t * 1.5) * 0.2 + Math.random() * 0.1;
+                controls.treble.value = 0.6 + Math.sin(t * 3) * 0.2 + Math.random() * 0.2;
+                
+                // Update displays
+                document.getElementById('amp-value').textContent = controls.amplitude.value.toFixed(2);
+                document.getElementById('bass-value').textContent = controls.bass.value.toFixed(2);
+                document.getElementById('mid-value').textContent = controls.mid.value.toFixed(2);
+                document.getElementById('treble-value').textContent = controls.treble.value.toFixed(2);
+            }, 50);
+        }
+        
+        function stopSimulation() {
+            if (simulationInterval) {
+                clearInterval(simulationInterval);
+                // Smooth return to default
+                controls.amplitude.value = 0.5;
+                controls.bass.value = 0.3;
+                controls.mid.value = 0.5;
+                controls.treble.value = 0.7;
+            }
+        }
+        
+        // Keyboard Handler
+        let isHoldingKey = false;
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.altKey && e.key === 'z' && !isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = true;
+                setState('recording');
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'z' && isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = false;
+                setState('processing');
+                
+                setTimeout(() => {
+                    setState('idle');
+                    alert('Transcription copied to clipboard!');
+                }, 1500);
+            }
+        });
+        
+        // Record Button
+        document.getElementById('record-btn').addEventListener('click', () => {
+            if (currentState === 'idle') {
+                setState('recording');
+            } else if (currentState === 'recording') {
+                setState('processing');
+                setTimeout(() => setState('idle'), 1500);
+            }
+        });
+        
+        // Initialize
+        initParticles();
+        animate();
+    </script>
+</body>
+</html>

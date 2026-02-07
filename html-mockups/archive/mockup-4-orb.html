@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mockup 4: Plasma Orb - MVP-Echo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: radial-gradient(ellipse at center, #0a0a1a 0%, #000000 100%);
+            color: #fff;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        /* Control Panel */
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            width: 300px;
+            z-index: 1000;
+        }
+        
+        .controls h3 {
+            margin-bottom: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .control-group input[type="range"] {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        
+        .control-group select {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+        }
+        
+        .state-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .state-buttons button {
+            flex: 1;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .state-buttons button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .state-buttons button.active {
+            background: #667eea;
+            border-color: #667eea;
+        }
+        
+        /* Visualizer Container */
+        .visualizer {
+            position: relative;
+            width: 400px;
+            height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Plasma Orb */
+        .plasma-orb {
+            position: absolute;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, 
+                rgba(255, 255, 255, 0.8),
+                rgba(102, 126, 234, 0.6),
+                rgba(102, 126, 234, 0.3),
+                transparent
+            );
+            filter: blur(2px);
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .plasma-core {
+            position: absolute;
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            background: radial-gradient(circle at center,
+                rgba(255, 255, 255, 1),
+                rgba(255, 100, 100, 0.8) 20%,
+                rgba(102, 126, 234, 0.6) 40%,
+                transparent 70%
+            );
+            filter: blur(1px);
+            animation: pulse-core 2s ease-in-out infinite;
+        }
+        
+        .plasma-tendril {
+            position: absolute;
+            width: 300px;
+            height: 2px;
+            background: linear-gradient(90deg, 
+                transparent,
+                rgba(102, 126, 234, 0.8),
+                rgba(255, 100, 255, 0.6),
+                transparent
+            );
+            transform-origin: center;
+            filter: blur(1px);
+            opacity: 0;
+            animation: tendril-pulse 3s ease-in-out infinite;
+        }
+        
+        .tendril-1 { animation-delay: 0s; transform: rotate(0deg); }
+        .tendril-2 { animation-delay: 0.5s; transform: rotate(45deg); }
+        .tendril-3 { animation-delay: 1s; transform: rotate(90deg); }
+        .tendril-4 { animation-delay: 1.5s; transform: rotate(135deg); }
+        .tendril-5 { animation-delay: 2s; transform: rotate(180deg); }
+        .tendril-6 { animation-delay: 2.5s; transform: rotate(225deg); }
+        .tendril-7 { animation-delay: 3s; transform: rotate(270deg); }
+        .tendril-8 { animation-delay: 3.5s; transform: rotate(315deg); }
+        
+        .plasma-glow {
+            position: absolute;
+            width: 350px;
+            height: 350px;
+            border-radius: 50%;
+            background: radial-gradient(circle at center,
+                rgba(102, 126, 234, 0.4),
+                rgba(102, 126, 234, 0.2) 30%,
+                transparent 70%
+            );
+            filter: blur(40px);
+            animation: glow-pulse 4s ease-in-out infinite;
+        }
+        
+        /* Record Button */
+        .record-button {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            transition: all 0.3s ease;
+            z-index: 10;
+            box-shadow: 0 0 40px rgba(255, 68, 68, 0.6);
+        }
+        
+        .record-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 60px rgba(255, 68, 68, 0.9);
+        }
+        
+        .record-button.recording {
+            background: linear-gradient(135deg, #ff6666, #ff0000);
+            animation: button-pulse 1s ease-in-out infinite;
+        }
+        
+        .record-button svg {
+            width: 24px;
+            height: 24px;
+        }
+        
+        /* Animations */
+        @keyframes float {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-10px) scale(1.05); }
+        }
+        
+        @keyframes pulse-core {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+        }
+        
+        @keyframes tendril-pulse {
+            0%, 100% { opacity: 0; width: 300px; }
+            50% { opacity: 0.7; width: 350px; }
+        }
+        
+        @keyframes glow-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.6; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+        }
+        
+        @keyframes button-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        /* State variations */
+        .visualizer.recording .plasma-orb {
+            animation-duration: 2s;
+            filter: blur(1px);
+        }
+        
+        .visualizer.recording .plasma-tendril {
+            opacity: 0.8;
+            animation-duration: 1s;
+        }
+        
+        .visualizer.recording .plasma-glow {
+            animation-duration: 1.5s;
+        }
+        
+        .visualizer.processing .plasma-core {
+            animation-duration: 0.5s;
+        }
+        
+        /* Keyboard Hint */
+        .keyboard-hint {
+            position: absolute;
+            bottom: -60px;
+            text-align: center;
+            width: 100%;
+        }
+        
+        .keyboard-hint .shortcut {
+            font-family: monospace;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .keyboard-hint .description {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 5px;
+        }
+        
+        /* Parameters Display */
+        .params-display {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .params-display div {
+            margin-bottom: 5px;
+        }
+        
+        .params-display span {
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <!-- Control Panel -->
+    <div class="controls">
+        <h3>Controls</h3>
+        
+        <div class="control-group">
+            <label>State</label>
+            <div class="state-buttons">
+                <button class="state-btn active" data-state="idle">Idle</button>
+                <button class="state-btn" data-state="recording">Recording</button>
+                <button class="state-btn" data-state="processing">Processing</button>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <label>Color Palette</label>
+            <select id="palette-select">
+                <option value="blue">Electric Blue</option>
+                <option value="purple">Purple Plasma</option>
+                <option value="green">Toxic Green</option>
+                <option value="fire">Fire Orb</option>
+                <option value="ice">Ice Crystal</option>
+            </select>
+        </div>
+        
+        <h3 style="margin-top: 20px;">Audio Parameters</h3>
+        
+        <div class="control-group">
+            <label>Amplitude (Overall Volume) <span id="amp-value">0.5</span></label>
+            <input type="range" id="amplitude" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Bass (20-250 Hz) <span id="bass-value">0.3</span></label>
+            <input type="range" id="bass" min="0" max="1" step="0.01" value="0.3">
+        </div>
+        
+        <div class="control-group">
+            <label>Mid (250-4000 Hz) <span id="mid-value">0.5</span></label>
+            <input type="range" id="mid" min="0" max="1" step="0.01" value="0.5">
+        </div>
+        
+        <div class="control-group">
+            <label>Treble (4000+ Hz) <span id="treble-value">0.7</span></label>
+            <input type="range" id="treble" min="0" max="1" step="0.01" value="0.7">
+        </div>
+        
+        <h3 style="margin-top: 20px;">Orb Settings</h3>
+        
+        <div class="control-group">
+            <label>Glow Intensity <span id="glow-value">0.8</span></label>
+            <input type="range" id="glow-intensity" min="0" max="1" step="0.1" value="0.8">
+        </div>
+        
+        <div class="control-group">
+            <label>Tendril Count <span id="tendril-value">8</span></label>
+            <input type="range" id="tendril-count" min="4" max="16" step="2" value="8">
+        </div>
+    </div>
+    
+    <!-- Parameters Display -->
+    <div class="params-display">
+        <div>Core Size: <span>amplitude → scale</span></div>
+        <div>Glow Intensity: <span>bass → brightness</span></div>
+        <div>Tendril Activity: <span>mid → visibility & speed</span></div>
+        <div>Color Temperature: <span>treble → hue shift</span></div>
+        <div>Pulsation: <span>overall energy → animation speed</span></div>
+    </div>
+    
+    <!-- Main Visualizer -->
+    <div class="visualizer" id="visualizer">
+        <div class="plasma-glow" id="glow"></div>
+        <div class="plasma-orb" id="orb"></div>
+        <div class="plasma-tendril tendril-1"></div>
+        <div class="plasma-tendril tendril-2"></div>
+        <div class="plasma-tendril tendril-3"></div>
+        <div class="plasma-tendril tendril-4"></div>
+        <div class="plasma-tendril tendril-5"></div>
+        <div class="plasma-tendril tendril-6"></div>
+        <div class="plasma-tendril tendril-7"></div>
+        <div class="plasma-tendril tendril-8"></div>
+        <div class="plasma-core" id="core"></div>
+        
+        <button class="record-button" id="record-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+        </button>
+        
+        <div class="keyboard-hint">
+            <div class="shortcut">Ctrl + Alt + Z</div>
+            <div class="description">Hold to record • Release to copy</div>
+        </div>
+    </div>
+    
+    <script>
+        // Color Palettes
+        const palettes = {
+            blue: {
+                core: 'rgba(102, 126, 234, 0.8)',
+                glow: 'rgba(102, 126, 234, 0.4)',
+                tendril: 'rgba(102, 126, 234, 0.8)'
+            },
+            purple: {
+                core: 'rgba(147, 51, 234, 0.8)',
+                glow: 'rgba(147, 51, 234, 0.4)',
+                tendril: 'rgba(147, 51, 234, 0.8)'
+            },
+            green: {
+                core: 'rgba(34, 197, 94, 0.8)',
+                glow: 'rgba(34, 197, 94, 0.4)',
+                tendril: 'rgba(34, 197, 94, 0.8)'
+            },
+            fire: {
+                core: 'rgba(239, 68, 68, 0.8)',
+                glow: 'rgba(239, 68, 68, 0.4)',
+                tendril: 'rgba(251, 146, 60, 0.8)'
+            },
+            ice: {
+                core: 'rgba(147, 197, 253, 0.8)',
+                glow: 'rgba(147, 197, 253, 0.4)',
+                tendril: 'rgba(191, 219, 254, 0.8)'
+            }
+        };
+        
+        let currentPalette = palettes.blue;
+        let currentState = 'idle';
+        let animationFrame;
+        
+        // DOM Elements
+        const visualizer = document.getElementById('visualizer');
+        const orb = document.getElementById('orb');
+        const core = document.getElementById('core');
+        const glow = document.getElementById('glow');
+        const recordBtn = document.getElementById('record-btn');
+        
+        // Audio Controls
+        const controls = {
+            amplitude: document.getElementById('amplitude'),
+            bass: document.getElementById('bass'),
+            mid: document.getElementById('mid'),
+            treble: document.getElementById('treble')
+        };
+        
+        // Update visualization based on audio parameters
+        function updateVisualization() {
+            const amplitude = parseFloat(controls.amplitude.value);
+            const bass = parseFloat(controls.bass.value);
+            const mid = parseFloat(controls.mid.value);
+            const treble = parseFloat(controls.treble.value);
+            const glowIntensity = parseFloat(document.getElementById('glow-intensity').value);
+            
+            // Update core size based on amplitude
+            const coreScale = 0.8 + amplitude * 0.4;
+            core.style.transform = `scale(${coreScale})`;
+            core.style.opacity = 0.7 + amplitude * 0.3;
+            
+            // Update orb size based on bass
+            const orbScale = 0.9 + bass * 0.3;
+            orb.style.transform = `scale(${orbScale})`;
+            
+            // Update glow based on bass and intensity
+            const glowScale = 1 + bass * 0.5;
+            glow.style.transform = `scale(${glowScale})`;
+            glow.style.opacity = glowIntensity * (0.4 + bass * 0.4);
+            
+            // Update tendrils based on mid frequencies
+            const tendrils = document.querySelectorAll('.plasma-tendril');
+            tendrils.forEach((tendril, index) => {
+                tendril.style.opacity = mid * 0.8;
+                tendril.style.animationDuration = `${3 - mid * 2}s`;
+                
+                // Add some variation based on treble
+                const rotation = (360 / tendrils.length) * index + treble * 45;
+                tendril.style.transform = `rotate(${rotation}deg)`;
+            });
+            
+            // Color temperature shift based on treble
+            const hueShift = treble * 30;
+            visualizer.style.filter = `hue-rotate(${hueShift}deg) brightness(${0.8 + amplitude * 0.4})`;
+        }
+        
+        // Animation loop
+        function animate() {
+            if (currentState === 'recording') {
+                // Add dynamic movement during recording
+                const time = Date.now() * 0.001;
+                const floatY = Math.sin(time * 2) * 10;
+                const floatX = Math.cos(time * 1.5) * 5;
+                orb.style.transform = `translate(${floatX}px, ${floatY}px) scale(${0.9 + parseFloat(controls.bass.value) * 0.3})`;
+            }
+            
+            updateVisualization();
+            animationFrame = requestAnimationFrame(animate);
+        }
+        
+        // State Management
+        document.querySelectorAll('.state-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                setState(e.target.dataset.state);
+            });
+        });
+        
+        function setState(state) {
+            currentState = state;
+            visualizer.className = 'visualizer ' + state;
+            recordBtn.className = 'record-button ' + (state === 'recording' ? 'recording' : '');
+            
+            if (state === 'recording') {
+                startSimulation();
+            } else if (state === 'idle') {
+                stopSimulation();
+            }
+        }
+        
+        // Palette Selection
+        document.getElementById('palette-select').addEventListener('change', (e) => {
+            currentPalette = palettes[e.target.value];
+            
+            // Apply new colors
+            core.style.background = `radial-gradient(circle at center, rgba(255, 255, 255, 1), ${currentPalette.core} 20%, ${currentPalette.glow} 40%, transparent 70%)`;
+            glow.style.background = `radial-gradient(circle at center, ${currentPalette.glow}, ${currentPalette.glow.replace('0.4', '0.2')} 30%, transparent 70%)`;
+            
+            document.querySelectorAll('.plasma-tendril').forEach(tendril => {
+                tendril.style.background = `linear-gradient(90deg, transparent, ${currentPalette.tendril}, ${currentPalette.tendril.replace('0.8', '0.6')}, transparent)`;
+            });
+        });
+        
+        // Settings
+        document.getElementById('glow-intensity').addEventListener('input', (e) => {
+            document.getElementById('glow-value').textContent = e.target.value;
+        });
+        
+        document.getElementById('tendril-count').addEventListener('input', (e) => {
+            const count = parseInt(e.target.value);
+            document.getElementById('tendril-value').textContent = count;
+            
+            // Show/hide tendrils
+            document.querySelectorAll('.plasma-tendril').forEach((tendril, index) => {
+                tendril.style.display = index < count ? 'block' : 'none';
+            });
+        });
+        
+        // Audio parameter displays
+        Object.keys(controls).forEach(key => {
+            controls[key].addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                document.getElementById(key === 'amplitude' ? 'amp-value' : key + '-value').textContent = value.toFixed(2);
+            });
+        });
+        
+        // Simulation
+        let simulationInterval;
+        
+        function startSimulation() {
+            simulationInterval = setInterval(() => {
+                const t = Date.now() / 1000;
+                
+                // Organic pulsing simulation
+                controls.amplitude.value = 0.5 + Math.sin(t * 2) * 0.3 + Math.random() * 0.2;
+                controls.bass.value = 0.4 + Math.sin(t * 0.7) * 0.4 + Math.random() * 0.1;
+                controls.mid.value = 0.5 + Math.sin(t * 1.5) * 0.3 + Math.random() * 0.1;
+                controls.treble.value = 0.6 + Math.sin(t * 4) * 0.2 + Math.random() * 0.2;
+                
+                // Update displays
+                document.getElementById('amp-value').textContent = controls.amplitude.value.toFixed(2);
+                document.getElementById('bass-value').textContent = controls.bass.value.toFixed(2);
+                document.getElementById('mid-value').textContent = controls.mid.value.toFixed(2);
+                document.getElementById('treble-value').textContent = controls.treble.value.toFixed(2);
+            }, 50);
+        }
+        
+        function stopSimulation() {
+            if (simulationInterval) {
+                clearInterval(simulationInterval);
+                controls.amplitude.value = 0.5;
+                controls.bass.value = 0.3;
+                controls.mid.value = 0.5;
+                controls.treble.value = 0.7;
+            }
+        }
+        
+        // Keyboard Handler
+        let isHoldingKey = false;
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.altKey && e.key === 'z' && !isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = true;
+                setState('recording');
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'z' && isHoldingKey) {
+                e.preventDefault();
+                isHoldingKey = false;
+                setState('processing');
+                
+                setTimeout(() => {
+                    setState('idle');
+                    alert('Transcription copied to clipboard!');
+                }, 1500);
+            }
+        });
+        
+        // Record Button
+        recordBtn.addEventListener('click', () => {
+            if (currentState === 'idle') {
+                setState('recording');
+            } else if (currentState === 'recording') {
+                setState('processing');
+                setTimeout(() => setState('idle'), 1500);
+            }
+        });
+        
+        // Initialize
+        animate();
+    </script>
+</body>
+</html>

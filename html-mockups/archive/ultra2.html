@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ultra²‑Modern Audio Wave Analyzer — Enhanced Edition</title>
+  <style>
+    :root {
+      --panel: rgba(255,255,255,.08);
+      --border: rgba(255,255,255,.15);
+      --text: #e8e9ff;
+      --muted: #9aa0b3;
+      --accent: #9b87f5;
+      --radius: 20px;
+      --glow: drop-shadow(0 0 12px rgba(155,135,245,.4));
+      --primary: oklch(0.55 0.25 264);
+      --accent-pink: oklch(0.70 0.25 330);
+      --accent-cyan: oklch(0.75 0.20 200);
+    }
+    
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    
+    body {
+      margin: 0; 
+      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable', Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+      background: radial-gradient(ellipse at 20% 80%, #0f0f23 0%, #0b0b12 50%, #06070a 100%);
+      display: grid; 
+      grid-template-rows: auto 1fr auto; 
+      gap: 20px; 
+      padding: 20px; 
+      overflow: hidden;
+    }
+    
+    header { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      backdrop-filter: blur(12px) saturate(140%);
+    }
+    
+    .brand { 
+      font-weight: 800; 
+      letter-spacing: .8px; 
+      font-size: 15px; 
+      opacity: .95;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .header-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .wrap { 
+      display: grid; 
+      grid-template-columns: 400px 1fr 340px; 
+      gap: 20px; 
+      height: calc(100vh - 140px); 
+    }
+    
+    .panel { 
+      background: var(--panel); 
+      border: 1px solid var(--border); 
+      border-radius: var(--radius); 
+      backdrop-filter: blur(12px) saturate(140%); 
+      box-shadow: 0 25px 80px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.1); 
+    }
+
+    /* Enhanced Controls */
+    .controls { 
+      padding: 18px; 
+      overflow: auto; 
+    }
+    
+    .section-title { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      gap: 10px; 
+      margin: 12px 0 8px; 
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    
+    .section-title h2 { 
+      font-size: 13px; 
+      font-weight: 900; 
+      text-transform: uppercase; 
+      color: var(--accent); 
+      letter-spacing: .15em; 
+      margin: 0; 
+    }
+    
+    .help { 
+      font-size: 11px; 
+      color: var(--muted); 
+      opacity: .9; 
+      font-style: italic;
+    }
+    
+    .row { 
+      display: grid; 
+      grid-template-columns: 160px 1fr 70px; 
+      gap: 10px; 
+      align-items: center; 
+      padding: 10px 6px; 
+      border-bottom: 1px dashed rgba(255,255,255,.06); 
+      transition: background 0.2s ease;
+    }
+    
+    .row:hover {
+      background: rgba(255,255,255,.03);
+      border-radius: 8px;
+    }
+    
+    .row:last-child { border-bottom: 0; }
+    
+    label { 
+      font-size: 13px; 
+      color: var(--text); 
+      font-weight: 500;
+    }
+    
+    select, input[type="range"], input[type="number"], input[type="checkbox"], input[type="text"] { 
+      accent-color: var(--accent); 
+      background: rgba(255,255,255,.08); 
+      border: 1px solid rgba(255,255,255,.2); 
+      color: var(--text); 
+      border-radius: 12px; 
+      padding: 8px 10px;
+      transition: all 0.2s ease;
+    }
+    
+    input[type="range"] { 
+      width: 100%; 
+      height: 6px;
+      background: rgba(255,255,255,.1);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    
+    input[type="range"]::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      cursor: pointer;
+      border: none;
+    }
+    
+    select:focus, input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(155,135,245,.2);
+    }
+    
+    output { 
+      font-size: 12px; 
+      color: var(--accent); 
+      text-align: right; 
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    
+    .btn { 
+      appearance: none; 
+      border: 1px solid rgba(255,255,255,.25); 
+      color: var(--text); 
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05)); 
+      border-radius: 14px; 
+      padding: 12px 16px; 
+      font-weight: 700; 
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      font-size: 13px;
+      letter-spacing: .3px;
+    }
+    
+    .btn:hover {
+      background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(0,0,0,.2);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn.primary {
+      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
+      border: none;
+      color: #fff;
+      font-weight: 800;
+    }
+    
+    .btn.recording {
+      background: linear-gradient(135deg, #ff4444, #cc0000);
+      animation: pulse-btn 2s ease-in-out infinite;
+    }
+
+    /* Enhanced Stage */
+    .stage { 
+      position: relative; 
+      display: grid; 
+      place-items: center; 
+      overflow: hidden; 
+      background: 
+        radial-gradient(800px 600px at 30% 20%, rgba(155,135,245,.15) 0%, transparent 50%),
+        radial-gradient(1000px 800px at 80% 80%, rgba(255,105,180,.1) 0%, transparent 50%),
+        radial-gradient(1200px 800px at 80% 10%, #111626 0%, #0b0b12 40%, #06070a 100%);
+    }
+    
+    canvas { 
+      width: 100%; 
+      height: 100%; 
+      filter: var(--glow); 
+      border-radius: 16px;
+    }
+    
+    .hud { 
+      position: absolute; 
+      inset: 0; 
+      display: grid; 
+      place-items: center; 
+      pointer-events: none; 
+    }
+    
+    .ring { 
+      position: absolute; 
+      width: 60vmin; 
+      height: 60vmin; 
+      border-radius: 50%; 
+      border: 1px dashed rgba(155,135,245,.2); 
+    }
+    
+    .record-button {
+      position: absolute;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(255,68,68,.9), rgba(204,0,0,.7));
+      border: 3px solid rgba(255,255,255,.3);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      pointer-events: auto;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 8px 32px rgba(255,68,68,.3);
+    }
+    
+    .record-button:hover {
+      transform: scale(1.1);
+      box-shadow: 0 12px 48px rgba(255,68,68,.5);
+    }
+    
+    .record-button.recording {
+      animation: pulse-record 2s ease-in-out infinite;
+    }
+    
+    .record-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      transition: all 0.3s ease;
+    }
+    
+    .record-button.recording .record-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+    }
+    
+    .meters { 
+      position: absolute; 
+      left: 20px; 
+      bottom: 20px; 
+      display: flex; 
+      gap: 10px; 
+      opacity: .95; 
+    }
+    
+    .meter { 
+      width: 10px; 
+      height: 45px; 
+      border-radius: 10px; 
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)); 
+      border: 1px solid rgba(255,255,255,.15); 
+      overflow: hidden; 
+      position: relative;
+    }
+    
+    .meter > i { 
+      display: block; 
+      width: 100%; 
+      height: 0%; 
+      background: linear-gradient(180deg, var(--accent-cyan), var(--accent)); 
+      position: absolute;
+      bottom: 0;
+      transition: height 0.1s ease;
+    }
+    
+    .frequency-display {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      display: flex;
+      gap: 8px;
+      opacity: 0.8;
+    }
+    
+    .freq-band {
+      width: 6px;
+      height: 30px;
+      background: rgba(255,255,255,.1);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    
+    .freq-band > span {
+      display: block;
+      width: 100%;
+      height: 0%;
+      background: linear-gradient(180deg, var(--accent-pink), var(--accent-cyan));
+      transition: height 0.1s ease;
+    }
+
+    /* Enhanced Snapshot panel */
+    .snapshot { 
+      padding: 16px; 
+      display: grid; 
+      grid-template-rows: auto 1fr auto; 
+      gap: 12px; 
+    }
+    
+    .codebox { 
+      background: rgba(0,0,0,.4); 
+      border: 1px solid rgba(255,255,255,.2); 
+      border-radius: 16px; 
+      padding: 14px; 
+      font-family: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; 
+      font-size: 12px; 
+      color: #cfe0ff; 
+      overflow: auto;
+      line-height: 1.5;
+    }
+    
+    footer { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      gap: 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      backdrop-filter: blur(12px);
+    }
+    
+    .kbd { 
+      padding: .2rem .6rem; 
+      border: 1px solid rgba(255,255,255,.3); 
+      border-radius: 8px; 
+      font-size: 12px; 
+      opacity: .9;
+      background: rgba(255,255,255,.05);
+      font-family: ui-monospace, monospace;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    
+    .preset-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+    }
+    
+    .preset-btn {
+      padding: 8px 12px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .preset-btn:hover {
+      background: rgba(255,255,255,.1);
+    }
+    
+    @keyframes pulse-record {
+      0%, 100% { 
+        box-shadow: 0 8px 32px rgba(255,68,68,.3);
+      }
+      50% { 
+        box-shadow: 0 12px 48px rgba(255,68,68,.6);
+      }
+    }
+    
+    @keyframes pulse-btn {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.8; }
+    }
+    
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">MVP Scale · Wave Analyzer Ultra²</div>
+    <div class="header-controls">
+      <div class="status-indicator">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Ready</span>
+      </div>
+      <button id="btnMic" class="btn primary">🎤 Start Microphone</button>
+      <button id="btnDemo" class="btn">🎵 Demo Signal</button>
+      <button id="btnPause" class="btn" title="Space">⏸ Pause</button>
+      <button id="btnSnapshot" class="btn" title="Save PNG">📸 Snapshot</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- Left: Enhanced Controls Sidebar -->
+    <section class="panel controls" id="controls">
+      <div class="section-title"><h2>Display Mode</h2><span class="help">Primary visualizer</span></div>
+      <div class="row"><label for="mode">Visualizer</label>
+        <select id="mode">
+          <option value="radial">Radial Ring</option>
+          <option value="linear">Linear Oscilloscope</option>
+          <option value="bars">Spectrum Bars</option>
+          <option value="composite" selected>Ultra Composite</option>
+          <option value="enhanced">Enhanced Triple Layer</option>
+        </select>
+        <span></span>
+      </div>
+      <div class="row"><label for="palette">Color Palette</label>
+        <select id="palette"></select>
+        <span class="help">Gradient</span>
+      </div>
+      
+      <div class="preset-buttons">
+        <button class="preset-btn" onclick="loadPreset('minimal')">Minimal</button>
+        <button class="preset-btn" onclick="loadPreset('intense')">Intense</button>
+        <button class="preset-btn" onclick="loadPreset('pro')">Professional</button>
+        <button class="preset-btn" onclick="loadPreset('cyberpunk')">Cyberpunk</button>
+      </div>
+
+      <div class="section-title"><h2>Radial Rings</h2><span class="help">Concentric layers</span></div>
+      <div class="row"><label for="ringLayers">Ring Layers</label>
+        <input id="ringLayers" type="range" min="1" max="6" step="1" value="4" />
+        <output id="ringLayersOut">4</output>
+      </div>
+      <div class="row"><label for="ringInner">Inner Radius</label>
+        <input id="ringInner" type="range" min="0.1" max="0.6" step="0.01" value="0.25" />
+        <output id="ringInnerOut">0.25</output>
+      </div>
+      <div class="row"><label for="ringGap">Ring Spacing</label>
+        <input id="ringGap" type="range" min="0.04" max="0.25" step="0.005" value="0.08" />
+        <output id="ringGapOut">0.08</output>
+      </div>
+      <div class="row"><label for="ringRotation">Ring Rotation</label>
+        <input id="ringRotation" type="range" min="0" max="10" step="0.1" value="0" />
+        <output id="ringRotationOut">0</output>
+      </div>
+
+      <div class="section-title"><h2>Spectrum Bars</h2><span class="help">Frequency display</span></div>
+      <div class="row"><label for="barsMirror">Mirror Mode</label>
+        <input id="barsMirror" type="checkbox" checked />
+        <span class="help">Center split</span>
+      </div>
+      <div class="row"><label for="barThin">Bar Width</label>
+        <input id="barThin" type="range" min="0.5" max="8" step="0.5" value="2" />
+        <output id="barThinOut">2</output>
+      </div>
+      <div class="row"><label for="barGap">Bar Spacing</label>
+        <input id="barGap" type="range" min="0" max="3" step="0.1" value="0.5" />
+        <output id="barGapOut">0.5</output>
+      </div>
+
+      <div class="section-title"><h2>Audio Analysis</h2><span class="help">Signal processing</span></div>
+      <div class="row"><label for="fft">FFT Resolution</label>
+        <input id="fft" type="range" min="256" max="32768" step="256" value="8192" />
+        <output id="fftOut">8192</output>
+      </div>
+      <div class="row"><label for="smoothing">Temporal Smoothing</label>
+        <input id="smoothing" type="range" min="0" max="0.98" step="0.01" value="0.7" />
+        <output id="smoothingOut">0.7</output>
+      </div>
+      <div class="row"><label for="gain">Visual Gain</label>
+        <input id="gain" type="range" min="0.1" max="5" step="0.05" value="1.5" />
+        <output id="gainOut">1.5</output>
+      </div>
+      <div class="row"><label for="gate">Noise Gate</label>
+        <input id="gate" type="range" min="0" max="1" step="0.01" value="0.15" />
+        <output id="gateOut">0.15</output>
+      </div>
+
+      <div class="section-title"><h2>Visual Style</h2><span class="help">Rendering options</span></div>
+      <div class="row"><label for="line">Line Thickness</label>
+        <input id="line" type="range" min="0.3" max="6" step="0.1" value="1.4" />
+        <output id="lineOut">1.4</output>
+      </div>
+      <div class="row"><label for="trail">Motion Blur</label>
+        <input id="trail" type="range" min="0" max="0.4" step="0.01" value="0.08" />
+        <output id="trailOut">0.08</output>
+      </div>
+      <div class="row"><label for="mirror">Mirror Symmetry</label>
+        <input id="mirror" type="checkbox" checked />
+        <span class="help">Vertical flip</span>
+      </div>
+      <div class="row"><label for="glow">Glow Effect</label>
+        <input id="glow" type="checkbox" checked />
+        <span class="help">Drop shadow</span>
+      </div>
+    </section>
+
+    <!-- Center: Enhanced Stage -->
+    <section class="panel stage" id="stage">
+      <canvas id="viz"></canvas>
+      <div class="hud" aria-hidden="true">
+        <div class="ring" id="ring"></div>
+        <button class="record-button" id="recordButton">
+          <div class="record-icon"></div>
+        </button>
+        <div class="frequency-display" id="freqDisplay"></div>
+        <div class="meters">
+          <div class="meter" title="Left Channel"><i id="meterL"></i></div>
+          <div class="meter" title="Right Channel"><i id="meterR"></i></div>
+          <div class="meter" title="Bass"><i id="meterBass"></i></div>
+          <div class="meter" title="Treble"><i id="meterTreble"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Enhanced Settings -->
+    <section class="panel snapshot">
+      <div class="section-title"><h2>Live Configuration</h2><span class="help">Real-time JSON</span></div>
+      <div class="codebox" id="jsonBox">{}</div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+        <button id="btnCopyJSON" class="btn">📋 Copy JSON</button>
+        <button id="btnDownload" class="btn">⬇️ Save PNG</button>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+        <button id="btnFullscreen" class="btn">🔍 Fullscreen</button>
+        <button id="btnReset" class="btn">🔄 Reset All</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <small>
+      Enhanced with ultra-modern features • Press <span class="kbd">Space</span> to pause • 
+      <span class="kbd">F</span> for fullscreen • <span class="kbd">R</span> to record • 
+      <span class="kbd">Ctrl+Alt+Z</span> for push-to-talk
+    </small>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <span style="font-size:12px; opacity:0.7;">FPS: <span id="fpsCounter">60</span></span>
+      <span style="font-size:12px; opacity:0.7;">Latency: <span id="latencyCounter">0ms</span></span>
+    </div>
+  </footer>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+  let width, height, dpr;
+  let frameCount = 0;
+  let lastFrameTime = performance.now();
+  let rotationAngle = 0;
+  let isRecording = false;
+  
+  const analyser = { node: null, dataF: null, dataT: null };
+
+  const ui = {
+    mode: document.getElementById('mode'),
+    palette: document.getElementById('palette'),
+    ringLayers: document.getElementById('ringLayers'),
+    ringInner: document.getElementById('ringInner'),
+    ringGap: document.getElementById('ringGap'),
+    ringRotation: document.getElementById('ringRotation'),
+    barsMirror: document.getElementById('barsMirror'),
+    barThin: document.getElementById('barThin'),
+    barGap: document.getElementById('barGap'),
+    mirror: document.getElementById('mirror'),
+    fft: document.getElementById('fft'),
+    smoothing: document.getElementById('smoothing'),
+    gain: document.getElementById('gain'),
+    gate: document.getElementById('gate'),
+    line: document.getElementById('line'),
+    glow: document.getElementById('glow'),
+    trail: document.getElementById('trail'),
+  };
+  
+  const out = {
+    ringLayers: document.getElementById('ringLayersOut'),
+    ringInner: document.getElementById('ringInnerOut'),
+    ringGap: document.getElementById('ringGapOut'),
+    ringRotation: document.getElementById('ringRotationOut'),
+    barThin: document.getElementById('barThinOut'),
+    barGap: document.getElementById('barGapOut'),
+    fft: document.getElementById('fftOut'),
+    smoothing: document.getElementById('smoothingOut'),
+    gain: document.getElementById('gainOut'),
+    gate: document.getElementById('gateOut'),
+    line: document.getElementById('lineOut'),
+    trail: document.getElementById('trailOut'),
+  };
+
+  const palettes = {
+    cyberpunk: ['#ff3cac','#784ba0','#2b86c5'],
+    neon: ['#7df9ff','#00ffa3','#ffd200'],
+    sunset: ['#ff5f6d','#ffc371','#ffd3a5'],
+    aurora: ['#a1ffce','#faffd1','#6ee7ff'],
+    ocean: ['#00c6ff','#0072ff','#00e1ff'],
+    ultraviolet: ['#a18cd1','#fbc2eb','#9b87f5'],
+    fire: ['#ff6a00','#ee0979','#ffd200'],
+    mint: ['#d4fc79','#96e6a1','#5eead4'],
+    matrix: ['#00ff41','#00d4aa','#39ff14'],
+    vaporwave: ['#ff006e','#8338ec','#3a86ff'],
+    cosmic: ['#667eea','#764ba2','#f093fb'],
+    monochrome: ['#eaeaea','#8a8a8a','#ffffff']
+  };
+
+  // Enhanced presets
+  const presets = {
+    minimal: { line: 0.6, trail: 0.02, ringLayers: 2, gain: 0.8, glow: false },
+    intense: { line: 2.5, trail: 0.15, ringLayers: 6, gain: 3, glow: true },
+    pro: { line: 1.2, trail: 0.06, ringLayers: 4, gain: 1.5, fft: 16384 },
+    cyberpunk: { palette: 'cyberpunk', line: 1.8, trail: 0.12, ringLayers: 5, gain: 2.2 }
+  };
+
+  window.loadPreset = function(presetName) {
+    const preset = presets[presetName];
+    if (!preset) return;
+    
+    Object.entries(preset).forEach(([key, value]) => {
+      if (ui[key]) {
+        if (ui[key].type === 'checkbox') {
+          ui[key].checked = value;
+        } else {
+          ui[key].value = value;
+        }
+        ui[key].dispatchEvent(new Event('input'));
+      }
+    });
+  };
+
+  // Initialize palette dropdown
+  for (const k of Object.keys(palettes)) { 
+    const o = document.createElement('option'); 
+    o.value = k; 
+    o.textContent = k; 
+    ui.palette.appendChild(o); 
+  }
+  ui.palette.value = 'cyberpunk';
+
+  // Create frequency display bars
+  function initFreqDisplay() {
+    const freqDisplay = document.getElementById('freqDisplay');
+    for (let i = 0; i < 32; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'freq-band';
+      const fill = document.createElement('span');
+      bar.appendChild(fill);
+      freqDisplay.appendChild(bar);
+    }
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2); 
+    width = canvas.clientWidth; 
+    height = canvas.clientHeight; 
+    canvas.width = Math.floor(width * dpr); 
+    canvas.height = Math.floor(height * dpr); 
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); 
+  }
+  
+  window.addEventListener('resize', resize, { passive: true }); 
+  resize();
+
+  // Enhanced audio setup
+  let audioCtx; 
+  let paused = false; 
+  let rms = 0; 
+  let demoStarted = false;
+  let bassLevel = 0, trebleLevel = 0;
+
+  async function startMic() { 
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)(); 
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: true, 
+          noiseSuppression: true,
+          sampleRate: 48000
+        } 
+      }); 
+      const src = audioCtx.createMediaStreamSource(stream); 
+      setupAnalyser(src); 
+      updateStatus('Recording', '#10b981');
+      tick(); 
+    } catch(err) { 
+      console.warn('Mic unavailable, demo fallback', err); 
+      startDemo(); 
+    }
+  }
+
+  function startDemo() { 
+    if (demoStarted) return; 
+    demoStarted = true; 
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); 
+    const an = audioCtx.createAnalyser(); 
+    an.fftSize = clampPow2(+ui.fft.value); 
+    an.smoothingTimeConstant = +ui.smoothing.value; 
+    analyser.node = an; 
+    analyser.dataF = new Uint8Array(an.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(an.fftSize); 
+    
+    // Enhanced demo with multiple oscillators
+    const master = audioCtx.createGain(); 
+    master.gain.value = 0.0; 
+    
+    // Create multiple oscillators for richer demo
+    const oscs = [];
+    const freqs = [180, 310, 440, 660];
+    const types = ['sawtooth', 'triangle', 'square', 'sine'];
+    
+    freqs.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = types[i];
+      osc.frequency.value = freq;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.15 + Math.random() * 0.1;
+      osc.connect(gain).connect(master);
+      oscs.push({ osc, gain, freq });
+      osc.start();
+    });
+    
+    // Enhanced noise
+    const nb = audioCtx.createBuffer(1, audioCtx.sampleRate * 4, audioCtx.sampleRate); 
+    const nd = nb.getChannelData(0); 
+    for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * 0.2; 
+    const noise = audioCtx.createBufferSource(); 
+    noise.buffer = nb; 
+    noise.loop = true; 
+    const bp = audioCtx.createBiquadFilter(); 
+    bp.type = 'bandpass'; 
+    bp.frequency.value = 1200 + Math.random() * 800; 
+    bp.Q.value = 0.8; 
+    noise.connect(bp).connect(master); 
+    noise.start();
+    
+    master.connect(an);
+    
+    updateStatus('Demo Mode', '#f59e0b');
+    
+    // Dynamic demo animation
+    (function evolve() {
+      const now = audioCtx.currentTime; 
+      const seg = 0.08 + Math.random() * 0.2; 
+      master.gain.cancelScheduledValues(now); 
+      master.gain.setTargetAtTime(0.01, now, 0.03); 
+      master.gain.setTargetAtTime(0.25 + Math.random() * 0.6, now + 0.015, 0.06); 
+      
+      oscs.forEach((o, i) => {
+        const newFreq = o.freq * (0.8 + Math.random() * 0.4);
+        o.osc.frequency.exponentialRampToValueAtTime(newFreq, now + seg);
+        o.gain.gain.setTargetAtTime(0.1 + Math.random() * 0.2, now, seg * 0.3);
+      });
+      
+      bp.frequency.exponentialRampToValueAtTime(800 + Math.random() * 1200, now + seg);
+      setTimeout(evolve, seg * 1000); 
+    })();
+    
+    tick(); 
+  }
+
+  function setupAnalyser(input) { 
+    const n = audioCtx.createAnalyser(); 
+    n.fftSize = clampPow2(+ui.fft.value); 
+    n.smoothingTimeConstant = +ui.smoothing.value; 
+    analyser.node = n; 
+    analyser.dataF = new Uint8Array(n.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(n.fftSize); 
+    input.connect(n); 
+  }
+
+  function updateStatus(text, color = '#10b981') {
+    document.getElementById('statusText').textContent = text;
+    document.getElementById('statusDot').style.background = color;
+  }
+
+  function clampPow2(v) { 
+    const p = Math.round(Math.log2(Math.max(256, Math.min(32768, v)))); 
+    return 2 ** p; 
+  }
+  
+  function gradientFor(name, x0, y0, x1, y1) { 
+    const p = palettes[name] || palettes.cyberpunk; 
+    const g = ctx.createLinearGradient(x0, y0, x1, y1); 
+    const n = p.length; 
+    p.forEach((c, i) => g.addColorStop(i / (n - 1), c)); 
+    return g; 
+  }
+  
+  function clearTrail(a) { 
+    if (a <= 0) { 
+      ctx.clearRect(0, 0, width, height); 
+      return; 
+    } 
+    ctx.fillStyle = `rgba(11,11,18,${a})`; 
+    ctx.fillRect(0, 0, width, height); 
+  }
+  
+  function computeRMS(td) { 
+    let s = 0; 
+    for (let i = 0; i < td.length; i++) { 
+      const v = (td[i] - 128) / 128; 
+      s += v * v; 
+    } 
+    return Math.sqrt(s / td.length); 
+  }
+
+  function updateMeters() {
+    if (!analyser.dataF) return;
+    
+    // Enhanced frequency analysis
+    const bassRange = analyser.dataF.slice(0, 10);
+    const trebleRange = analyser.dataF.slice(80, 120);
+    
+    bassLevel = bassRange.reduce((a, b) => a + b, 0) / (bassRange.length * 255);
+    trebleLevel = trebleRange.reduce((a, b) => a + b, 0) / (trebleRange.length * 255);
+    
+    document.getElementById('meterL').style.height = Math.min(100, Math.max(6, rms * 200)) + '%';
+    document.getElementById('meterR').style.height = Math.min(100, Math.max(6, rms * 180)) + '%';
+    document.getElementById('meterBass').style.height = Math.min(100, Math.max(6, bassLevel * 100)) + '%';
+    document.getElementById('meterTreble').style.height = Math.min(100, Math.max(6, trebleLevel * 100)) + '%';
+    
+    // Update frequency display
+    const freqBands = document.querySelectorAll('#freqDisplay .freq-band span');
+    freqBands.forEach((band, i) => {
+      const value = (analyser.dataF[i * 4] || 0) / 255;
+      band.style.height = (value * 100) + '%';
+    });
+  }
+
+  function updatePerformanceCounters() {
+    const now = performance.now();
+    const deltaTime = now - lastFrameTime;
+    const fps = Math.round(1000 / deltaTime);
+    
+    if (frameCount % 30 === 0) { // Update every 30 frames
+      document.getElementById('fpsCounter').textContent = fps;
+      document.getElementById('latencyCounter').textContent = Math.round(deltaTime) + 'ms';
+    }
+    
+    lastFrameTime = now;
+    frameCount++;
+  }
+
+  function updateSnapshot() { 
+    const snap = { 
+      mode: ui.mode.value, 
+      palette: ui.palette.value, 
+      ringLayers: +ui.ringLayers.value, 
+      ringInner: +ui.ringInner.value, 
+      ringGap: +ui.ringGap.value, 
+      ringRotation: +ui.ringRotation.value,
+      barsMirror: ui.barsMirror.checked, 
+      barWidth: +ui.barThin.value, 
+      barGap: +ui.barGap.value,
+      fft: +ui.fft.value, 
+      smoothing: +ui.smoothing.value, 
+      gain: +ui.gain.value, 
+      gate: +ui.gate.value, 
+      line: +ui.line.value, 
+      trail: +ui.trail.value, 
+      mirror: ui.mirror.checked, 
+      glow: ui.glow.checked 
+    }; 
+    document.getElementById('jsonBox').textContent = JSON.stringify(snap, null, 2); 
+  }
+
+  function tick() { 
+    if (!analyser.node) return; 
+    requestAnimationFrame(tick); 
+    if (paused) return; 
+    
+    analyser.node.getByteTimeDomainData(analyser.dataT); 
+    analyser.node.getByteFrequencyData(analyser.dataF); 
+    rms = computeRMS(analyser.dataT); 
+    
+    const gate = +ui.gate.value;
+    
+    updateMeters();
+    updatePerformanceCounters();
+    
+    rotationAngle += +ui.ringRotation.value * 0.01;
+    
+    clearTrail(+ui.trail.value); 
+    const g = gradientFor(ui.palette.value, 0, 0, width, 0); 
+    ctx.lineWidth = +ui.line.value; 
+    ctx.lineCap = 'round'; 
+    ctx.lineJoin = 'round'; 
+    ctx.strokeStyle = g; 
+    
+    const gain = +ui.gain.value * (1 + Math.max(0, (rms - gate) * 3)); 
+    const mode = ui.mode.value; 
+    
+    if (mode === 'radial') drawRadial(gain); 
+    else if (mode === 'linear') drawLinear(gain, ui.mirror.checked); 
+    else if (mode === 'bars') drawBars(gain, ui.barsMirror.checked); 
+    else if (mode === 'enhanced') drawEnhancedComposite(gain);
+    else drawComposite(gain); 
+    
+    updateSnapshot(); 
+  }
+
+  // Enhanced drawing functions
+  function drawLinear(gain, mirror) { 
+    const d = analyser.dataT, len = d.length; 
+    ctx.beginPath(); 
+    for (let i = 0; i < len; i++) { 
+      const x = (i / (len - 1)) * width; 
+      const v = (d[i] - 128) / 128 * gain; 
+      const y = height / 2 + v * (height * 0.4); 
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
+    } 
+    ctx.stroke(); 
+    
+    if (mirror) { 
+      ctx.save(); 
+      ctx.globalAlpha = .5; 
+      ctx.scale(1, -1); 
+      ctx.translate(0, -height); 
+      ctx.stroke(); 
+      ctx.restore(); 
+    } 
+  }
+
+  function drawBars(gain, mirrored = true) { 
+    const d = analyser.dataF, n = d.length; 
+    const bw = Math.max(0.5, +ui.barThin.value); 
+    const gap = +ui.barGap.value;
+    
+    if (mirrored) { 
+      const cx = width / 2; 
+      for (let i = 0; i < n / 2; i++) { 
+        const mag = d[i] / 255 * gain; 
+        const h = mag * (height * 0.65); 
+        const x = i * (width / n) * 2; 
+        
+        // Left side
+        ctx.lineWidth = bw;
+        ctx.beginPath(); 
+        ctx.moveTo(cx - x - gap, height / 2 - h / 2); 
+        ctx.lineTo(cx - x - gap, height / 2 + h / 2); 
+        ctx.stroke(); 
+        
+        // Right side
+        ctx.beginPath(); 
+        ctx.moveTo(cx + x + gap, height / 2 - h / 2); 
+        ctx.lineTo(cx + x + gap, height / 2 + h / 2); 
+        ctx.stroke(); 
+      } 
+    } else { 
+      for (let i = 0; i < n; i++) { 
+        const mag = d[i] / 255 * gain; 
+        const h = mag * (height * 0.65); 
+        const x = i * (width / n); 
+        ctx.lineWidth = bw;
+        ctx.beginPath(); 
+        ctx.moveTo(x, height / 2 - h / 2); 
+        ctx.lineTo(x, height / 2 + h / 2); 
+        ctx.stroke(); 
+      } 
+    }
+  }
+
+  function drawRadial(gain, baseR) { 
+    const data = analyser.dataT, len = data.length; 
+    const cx = width / 2, cy = height / 2; 
+    const r = (baseR !== undefined ? baseR : Math.min(width, height) * (+ui.ringInner.value)); 
+    
+    ctx.save(); 
+    ctx.translate(cx, cy);
+    ctx.rotate(rotationAngle);
+    ctx.translate(-cx, -cy);
+    
+    ctx.save(); 
+    ctx.globalAlpha = .4; 
+    ctx.beginPath(); 
+    ctx.arc(cx, cy, r, 0, Math.PI * 2); 
+    ctx.stroke(); 
+    ctx.restore(); 
+    
+    ctx.beginPath(); 
+    for (let i = 0; i < len; i++) { 
+      const t = i / len * Math.PI * 2; 
+      const v = (data[i] - 128) / 128 * gain; 
+      const rr = r + v * (r * 0.8); 
+      const x = cx + Math.cos(t) * rr; 
+      const y = cy + Math.sin(t) * rr; 
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
+    } 
+    ctx.closePath(); 
+    ctx.stroke(); 
+    
+    ctx.restore();
+  }
+
+  function drawCircularOsc(gain, radius) { 
+    const d = analyser.dataT, len = d.length; 
+    const cx = width / 2, cy = height / 2; 
+    
+    ctx.save(); 
+    const prev = ctx.lineWidth; 
+    ctx.lineWidth = Math.max(0.8, +ui.line.value * 0.8); 
+    ctx.globalAlpha = 0.9;
+    
+    ctx.beginPath(); 
+    for (let i = 0; i < len; i++) { 
+      const t = i / len * Math.PI * 2; 
+      const v = (d[i] - 128) / 128 * gain * 0.6; 
+      const rr = radius + v * (radius * 0.5); 
+      const x = cx + Math.cos(t) * rr; 
+      const y = cy + Math.sin(t) * rr; 
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
+    } 
+    ctx.closePath(); 
+    ctx.stroke(); 
+    ctx.lineWidth = prev; 
+    ctx.restore(); 
+  }
+
+  function drawComposite(gain) {
+    // 1) Multi concentric rings with rotation
+    const base = Math.min(width, height);
+    const inner = base * (+ui.ringInner.value);
+    const gap = base * (+ui.ringGap.value);
+    const layers = +ui.ringLayers.value;
+    
+    for (let i = 0; i < layers; i++) {
+      const r = inner + i * gap;
+      ctx.save(); 
+      ctx.globalAlpha = 0.95 - i * 0.15; 
+      drawRadial(gain * (1 - i * 0.04), r); 
+      ctx.restore();
+    }
+    
+    // 2) Circular oscilloscope layer
+    drawCircularOsc(gain, inner + (layers - 0.3) * gap);
+    
+    // 3) Enhanced mirrored spectrum bars
+    ctx.save(); 
+    ctx.globalAlpha = 0.8; 
+    drawBars(gain * 0.95, ui.barsMirror.checked); 
+    ctx.restore();
+  }
+
+  function drawEnhancedComposite(gain) {
+    // Enhanced version with more layers and effects
+    drawComposite(gain);
+    
+    // Additional outer ring
+    const base = Math.min(width, height);
+    const outerRadius = base * 0.45;
+    
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = gradientFor(ui.palette.value, 0, 0, width, height);
+    drawCircularOsc(gain * 0.7, outerRadius);
+    ctx.restore();
+    
+    // Frequency-reactive dots
+    const cx = width / 2, cy = height / 2;
+    ctx.save();
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const intensity = (analyser.dataF[i * 8] || 0) / 255;
+      const radius = outerRadius + intensity * 30;
+      
+      ctx.fillStyle = palettes[ui.palette.value][i % palettes[ui.palette.value].length];
+      ctx.globalAlpha = intensity * 0.8;
+      ctx.beginPath();
+      ctx.arc(
+        cx + Math.cos(angle) * radius,
+        cy + Math.sin(angle) * radius,
+        2 + intensity * 4,
+        0, Math.PI * 2
+      );
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Enhanced UI synchronization
+  function syncOut(id, outEl) { 
+    const el = ui[id]; 
+    const w = () => { 
+      outEl.textContent = (el.type === 'checkbox') ? el.checked : el.value; 
+    }; 
+    el.addEventListener('input', w); 
+    el.addEventListener('change', w); 
+    w(); 
+  }
+  
+  // Initialize all outputs
+  Object.keys(out).forEach(key => {
+    if (ui[key] && out[key]) {
+      syncOut(key, out[key]);
+    }
+  });
+
+  // Enhanced event listeners
+  document.getElementById('btnMic').addEventListener('click', startMic);
+  document.getElementById('btnDemo').addEventListener('click', startDemo);
+  document.getElementById('btnPause').addEventListener('click', () => { 
+    paused = !paused; 
+    updateStatus(paused ? 'Paused' : 'Running', paused ? '#f59e0b' : '#10b981');
+  });
+  
+  document.getElementById('btnSnapshot').addEventListener('click', () => { 
+    const a = document.createElement('a'); 
+    a.download = `waveviz-${Date.now()}.png`; 
+    a.href = canvas.toDataURL('image/png'); 
+    a.click(); 
+  });
+  
+  document.getElementById('btnDownload').addEventListener('click', () => { 
+    const a = document.createElement('a'); 
+    a.download = `waveviz-${Date.now()}.png`; 
+    a.href = canvas.toDataURL('image/png'); 
+    a.click(); 
+  });
+  
+  document.getElementById('btnCopyJSON').addEventListener('click', () => { 
+    navigator.clipboard.writeText(document.getElementById('jsonBox').textContent);
+    updateStatus('JSON Copied', '#10b981');
+    setTimeout(() => updateStatus('Running'), 2000);
+  });
+
+  document.getElementById('btnFullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      stage.requestFullscreen();
+    }
+  });
+
+  document.getElementById('btnReset').addEventListener('click', () => {
+    if (confirm('Reset all settings to defaults?')) {
+      Object.entries(ui).forEach(([key, element]) => {
+        if (element.type === 'range') {
+          element.value = element.defaultValue || element.min;
+        } else if (element.type === 'checkbox') {
+          element.checked = element.defaultChecked;
+        } else if (element.tagName === 'SELECT') {
+          element.selectedIndex = 0;
+        }
+        element.dispatchEvent(new Event('input'));
+      });
+    }
+  });
+
+  // Record button functionality
+  document.getElementById('recordButton').addEventListener('click', function() {
+    const button = this;
+    isRecording = !isRecording;
+    
+    if (isRecording) {
+      button.classList.add('recording');
+      updateStatus('Recording Active', '#dc2626');
+      if (!audioCtx) startMic();
+    } else {
+      button.classList.remove('recording');
+      updateStatus('Recording Stopped', '#10b981');
+    }
+  });
+
+  // React to analyser changes
+  ui.fft.addEventListener('change', () => { 
+    if (!analyser.node) return; 
+    analyser.node.fftSize = clampPow2(+ui.fft.value); 
+    analyser.dataF = new Uint8Array(analyser.node.frequencyBinCount); 
+    analyser.dataT = new Uint8Array(analyser.node.fftSize); 
+  });
+  
+  ui.smoothing.addEventListener('input', () => { 
+    if (analyser.node) analyser.node.smoothingTimeConstant = +ui.smoothing.value; 
+  });
+  
+  // Enhanced glow control
+  function updateGlow() {
+    const glowValue = ui.glow.checked ? 
+      'drop-shadow(0 0 12px rgba(155,135,245,.4))' : 'none';
+    document.documentElement.style.setProperty('--glow', glowValue);
+  }
+  
+  ui.glow.addEventListener('change', updateGlow);
+  updateGlow();
+
+  // Enhanced keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { 
+      e.preventDefault(); 
+      document.getElementById('btnPause').click(); 
+    } else if (e.code === 'KeyF') {
+      e.preventDefault();
+      document.getElementById('btnFullscreen').click();
+    } else if (e.code === 'KeyR') {
+      e.preventDefault();
+      document.getElementById('recordButton').click();
+    } else if (e.ctrlKey && e.altKey && e.code === 'KeyZ') {
+      e.preventDefault();
+      document.getElementById('recordButton').click();
+    }
+  });
+
+  // Initialize
+  initFreqDisplay();
+  updateStatus('Ready');
+  startDemo();
+})();
+</script>
+</body>
+</html>
