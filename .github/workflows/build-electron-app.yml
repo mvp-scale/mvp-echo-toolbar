@@ -1,11 +1,10 @@
 name: Build MVP-Echo Toolbar Windows App
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:  # Manual trigger only
+
+permissions:
+  contents: write
 
 jobs:
   build-electron-windows:
@@ -52,16 +51,3 @@ jobs:
         name: MVP-Echo-Toolbar-Windows-Portable
         path: mvp-echo-toolbar/dist/MVP-Echo Toolbar *.exe
         if-no-files-found: warn
-
-    # Create GitHub Release on tags
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          mvp-echo-toolbar/dist/MVP-Echo Toolbar Setup *.exe
-          mvp-echo-toolbar/dist/MVP-Echo Toolbar *.exe
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
