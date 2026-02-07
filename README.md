@@ -4,6 +4,10 @@ System tray voice-to-text for Windows 11. Press **Ctrl+Alt+Z** to record, press 
 
 No visible window during normal use. Lives in your notification area next to the microphone icon, works across all virtual desktops and monitors.
 
+![MVP-Echo Toolbar popup showing transcription result and settings, sitting in the Windows 11 system tray next to the microphone icon](mvp-echo-toolbar/docs/screenshot.png)
+
+Click the blue tray icon to see your last transcription, copy it again, or adjust settings. Otherwise it stays out of your way.
+
 ## Requirements
 
 1. **Faster-Whisper server** running on your LAN with a GPU. See [`faster-whisper-docker/`](faster-whisper-docker/) for the Docker setup.
