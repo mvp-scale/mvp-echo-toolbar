@@ -29,7 +29,12 @@ Click the blue tray icon to see your last transcription, copy it again, or adjus
    http://192.168.1.10:20300/v1/audio/transcriptions
    ```
 
-4. **Use it**: Hold **Ctrl+Alt**, tap **Z** to start recording. Tap **Z** again to stop. Hear a ding = copied to clipboard. **Ctrl+V** to paste.
+4. **Use it**:
+   1. Hold down **Ctrl+Alt** and tap **Z** — recording starts (tray icon turns red)
+   2. Speak naturally while still holding **Ctrl+Alt**
+   3. Tap **Z** again — recording stops (icon turns yellow while processing)
+   4. Wait for the **ding** — your transcription is automatically copied to clipboard
+   5. **Ctrl+V** to paste anywhere
 
 ## Build From Source
 
