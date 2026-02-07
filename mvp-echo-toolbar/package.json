@@ -21,6 +21,10 @@
   ],
   "author": "MVP-Echo Team",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mvp-scale/mvp-echo-toolbar.git"
+  },
   "dependencies": {
     "form-data": "^4.0.0",
     "node-fetch": "^2.7.0",
