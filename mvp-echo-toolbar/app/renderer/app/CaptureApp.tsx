@@ -1,0 +1,127 @@
+import { useEffect, useRef } from 'react';
+import { AudioCapture } from './audio/AudioCapture';
+import { playCompletionSound } from './audio/completion-sound';
+
+/**
+ * CaptureApp - Hidden window component for audio capture
+ * No visible DOM. All logic runs in useEffect.
+ * Listens for global shortcut toggle, manages recording, plays ding, auto-copies.
+ */
+export default function CaptureApp() {
+  const audioCapture = useRef(new AudioCapture());
+  const isRecordingRef = useRef(false);
+  const selectedModelRef = useRef('Systran/faster-whisper-base');
+  const selectedLanguageRef = useRef('');
+
+  // Load saved config on mount to get model/language
+  useEffect(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) return; // Not in Electron (e.g., browser viewing Vite dev server)
+
+    const loadConfig = async () => {
+      try {
+        const config = await ipc.invoke('cloud:get-config');
+        if (config) {
+          if (config.selectedModel) selectedModelRef.current = config.selectedModel;
+          if (config.language) selectedLanguageRef.current = config.language;
+        }
+      } catch (e) {
+        console.warn('Failed to load cloud config:', e);
+      }
+    };
+    loadConfig();
+  }, []);
+
+  // Listen for config changes from popup (re-check periodically or on events)
+  // The popup saves config via cloud:configure IPC, so we re-read before each transcription
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api) return;
+
+    console.log('CaptureApp: Setting up global shortcut listener');
+
+    const unsubscribe = api.onGlobalShortcutToggle(() => {
+      console.log('CaptureApp: Global shortcut toggle received');
+
+      const currentlyRecording = isRecordingRef.current;
+
+      if (currentlyRecording) {
+        // ── Stop Recording ──
+        console.log('CaptureApp: Stopping recording');
+        isRecordingRef.current = false;
+        api.updateTrayState('processing');
+        api.stopRecording('global-shortcut');
+
+        audioCapture.current.stopRecording().then(async (audioBuffer: ArrayBuffer) => {
+          if (audioBuffer.byteLength > 0) {
+            // Re-read latest config before processing
+            try {
+              const ipc = (window as any).electron?.ipcRenderer;
+              if (ipc) {
+                const config = await ipc.invoke('cloud:get-config');
+                if (config) {
+                  if (config.selectedModel) selectedModelRef.current = config.selectedModel;
+                  if (config.language) selectedLanguageRef.current = config.language;
+                }
+              }
+            } catch (_e) { /* use cached values */ }
+
+            const audioArray = Array.from(new Uint8Array(audioBuffer));
+            const result = await api.processAudio(audioArray, {
+              model: selectedModelRef.current,
+              language: selectedLanguageRef.current,
+            });
+
+            if (result.text?.trim()) {
+              await api.copyToClipboard(result.text);
+              playCompletionSound();
+              api.updateTrayState('done');
+            } else {
+              api.updateTrayState('ready');
+            }
+          } else {
+            api.updateTrayState('ready');
+          }
+        }).catch((error: Error) => {
+          console.error('CaptureApp: Stop recording failed:', error);
+          api.updateTrayState('error');
+          setTimeout(() => api.updateTrayState('ready'), 3000);
+        });
+      } else {
+        // ── Start Recording ──
+        console.log('CaptureApp: Starting recording');
+        isRecordingRef.current = true;
+        api.updateTrayState('recording');
+        api.startRecording('global-shortcut');
+
+        audioCapture.current.startRecording().catch((error: Error) => {
+          console.error('CaptureApp: Start recording failed:', error);
+          isRecordingRef.current = false;
+          api.updateTrayState('error');
+          setTimeout(() => api.updateTrayState('ready'), 3000);
+        });
+      }
+    });
+
+    // Cleanup on unmount
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+      audioCapture.current.cleanup();
+    };
+  }, []);
+
+  // Cleanup on window unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      audioCapture.current.cleanup();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  // No visible UI - this is a hidden window
+  return null;
+}

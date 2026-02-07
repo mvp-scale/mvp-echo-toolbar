@@ -1,0 +1,75 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 14.5%;
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 14.5%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 14.5%;
+    --primary: 227 100% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 14.5%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 55.6%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 14.5%;
+    --destructive: 0 84% 57.7%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 90%;
+    --input: 0 0% 95%;
+    --ring: 227 100% 55%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* Popup window has no title bar - we draw our own */
+  html, body, #popup-root {
+    height: 100%;
+    width: 100%;
+  }
+}
+
+/* Draggable regions for frameless window */
+.draggable {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.non-draggable {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* Scrollbar styling for compact popup */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
