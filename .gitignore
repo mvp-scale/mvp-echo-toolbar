@@ -74,6 +74,7 @@ standalone-whisper/dist/
 
 # Claude Code local settings
 .claude/settings.local.json
+CLAUDE.local.md
 
 # Whisper binary builds
 whisper-bin/
