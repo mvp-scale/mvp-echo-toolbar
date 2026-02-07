@@ -25,6 +25,20 @@ function log(message) {
 
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
 
+// ── Single Instance Lock ──
+// Prevent multiple instances. If a second copy launches, focus the existing one.
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  log('MVP-Echo Toolbar: Another instance is already running. Exiting.');
+  app.quit();
+}
+
+app.on('second-instance', () => {
+  log('MVP-Echo Toolbar: Second instance detected, showing popup.');
+  togglePopup();
+});
+
 let hiddenWindow = null;
 let popupWindow = null;
 let shortcutActive = false;
