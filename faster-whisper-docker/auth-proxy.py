@@ -171,6 +171,8 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path not in ("/health", "/v1/models"):
             auth_result = self.authenticate()
             if auth_result is None:
+                client_ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
+                print(f"[auth-proxy] DENIED {method} {self.path} from {client_ip} (invalid or missing key)")
                 self.send_response(401)
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json")
@@ -179,6 +181,14 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
         else:
             auth_result = ("health", "Health Check")
+
+        # Log the request with user name
+        if "/audio/transcriptions" in self.path:
+            content_length = int(self.headers.get("Content-Length", 0))
+            size_kb = content_length / 1024
+            print(f"[auth-proxy] {auth_result[1]} transcribing ({size_kb:.0f} KB audio)")
+        elif self.path not in ("/health",):
+            print(f"[auth-proxy] {auth_result[1]} {method} {self.path}")
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))

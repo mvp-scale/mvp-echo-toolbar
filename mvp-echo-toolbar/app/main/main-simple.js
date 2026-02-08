@@ -245,6 +245,19 @@ app.whenReady().then(async () => {
   } else {
     log('Global shortcut Ctrl+Alt+Z registered successfully');
   }
+
+  // Debug shortcut: Ctrl+Shift+D opens DevTools for hidden capture window
+  globalShortcut.register('CommandOrControl+Shift+D', () => {
+    if (hiddenWindow && !hiddenWindow.isDestroyed()) {
+      hiddenWindow.webContents.openDevTools({ mode: 'detach' });
+      log('DevTools opened for capture window');
+    }
+    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
+      popupWindow.webContents.openDevTools({ mode: 'detach' });
+      log('DevTools opened for popup window');
+    }
+  });
+  log('Debug shortcut Ctrl+Shift+D registered');
 });
 
 // Tray app: window-all-closed does NOT quit

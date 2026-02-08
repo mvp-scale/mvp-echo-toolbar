@@ -67,8 +67,9 @@ services:
       - ./api-keys.json:/data/api-keys.json
       - ./usage.json:/data/usage.json
     working_dir: /app
-    command: python auth-proxy.py
+    command: python -u auth-proxy.py
     environment:
+      - PYTHONUNBUFFERED=1
       - WHISPER_BACKEND=http://faster-whisper-api:8000
       - LISTEN_PORT=8080
       - KEYS_FILE=/data/api-keys.json
