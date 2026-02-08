@@ -15,6 +15,7 @@ export default function SettingsPanel() {
         const config = await (window as any).electron.ipcRenderer.invoke('cloud:get-config');
         if (config) {
           if (config.endpointUrl) setEndpointUrl(config.endpointUrl);
+          if (config.apiKey) setApiKey(config.apiKey);
           if (config.selectedModel) setSelectedModel(config.selectedModel);
           if (config.language) setSelectedLanguage(config.language);
           if (config.isConfigured) setConnectionStatus('connected');
@@ -39,6 +40,10 @@ export default function SettingsPanel() {
       language: selectedLanguage,
     }).catch((err: Error) => console.warn('Failed to save cloud config:', err));
   }, [configLoaded, endpointUrl, apiKey, selectedModel, selectedLanguage]);
+
+  const handleDebug = useCallback(() => {
+    (window as any).electron.ipcRenderer.invoke('debug:open-devtools').catch(() => {});
+  }, []);
 
   const handleTestConnection = useCallback(async () => {
     if (!endpointUrl) return;
@@ -66,7 +71,7 @@ export default function SettingsPanel() {
   }, [endpointUrl, apiKey, selectedModel, selectedLanguage]);
 
   return (
-    <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[200px] overflow-y-auto">
+    <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[400px] overflow-y-auto">
       <div className="space-y-2">
         <div>
           <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
@@ -151,13 +156,21 @@ export default function SettingsPanel() {
               </>
             )}
           </div>
-          <button
-            onClick={handleTestConnection}
-            disabled={connectionStatus === 'testing'}
-            className="px-2 py-0.5 bg-primary text-primary-foreground text-[9px] font-semibold rounded hover:bg-primary/90 disabled:opacity-50"
-          >
-            Test Connection
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleDebug}
+              className="px-2 py-0.5 text-[9px] font-medium rounded transition-all cursor-pointer border text-muted-foreground hover:text-foreground hover:bg-muted border-transparent"
+            >
+              Debug
+            </button>
+            <button
+              onClick={handleTestConnection}
+              disabled={connectionStatus === 'testing'}
+              className="px-2 py-0.5 bg-primary text-primary-foreground text-[9px] font-semibold rounded hover:bg-primary/90 disabled:opacity-50"
+            >
+              Test Connection
+            </button>
+          </div>
         </div>
       </div>
     </div>

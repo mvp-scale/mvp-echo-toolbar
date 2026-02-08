@@ -44,7 +44,8 @@ contextBridge.exposeInMainWorld('electron', {
   ipcRenderer: {
     invoke: (channel, ...args) => {
       const validChannels = [
-        'cloud:configure', 'cloud:test-connection', 'cloud:get-config'
+        'cloud:configure', 'cloud:test-connection', 'cloud:get-config',
+        'debug:open-devtools', 'debug:renderer-log'
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);

@@ -414,3 +414,20 @@ ipcMain.handle('cloud:test-connection', async () => {
 ipcMain.handle('cloud:get-config', () => {
   return cloudEngine.getConfig();
 });
+
+// Debug: open DevTools for both capture and popup windows
+ipcMain.handle('debug:open-devtools', async () => {
+  log('Opening DevTools');
+  if (hiddenWindow && !hiddenWindow.isDestroyed()) {
+    hiddenWindow.webContents.openDevTools({ mode: 'detach' });
+  }
+  if (popupWindow && !popupWindow.isDestroyed()) {
+    popupWindow.webContents.openDevTools({ mode: 'detach' });
+  }
+  return { success: true };
+});
+
+// Debug: receive log messages from capture window renderer
+ipcMain.handle('debug:renderer-log', async (_event, message) => {
+  log(`[capture] ${message}`);
+});

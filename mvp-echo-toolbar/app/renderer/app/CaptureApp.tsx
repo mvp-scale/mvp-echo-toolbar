@@ -39,6 +39,24 @@ export default function CaptureApp() {
     const api = (window as any).electronAPI;
     if (!api) return;
 
+    // Forward renderer console to main process log file
+    const ipc = (window as any).electron?.ipcRenderer;
+    const origLog = console.log;
+    const origError = console.error;
+    const origWarn = console.warn;
+    console.log = (...args: any[]) => {
+      origLog(...args);
+      if (ipc) ipc.invoke('debug:renderer-log', args.map(String).join(' ')).catch(() => {});
+    };
+    console.error = (...args: any[]) => {
+      origError(...args);
+      if (ipc) ipc.invoke('debug:renderer-log', 'ERROR: ' + args.map(String).join(' ')).catch(() => {});
+    };
+    console.warn = (...args: any[]) => {
+      origWarn(...args);
+      if (ipc) ipc.invoke('debug:renderer-log', 'WARN: ' + args.map(String).join(' ')).catch(() => {});
+    };
+
     console.log('CaptureApp: Setting up global shortcut listener');
 
     const unsubscribe = api.onGlobalShortcutToggle(() => {

@@ -8,6 +8,19 @@ const path = require('path');
 const { app } = require('electron');
 const fetch = require('node-fetch');
 
+// Standard browser-like headers for compatibility with CDNs, WAFs, and proxies
+const APP_VERSION = '2.0.0';
+const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 MVP-Echo-Toolbar/${APP_VERSION}`;
+
+const BASE_HEADERS = {
+  'User-Agent': USER_AGENT,
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Connection': 'keep-alive',
+  'Cache-Control': 'no-cache',
+};
+
 class WhisperRemoteEngine {
   constructor() {
     this.endpointUrl = null;
@@ -16,8 +29,50 @@ class WhisperRemoteEngine {
     this.language = null;
     this.isConfigured = false;
     this.configPath = path.join(app.getPath('userData'), 'toolbar-endpoint-config.json');
+    this.maxRetries = 2;
 
     this.loadConfig();
+  }
+
+  /**
+   * Build request headers with auth if configured
+   */
+  getRequestHeaders(extra = {}) {
+    const headers = { ...BASE_HEADERS, ...extra };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    return headers;
+  }
+
+  /**
+   * Fetch with retry for transient network errors (502, 503, 504, timeouts)
+   */
+  async fetchWithRetry(url, options, retries = this.maxRetries) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+
+        // Retry on transient server errors
+        if (response.status >= 502 && response.status <= 504 && attempt < retries) {
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s
+          console.log(`MVP-Echo: HTTP ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        // Retry on network errors (timeout, connection reset)
+        if (attempt < retries && (error.type === 'system' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')) {
+          const delay = Math.pow(2, attempt) * 1000;
+          console.log(`MVP-Echo: Network error (${error.code || error.type}), retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   loadConfig() {
@@ -67,10 +122,7 @@ class WhisperRemoteEngine {
         const response = await fetch(healthUrl, {
           method: 'GET',
           signal: controller.signal,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'MVP-Echo-Toolbar/2.0.0'
-          }
+          headers: this.getRequestHeaders()
         });
 
         clearTimeout(timeoutId);
@@ -78,10 +130,7 @@ class WhisperRemoteEngine {
         if (response.ok) {
           try {
             const modelsResponse = await fetch(`${baseUrl}/v1/models`, {
-              headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'MVP-Echo-Toolbar/2.0.0'
-              }
+              headers: this.getRequestHeaders()
             });
             const modelsData = await modelsResponse.json();
             const availableModels = modelsData.data?.map(m => m.id) || [];
@@ -152,19 +201,19 @@ class WhisperRemoteEngine {
       // Force language to avoid misdetection-triggered hallucinations
       formData.append('language', options.language || this.language || 'en');
 
-      const headers = formData.getHeaders();
-      if (this.apiKey) {
-        headers['Authorization'] = `Bearer ${this.apiKey}`;
-      }
+      const formHeaders = formData.getHeaders();
+      const headers = this.getRequestHeaders(formHeaders);
 
-      const response = await fetch(this.endpointUrl, {
+      const response = await this.fetchWithRetry(this.endpointUrl, {
         method: 'POST',
         headers: headers,
-        body: formData
+        body: formData,
+        timeout: 120000, // 2 min for large audio
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status}: ${response.statusText}${errorBody ? ` - ${errorBody}` : ''}`);
       }
 
       const result = await response.json();
@@ -234,6 +283,7 @@ class WhisperRemoteEngine {
   getConfig() {
     return {
       endpointUrl: this.endpointUrl,
+      apiKey: this.apiKey,
       selectedModel: this.selectedModel,
       language: this.language,
       isConfigured: this.isConfigured
