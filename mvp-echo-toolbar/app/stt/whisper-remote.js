@@ -8,8 +8,8 @@ const path = require('path');
 const { app } = require('electron');
 const fetch = require('node-fetch');
 
-// Standard browser-like headers for compatibility with CDNs, WAFs, and proxies
-const APP_VERSION = '2.0.0';
+// Read version from package.json so it stays in sync with builds
+const APP_VERSION = require('../../package.json').version;
 const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 MVP-Echo-Toolbar/${APP_VERSION}`;
 
 const BASE_HEADERS = {

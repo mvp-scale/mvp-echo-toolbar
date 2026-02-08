@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo-toolbar",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "MVP-Echo Toolbar - System Tray Voice-to-Text Transcription",
   "main": "app/main/main-simple.js",
   "scripts": {
