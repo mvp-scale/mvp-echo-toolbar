@@ -182,13 +182,21 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
         else:
             auth_result = ("health", "Health Check")
 
-        # Log the request with user name
+        # Extract app version from User-Agent (e.g., "MVP-Echo-Toolbar/2.0.0" → "v2.0.0")
+        ua = self.headers.get("User-Agent", "")
+        app_version = "unknown"
+        if "MVP-Echo-Toolbar/" in ua:
+            app_version = "v" + ua.split("MVP-Echo-Toolbar/")[1].split(" ")[0].split(")")[0]
+        elif "curl/" in ua:
+            app_version = "curl"
+
+        # Log the request with user name and client version
         if "/audio/transcriptions" in self.path:
             content_length = int(self.headers.get("Content-Length", 0))
             size_kb = content_length / 1024
-            print(f"[auth-proxy] {auth_result[1]} transcribing ({size_kb:.0f} KB audio)")
+            print(f"[auth-proxy] {auth_result[1]} [{app_version}] transcribing ({size_kb:.0f} KB audio)")
         elif self.path not in ("/health",):
-            print(f"[auth-proxy] {auth_result[1]} {method} {self.path}")
+            print(f"[auth-proxy] {auth_result[1]} [{app_version}] {method} {self.path}")
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
