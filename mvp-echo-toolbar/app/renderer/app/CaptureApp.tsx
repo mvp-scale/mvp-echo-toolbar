@@ -54,6 +54,8 @@ export default function CaptureApp() {
         api.stopRecording('global-shortcut');
 
         audioCapture.current.stopRecording().then(async (audioBuffer: ArrayBuffer) => {
+          console.log(`CaptureApp: Audio buffer received, ${audioBuffer.byteLength} bytes`);
+
           if (audioBuffer.byteLength > 0) {
             // Re-read latest config before processing
             try {
@@ -67,20 +69,26 @@ export default function CaptureApp() {
               }
             } catch (_e) { /* use cached values */ }
 
+            console.log(`CaptureApp: Sending to cloud (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
             const audioArray = Array.from(new Uint8Array(audioBuffer));
             const result = await api.processAudio(audioArray, {
               model: selectedModelRef.current,
               language: selectedLanguageRef.current,
             });
 
+            console.log('CaptureApp: Transcription result:', JSON.stringify(result));
+
             if (result.text?.trim()) {
               await api.copyToClipboard(result.text);
+              console.log(`CaptureApp: Copied to clipboard: "${result.text}"`);
               playCompletionSound();
               api.updateTrayState('done');
             } else {
+              console.log('CaptureApp: Empty transcription, no copy');
               api.updateTrayState('ready');
             }
           } else {
+            console.warn('CaptureApp: Empty audio buffer, skipping transcription');
             api.updateTrayState('ready');
           }
         }).catch((error: Error) => {

@@ -19,8 +19,21 @@ export class AudioCapture {
 
   async startRecording(onAudioLevel?: (level: number) => void): Promise<void> {
     this.onAudioLevel = onAudioLevel;
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    console.log('[AudioCapture] Requesting microphone access...');
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      console.error('[AudioCapture] getUserMedia FAILED:', err);
+      throw err;
+    }
+
+    const tracks = this.stream.getAudioTracks();
+    console.log(`[AudioCapture] Microphone granted: ${tracks.length} track(s)`,
+      tracks.map(t => ({ label: t.label, enabled: t.enabled, muted: t.muted, readyState: t.readyState })));
+
     this.mediaRecorder = new MediaRecorder(this.stream);
+    console.log(`[AudioCapture] MediaRecorder created, mimeType: ${this.mediaRecorder.mimeType}`);
     this.audioChunks = [];
 
     // Set up Web Audio API for real-time audio level detection
@@ -37,9 +50,15 @@ export class AudioCapture {
 
     this.mediaRecorder.ondataavailable = (event) => {
       this.audioChunks.push(event.data);
+      console.log(`[AudioCapture] Chunk received: ${event.data.size} bytes (total chunks: ${this.audioChunks.length})`);
+    };
+
+    this.mediaRecorder.onerror = (event) => {
+      console.error('[AudioCapture] MediaRecorder error:', event);
     };
 
     this.mediaRecorder.start();
+    console.log('[AudioCapture] Recording started');
   }
 
   private monitorAudioLevel(): void {
@@ -71,14 +90,18 @@ export class AudioCapture {
   async stopRecording(): Promise<ArrayBuffer> {
     return new Promise((resolve) => {
       if (!this.mediaRecorder) {
+        console.warn('[AudioCapture] stopRecording called but no MediaRecorder exists');
         this.cleanup();
         resolve(new ArrayBuffer(0));
         return;
       }
 
+      console.log(`[AudioCapture] Stopping recording (state: ${this.mediaRecorder.state}, chunks so far: ${this.audioChunks.length})`);
+
       this.mediaRecorder.onstop = async () => {
         const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
         const arrayBuffer = await blob.arrayBuffer();
+        console.log(`[AudioCapture] Recording stopped. ${this.audioChunks.length} chunks, ${arrayBuffer.byteLength} bytes total`);
         this.cleanup();
         resolve(arrayBuffer);
       };

@@ -1,13 +1,12 @@
 # docker-compose.yml for faster-whisper API with GPU support
-# Uses fedirz/faster-whisper-server - production-ready image
-# NGINX proxy adds CORS support
+# Uses fedirz/faster-whisper-server with auth proxy for CORS + API key validation
 
 services:
   faster-whisper:
     image: fedirz/faster-whisper-server:latest-cuda
     container_name: faster-whisper-api
 
-    # Internal port only (accessed via nginx)
+    # Internal port only (accessed via auth-proxy)
     expose:
       - "8000"
 
@@ -57,17 +56,31 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # NGINX reverse proxy for CORS
-  nginx:
-    image: nginx:alpine
-    container_name: faster-whisper-nginx
+  # Auth proxy: CORS + API key validation + usage tracking
+  auth-proxy:
+    image: python:3.12-slim
+    container_name: faster-whisper-auth
     ports:
       - "20300:8080"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./auth-proxy.py:/app/auth-proxy.py:ro
+      - ./api-keys.json:/data/api-keys.json
+      - ./usage.json:/data/usage.json
+    working_dir: /app
+    command: python auth-proxy.py
+    environment:
+      - WHISPER_BACKEND=http://faster-whisper-api:8000
+      - LISTEN_PORT=8080
+      - KEYS_FILE=/data/api-keys.json
+      - USAGE_FILE=/data/usage.json
     depends_on:
       - faster-whisper
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   whisper-models:
