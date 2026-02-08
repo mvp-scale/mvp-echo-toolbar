@@ -23,6 +23,24 @@ function log(message) {
   }
 }
 
+// ── Startup Cleanup (Boy Scout: leave no trace) ──
+
+// Fresh log file each session
+try {
+  fs.writeFileSync(logPath, '');
+} catch (_e) { /* ignore */ }
+
+// Sweep orphaned audio temp files from previous sessions
+try {
+  const tmpDir = os.tmpdir();
+  const orphans = fs.readdirSync(tmpDir).filter(f => f.startsWith('mvp-echo-audio-') && f.endsWith('.webm'));
+  if (orphans.length > 0) {
+    orphans.forEach(f => {
+      try { fs.unlinkSync(path.join(tmpDir, f)); } catch (_e) { /* ignore */ }
+    });
+  }
+} catch (_e) { /* ignore */ }
+
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
 
 // ── Single Instance Lock ──
@@ -215,6 +233,25 @@ app.whenReady().then(async () => {
     onQuit: () => app.quit(),
   });
 
+  // First-run balloon: help user find the tray icon
+  const firstRunPath = path.join(app.getPath('userData'), '.first-run-complete');
+  if (!fs.existsSync(firstRunPath)) {
+    log('First run detected, showing tray balloon');
+    setTimeout(() => {
+      if (trayManager.tray) {
+        trayManager.tray.displayBalloon({
+          title: 'MVP-Echo Toolbar is Ready',
+          content: 'Press Ctrl+Alt+Z to record. Click this icon to see transcriptions.\n\nTip: Drag this icon to your taskbar for easy access.',
+          iconType: 'info',
+          respectQuietTime: false,
+        });
+      }
+    }, 2000); // Delay so the tray is fully initialized
+    try {
+      fs.writeFileSync(firstRunPath, new Date().toISOString());
+    } catch (_e) { /* ignore */ }
+  }
+
   // Create hidden capture window
   createHiddenWindow();
 
@@ -246,15 +283,11 @@ app.whenReady().then(async () => {
     log('Global shortcut Ctrl+Alt+Z registered successfully');
   }
 
-  // Debug shortcut: Ctrl+Shift+D opens DevTools for hidden capture window
+  // Debug shortcut: Ctrl+Shift+D opens DevTools for capture window
   globalShortcut.register('CommandOrControl+Shift+D', () => {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) {
       hiddenWindow.webContents.openDevTools({ mode: 'detach' });
       log('DevTools opened for capture window');
-    }
-    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
-      popupWindow.webContents.openDevTools({ mode: 'detach' });
-      log('DevTools opened for popup window');
     }
   });
   log('Debug shortcut Ctrl+Shift+D registered');
@@ -380,6 +413,16 @@ ipcMain.handle('processAudio', async (_event, audioArray, options = {}) => {
     };
   } catch (error) {
     log('Cloud processing failed: ' + error.message);
+
+    // Clean up temp file on error
+    try {
+      const tmpDir = os.tmpdir();
+      const orphans = fs.readdirSync(tmpDir).filter(f => f.startsWith('mvp-echo-audio-') && f.endsWith('.webm'));
+      orphans.forEach(f => {
+        try { fs.unlinkSync(path.join(tmpDir, f)); } catch (_e) { /* ignore */ }
+      });
+    } catch (_e) { /* ignore */ }
+
     return {
       success: false,
       text: '',
@@ -415,14 +458,11 @@ ipcMain.handle('cloud:get-config', () => {
   return cloudEngine.getConfig();
 });
 
-// Debug: open DevTools for both capture and popup windows
+// Debug: open DevTools for capture window (where audio/transcription logs are)
 ipcMain.handle('debug:open-devtools', async () => {
-  log('Opening DevTools');
+  log('Opening DevTools for capture window');
   if (hiddenWindow && !hiddenWindow.isDestroyed()) {
     hiddenWindow.webContents.openDevTools({ mode: 'detach' });
-  }
-  if (popupWindow && !popupWindow.isDestroyed()) {
-    popupWindow.webContents.openDevTools({ mode: 'detach' });
   }
   return { success: true };
 });
