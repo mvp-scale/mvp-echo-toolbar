@@ -18,6 +18,8 @@
     "clean:python": "echo \"🧹 Cleaning Python embedded distribution...\" && powershell -ExecutionPolicy Bypass -File scripts/prepare-python.ps1 -Clean",
     "test:python": "echo \"🧪 Testing Python embedded setup...\" && powershell -ExecutionPolicy Bypass -File scripts/test-powershell.ps1 -TestSyntax",
     "start": "echo \"🎯 Starting built application...\" && electron .",
+    "build:toolbar": "cd mvp-echo-toolbar && rm -rf dist && npm run dist",
+    "build:light": "cd mvp-echo-light && rm -rf dist && npm run dist",
     "test": "echo \"🧪 No tests yet\""
   },
   "keywords": [
