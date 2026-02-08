@@ -182,13 +182,18 @@ class WhisperRemoteEngine {
       // Request verbose_json to get language detection
       formData.append('response_format', 'verbose_json');
 
-      // Temperature 0 for deterministic output (OpenAI API compatible)
+      // Anti-hallucination parameters (per-request, passed to faster-whisper transcribe())
       formData.append('temperature', '0');
+      formData.append('vad_filter', 'true');
+      formData.append('condition_on_previous_text', 'false');
+      formData.append('hallucination_silence_threshold', '2');
+      formData.append('log_prob_threshold', '-0.5');
+      formData.append('compression_ratio_threshold', '2.4');
+      formData.append('no_speech_threshold', '0.6');
+      formData.append('beam_size', '5');
 
-      // Add language if specified (forces language instead of auto-detect)
-      if (options.language || this.language) {
-        formData.append('language', options.language || this.language);
-      }
+      // Force language to avoid misdetection-triggered hallucinations
+      formData.append('language', options.language || this.language || 'en');
 
       // Make request
       const headers = formData.getHeaders();

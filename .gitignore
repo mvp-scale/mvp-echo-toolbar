@@ -78,3 +78,4 @@ CLAUDE.local.md
 
 # Whisper binary builds
 whisper-bin/
+.aoa/

@@ -38,13 +38,6 @@ jobs:
       if: always()
       run: dir dist
 
-    - name: Upload NSIS Installer
-      uses: actions/upload-artifact@v4
-      with:
-        name: MVP-Echo-Toolbar-Windows-Installer
-        path: mvp-echo-toolbar/dist/MVP-Echo Toolbar Setup *.exe
-        if-no-files-found: warn
-
     - name: Upload Portable Executable
       uses: actions/upload-artifact@v4
       with:

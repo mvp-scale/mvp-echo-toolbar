@@ -138,11 +138,19 @@ class WhisperRemoteEngine {
       const model = options.model || this.selectedModel;
       formData.append('model', model);
       formData.append('response_format', 'verbose_json');
-      formData.append('temperature', '0');
 
-      if (options.language || this.language) {
-        formData.append('language', options.language || this.language);
-      }
+      // Anti-hallucination parameters (per-request, passed to faster-whisper transcribe())
+      formData.append('temperature', '0');
+      formData.append('vad_filter', 'true');
+      formData.append('condition_on_previous_text', 'false');
+      formData.append('hallucination_silence_threshold', '2');
+      formData.append('log_prob_threshold', '-0.5');
+      formData.append('compression_ratio_threshold', '2.4');
+      formData.append('no_speech_threshold', '0.6');
+      formData.append('beam_size', '5');
+
+      // Force language to avoid misdetection-triggered hallucinations
+      formData.append('language', options.language || this.language || 'en');
 
       const headers = formData.getHeaders();
       if (this.apiKey) {

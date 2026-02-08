@@ -11,10 +11,16 @@ services:
     expose:
       - "8000"
 
-    # NVIDIA GPU support
+    # NVIDIA GPU support + transcription quality
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Anti-hallucination: VAD filters silence before Whisper sees it
+      - _UNSTABLE_VAD_FILTER=true
+      # float16 for best accuracy on GPU (vs default/int8)
+      - WHISPER__COMPUTE_TYPE=float16
+      # Keep model loaded permanently (no reload delay between requests)
+      - STT_MODEL_TTL=-1
 
     # GPU support (requires nvidia-docker2)
     deploy:
