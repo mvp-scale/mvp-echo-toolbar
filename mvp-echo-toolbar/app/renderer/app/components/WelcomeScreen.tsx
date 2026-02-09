@@ -72,7 +72,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 {[
                   { color: '#4285f4', label: 'Ready' },
                   { color: '#ea4335', label: 'Rec' },
-                  { color: '#fbbc04', label: 'Busy' },
+                  { color: '#f57c00', label: 'Busy' },
                   { color: '#34a853', label: 'Done' },
                 ].map(({ color, label }) => (
                   <div key={color} className="flex flex-col items-center gap-0.5">
