@@ -47,6 +47,7 @@ npm run dist         # Package installer + portable exe
 
 ## Critical Rules
 
+- **NEVER commit or push without explicit user approval** - always show the user what changed and wait for them to say "commit" or "check it in". Do not auto-commit after writing code. The user must review changes before anything is committed.
 - **Always work on `dev` branch** - main is for releases only
 - **Never commit secrets** - no API keys, credentials, or .env files
 - **Audio temp files** - always clean up after transcription

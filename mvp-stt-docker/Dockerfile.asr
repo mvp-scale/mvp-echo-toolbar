@@ -1,0 +1,40 @@
+# MVP-ASR: sherpa-onnx C++ WebSocket server with CUDA 12 + cuDNN 9
+#
+# Pre-built binaries from official sherpa-onnx v1.12.23 release.
+# Model downloaded from HuggingFace on first start.
+
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    curl \
+    bzip2 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir huggingface-hub
+
+# Download and extract pre-built sherpa-onnx binaries (CUDA 12 + cuDNN 9, ~234MB)
+RUN curl -fSL -o /tmp/sherpa.tar.bz2 \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/sherpa-onnx-v1.12.23-cuda-12.x-cudnn-9.x-linux-x64-gpu.tar.bz2" \
+    && mkdir -p /opt/sherpa-onnx \
+    && tar xjf /tmp/sherpa.tar.bz2 -C /opt/sherpa-onnx --strip-components=1 \
+    && rm /tmp/sherpa.tar.bz2
+
+ENV PATH="/opt/sherpa-onnx/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/sherpa-onnx/lib:${LD_LIBRARY_PATH}"
+
+COPY entrypoint-asr.sh /app/entrypoint-asr.sh
+RUN chmod +x /app/entrypoint-asr.sh
+
+ENV MODEL_DIR=/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+ENV HF_REPO=csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+ENV WS_PORT=6006
+ENV NUM_THREADS=4
+
+EXPOSE 6006
+
+ENTRYPOINT ["/app/entrypoint-asr.sh"]

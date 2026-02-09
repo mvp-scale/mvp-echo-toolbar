@@ -3,260 +3,185 @@
 ## Current State (2026-02-09)
 
 **Version**: `v2.2.1` (built, not yet released)
-**Build**: Portable exe only (140MB), no installer
 **Branch**: `dev` (daily work), `main` (releases via GitHub Actions)
+**Sherpa-ONNX migration**: Phase 1 COMPLETE and running on GPU server
 
-## Repo Structure (IMPORTANT)
+## What Happened This Session
 
-This repo contains **two projects** side-by-side:
+Migrated the GPU ASR server from faster-whisper to sherpa-onnx with Parakeet TDT 0.6B. The toolbar itself was NOT modified — the new server is API-compatible.
 
-```
-/home/corey/projects/mvp-echo-toolbar/     ← git root (monorepo)
-  ├── mvp-echo-toolbar/                     ← PRODUCTION TOOLBAR (v2.2.1) - cloud-only, system tray
-  │     ├── app/main/main-simple.js         ← Main process: tray, IPC, popup, welcome window
-  │     ├── app/main/tray-manager.js        ← System tray icon, tooltip
-  │     ├── app/stt/whisper-remote.js       ← Cloud STT: HTTP POST to faster-whisper-server
-  │     ├── app/renderer/app/components/    ← SettingsPanel.tsx, TranscriptionDisplay.tsx, etc.
-  │     ├── app/preload/preload.js          ← IPC bridge
-  │     └── package.json                    ← v2.2.1
-  │
-  ├── app/                                  ← ORIGINAL APP (v1.1.0) - local engines, full window
-  │     ├── main/main-simple.js             ← Different main process (BrowserWindow, not tray)
-  │     ├── stt/engine-manager.js           ← Multi-engine: whisper-native + whisper-engine (Python)
-  │     ├── stt/whisper-engine.js           ← Python subprocess STT engine
-  │     ├── stt/whisper-native.js           ← Native/standalone exe STT engine
-  │     └── renderer/app/App.tsx            ← Full-window UI with OceanVisualizer
-  │
-  ├── faster-whisper-docker/                ← Docker server config
-  │     ├── docker-compose.yml              ← ASR + auth-proxy containers
-  │     ├── auth-proxy.py                   ← CORS + API key validation + usage tracking
-  │     ├── api-keys.json                   ← API key definitions
-  │     └── usage.json                      ← Usage tracking data
-  │
-  ├── CONTEXT.md                            ← This file
-  ├── CLAUDE.md                             ← Claude instructions
-  └── package.json                          ← v1.1.0 (root/workspace)
-```
+**Result**: 3.4s audio transcribed in 0.25s (RTF 0.07). Working end-to-end from toolbar through auth proxy to new ASR engine.
 
-**The production toolbar is `mvp-echo-toolbar/mvp-echo-toolbar/`.**
-All file references in this document use relative paths from the git root.
-
-## Current Architecture (v2.2.1 Toolbar)
-
-The production toolbar is **cloud-only**. There is no local STT engine. Audio is recorded in-browser (MediaRecorder → WebM), sent via IPC to main process, saved as a temp file, then POSTed as multipart form data to the remote faster-whisper-server.
+## Repo Structure
 
 ```
-[Electron Renderer] MediaRecorder → WebM ArrayBuffer
-        │
-        │ IPC: processAudio(audioArray)
-        ▼
-[Electron Main] main-simple.js
-        │  Saves temp .webm file
-        │  Calls cloudEngine.transcribe(tempPath)
-        ▼
-[whisper-remote.js] WhisperRemoteEngine
-        │  HTTP POST multipart/form-data to endpoint URL
-        │  Includes: model, language, anti-hallucination params
-        │  Uses node-fetch + form-data packages
-        │  Retry logic for 502/503/504
-        │  Browser-like User-Agent with app version
-        ▼
-[auth-proxy.py] Docker container (port 20300 → 8080)
-        │  LAN IPs bypass auth
-        │  Remote IPs need Bearer token
-        │  Tracks usage (seconds per key)
-        ▼
-[faster-whisper-server] Docker container (port 8000)
-        │  fedirz/faster-whisper-server:latest-cuda
-        │  OpenAI-compatible API: POST /v1/audio/transcriptions
-        │  GPU: NVIDIA 3080 Ti, CUDA 12.6.3
-        │  float16 compute, models loaded permanently (TTL=-1)
-        ▼
-[Response] verbose_json with segments, duration, language
-        │
-        │ Back in whisper-remote.js:
-        │  1. Filter segments with high no_speech_prob
-        │  2. deduplicateSegments() — decoder loop detection
-        │  3. removeRepetitions() — sentence dedup
-        │  4. removeTrailingPhraseRepetitions() — 2-15 word phrases
-        │  5. removeKnownHallucinations() — "Thank you." etc.
-        ▼
-[Result] { text, language, duration, processingTime, engine, model }
+/home/corey/projects/mvp-echo-toolbar/     <- git root
+  |
+  |-- mvp-echo-toolbar/                     <- PRODUCTION TOOLBAR (v2.2.1)
+  |     |-- app/main/main-simple.js         <- Main process: tray, IPC, popup, welcome window
+  |     |-- app/main/tray-manager.js        <- System tray icon, tooltip
+  |     |-- app/stt/whisper-remote.js       <- Cloud STT client (HTTP POST, anti-hallucination)
+  |     |-- app/renderer/app/components/    <- SettingsPanel.tsx, TranscriptionDisplay.tsx
+  |     |-- app/preload/preload.js          <- IPC bridge
+  |     +-- package.json                    <- v2.2.1
+  |
+  |-- mvp-stt-docker/                       <- ACTIVE ASR SERVER (sherpa-onnx, deployed)
+  |     |-- docker-compose.yml              <- 3 services: mvp-asr, mvp-bridge, mvp-auth
+  |     |-- Dockerfile.asr                  <- CUDA 12.6.3 + sherpa-onnx C++ binaries v1.12.23
+  |     |-- Dockerfile.bridge               <- Python 3.12 + ffmpeg + websockets
+  |     |-- entrypoint-asr.sh               <- Downloads model from HuggingFace, starts WS server
+  |     |-- entrypoint.sh                   <- Bridge entrypoint (model download + start)
+  |     |-- bridge.py                       <- HTTP POST -> WebSocket translation (OpenAI-compatible)
+  |     |-- auth-proxy.py                   <- CORS + API keys + usage tracking
+  |     |-- api-keys.json                   <- API key definitions
+  |     +-- usage.json                      <- Usage tracking data
+  |
+  |-- faster-whisper-docker/                <- OLD SERVER (historical reference, not deployed)
+  |-- app/                                  <- ORIGINAL APP (v1.1.0, not production)
+  |-- CONTEXT.md                            <- This file
+  +-- CLAUDE.md                             <- Claude instructions
 ```
 
-### Key Transcription Parameters (sent per-request)
-```
-temperature=0, vad_filter=true, condition_on_previous_text=false,
-hallucination_silence_threshold=2, log_prob_threshold=-0.5,
-compression_ratio_threshold=2.0, no_speech_threshold=0.6,
-beam_size=5, repetition_penalty=1.15, language=en
-```
-
-### Toolbar UI Architecture
-- **Hidden window**: Always-running BrowserWindow (show:false) hosts MediaRecorder and Web Audio API
-- **Popup window**: 380x300 frameless popup above tray icon, shows transcription + settings
-- **Tray icon**: System tray with dynamic tooltip showing shortcut key
-- **No main window**: The toolbar is a tray-only app, window-all-closed does NOT quit
-- **Settings**: Endpoint URL, API key, model dropdown (7 faster-whisper options), language selector, Test Connection, Debug button
-
-## v2.2.1 Features (completed)
-
-1. **Welcome Window** — Frameless 380x330 dark-themed BrowserWindow, 3 quick-start cards, `.welcome-complete` marker
-2. **Configurable Keybind** — `app-config.json` in userData, `loadAppConfig()`, dynamic tray tooltip
-3. **Anti-Hallucination Pipeline** — 5-stage client-side filtering (see architecture above)
-4. **Model Default** — `deepdml/faster-whisper-large-v3-turbo-ct2` (was `Systran/faster-whisper-base`)
-5. **Single Instance Lock** — `app.requestSingleInstanceLock()`, second launch focuses existing
-6. **Startup Cleanup** — Sweeps orphaned `mvp-echo-audio-*.webm` temp files on launch
-7. **Clean Build** — `npm run dist` runs `rm -rf dist` first
-
-## THIS SESSION: Sherpa-ONNX Migration
-
-### Strategy: GPU Docker First, Then Local CPU
-
-**Phase 1 — GPU Docker server (do first)**
-Get sherpa-onnx running on the 3080 Ti server, serving Parakeet TDT 0.6B model, and accessible from the toolbar.
-
-**Phase 2 — Local CPU fallback (do second)**
-Bundle sherpa-onnx-node in Electron for offline/no-server use.
-
-### Why Sherpa-ONNX
-
-- Zero telemetry, fully air-gapped, no API keys to NVIDIA
-- Parakeet TDT 0.6B model: #1 on HF ASR leaderboard, 6.05% WER, beats Whisper large-v3
-- Non-autoregressive TDT architecture = far fewer hallucination loops than Whisper
-- Built-in speaker diarization for batch MP3 processing
-- npm package exists (`sherpa-onnx` v1.12.23, actively maintained)
-
-### Architecture Target
+## Current Architecture (WORKING)
 
 ```
-MVP-Echo Toolbar (Electron)
-  │
-  ├── [Online + GPU] → sherpa-onnx Docker (3080 Ti, REST or WebSocket)
-  │                      Parakeet TDT 0.6B + CUDA
-  │
-  ├── [Offline/CPU] → sherpa-onnx-node (bundled native addon)
-  │                     Parakeet TDT 0.6B INT8 (~240MB)
-  │                     Silero VAD (~2MB)
-  │
-  └── [Batch MP3s] → Same GPU server + diarization
-                       Pyannote segmentation + speaker embeddings
+[Electron Toolbar] whisper-remote.js
+      | HTTP POST /v1/audio/transcriptions (multipart form-data, WebM audio)
+      v
+[mvp-auth] port 20300 -> 8080
+      | CORS, API key validation, usage tracking
+      | LAN IPs bypass auth, remote needs Bearer token
+      v
+[mvp-bridge] port 8000
+      | Accepts HTTP POST, converts WebM -> WAV (16kHz mono) via ffmpeg
+      | Opens WebSocket to mvp-asr, sends float32 audio samples
+      | Returns OpenAI-compatible JSON response
+      v
+[mvp-asr] port 6006 (WebSocket, internal only)
+      | sherpa-onnx C++ offline-websocket-server
+      | Pre-built binaries from v1.12.23 release (CUDA 12 + cuDNN 9)
+      | Parakeet TDT 0.6B INT8 model
+      | GPU: NVIDIA 3080 Ti, 12GB VRAM
+      v
+[Response] JSON: { text, timestamps, tokens, ... }
+      | bridge.py extracts text, wraps in OpenAI format:
+      | { text, language, duration, segments: [{ text, start, end, no_speech_prob }] }
 ```
 
-### Research Findings (completed)
+### WebSocket Protocol (mvp-bridge -> mvp-asr)
+- Connect to ws://mvp-asr:6006
+- Send 8-byte header: sample_rate (int32 LE) + audio_byte_count (int32 LE)
+- Send float32 audio samples in 10240-byte chunks
+- Receive JSON with `text` field
+- Send "Done" text frame to close
 
-1. **No built-in HTTP server** — sherpa-onnx only has WebSocket servers natively. No official Docker images exist.
-2. **No official Docker images** — `ghcr.io/k2-fsa/sherpa-onnx` does not exist. Must build our own.
-3. **Solution: FastAPI wrapper** — A thin Python HTTP server wrapping `sherpa_onnx.OfflineRecognizer`, exposing the same `POST /v1/audio/transcriptions` endpoint as faster-whisper-server. This means auth-proxy.py and whisper-remote.js need zero changes.
-4. **Audio conversion** — Server-side via ffmpeg (WebM/MP3/OGG → 16kHz mono WAV). No client changes needed.
-5. **GPU Python package**: `pip install sherpa-onnx==1.12.23+cuda12.cudnn9 -f https://k2-fsa.github.io/sherpa/onnx/cuda.html`
-6. **Models on HuggingFace**:
-   - GPU float32: `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2` (2.5 GB — encoder.onnx + encoder.weights + decoder.onnx + joiner.onnx + tokens.txt)
-   - CPU int8: `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` (661 MB — encoder.int8.onnx + decoder.int8.onnx + joiner.int8.onnx + tokens.txt)
-   - V3 multilingual (25 languages) also available at same naming convention with `-v3` suffix
+### Server Details
+- **Server IP**: 192.168.1.10
+- **External port**: 20300 (maps to mvp-auth:8080)
+- **GPU**: NVIDIA 3080 Ti, CUDA 12.6.3
+- **Model**: Parakeet TDT 0.6B v2 INT8 (460MB download, ~661MB extracted)
+- **Model source**: HuggingFace `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8`
+- **Model download**: Automatic on first start via `huggingface_hub.snapshot_download()`
+- **Sherpa-onnx version**: v1.12.23 (pre-built C++ binaries)
 
-### Phase 1: GPU Docker Server (BUILT — ready to deploy)
-
-Files in `sherpa-onnx-docker/`:
-
-| File | Purpose |
-|------|---------|
-| `server.py` | FastAPI server wrapping sherpa-onnx OfflineRecognizer. OpenAI-compatible endpoint. |
-| `Dockerfile` | CUDA 12.6.3 + cuDNN 9 base, sherpa-onnx GPU, ffmpeg, FastAPI. |
-| `entrypoint.sh` | Downloads Parakeet TDT 0.6B model on first start if not in volume. |
-| `docker-compose.yml` | sherpa-onnx server + auth-proxy (reuses existing auth-proxy.py and api-keys.json). |
-
-**To deploy on GPU server (192.168.1.10):**
+### Deploy Commands
 ```bash
-cd sherpa-onnx-docker
-docker compose build          # builds sherpa-onnx-server image
-docker compose up -d          # starts sherpa-onnx + auth-proxy
-# First start downloads ~2.5GB model, subsequent starts are instant
-curl http://localhost:20300/health   # → {"status": "ok"}
+cd mvp-stt-docker
+docker compose down -v                        # stop + remove volumes
+docker compose up -d --build                   # build + start all 3 services
+docker compose logs -f                         # watch logs
+curl http://localhost:20300/health             # test
 ```
 
-**API compatibility**: The server accepts the exact same multipart form-data POST that faster-whisper-server does. Same endpoint path (`/v1/audio/transcriptions`), same field names (`file`, `model`, `language`, `response_format`), same response shape (`text`, `duration`, `language`, `segments`). The whisper-remote.js anti-hallucination params are accepted and silently ignored (Parakeet TDT doesn't hallucinate like Whisper).
+## Toolbar Settings UI (NEEDS UPDATE)
 
-**To switch from faster-whisper to sherpa-onnx:**
-1. Stop faster-whisper: `cd faster-whisper-docker && docker compose down`
-2. Start sherpa-onnx: `cd sherpa-onnx-docker && docker compose up -d`
-3. No toolbar changes needed — same port (20300), same API shape
+The SettingsPanel.tsx currently shows a **model dropdown with 7 faster-whisper models**:
+- tiny, base, small, medium, large-v2, large-v3, large-v3-turbo
 
-### Phase 1 Remaining Tasks
+These are **no longer relevant** — the server now runs a single Parakeet TDT model. The `model` field sent by whisper-remote.js is accepted by the bridge but ignored.
 
-- **Deploy and test on 3080 Ti server** — Build image, verify GPU detection, test with real audio
-- **Validate response format** — Ensure whisper-remote.js parses the response correctly (especially `segments` for anti-hallucination pipeline)
-- **Performance benchmark** — Compare RTF (real-time factor) vs faster-whisper with large-v3-turbo
+## NEXT SESSION: Open Questions
 
-### Phase 2 Tasks (Local CPU — later)
+### 1. Model Selection in Toolbar UI
+The Settings dropdown lists faster-whisper models that don't exist on the new server. Options:
+- **Remove the dropdown** entirely (server has one model, no choice needed)
+- **Replace with sherpa-onnx model options** (but only one model is loaded at a time)
+- **Show the active model name** as read-only info instead of a dropdown
 
-1. **Install sherpa-onnx npm package** in the inner toolbar project
-2. **Download Parakeet TDT INT8 model** (~661 MB) + Silero VAD (~2MB)
-3. **Build local engine class** using sherpa-onnx Node.js API
-4. **Configure electron-builder** `asarUnpack` for native module
-5. **Add "Local CPU" option** to Settings engine selector
-6. **Test offline mode** — toolbar should work with no network
+### 2. Can Models Be Switched Dynamically?
+The C++ WebSocket server loads one model at startup via command-line args. To switch models:
+- The server process must be restarted with different `--encoder`, `--decoder`, `--joiner`, `--tokens` args
+- This means `docker compose down && docker compose up -d` with updated env vars
+- **There is no hot-swap** — the C++ binary does not support loading a new model at runtime
+- The bridge and auth proxy don't need to restart, only mvp-asr
 
-### Key Links
+### 3. How to Get New/Different Models?
+Models are downloaded from HuggingFace by the entrypoint-asr.sh script. To use a different model:
+1. Change `MODEL_DIR` and `HF_REPO` env vars in docker-compose.yml
+2. Run `docker compose down && docker compose up -d` (entrypoint downloads if missing)
+3. The model persists in the `mvp-models` Docker volume
 
-- sherpa-onnx GitHub: https://github.com/k2-fsa/sherpa-onnx
-- GPU model (float32): https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2
-- CPU model (int8): https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
-- V3 multilingual: https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3
-- sherpa-onnx npm: https://www.npmjs.com/package/sherpa-onnx
-- Electron integration: https://github.com/k2-fsa/sherpa-onnx/issues/1945
-- CUDA wheels: https://k2-fsa.github.io/sherpa/onnx/cuda.html
-- Community reference (FastAPI): https://github.com/ruzhila/voiceapi
-- Community reference (Node.js): https://github.com/hfyydd/sherpa-onnx-server
+**Available Parakeet TDT models** (all by csukuangfj on HuggingFace, last updated Aug 16, 2025):
 
-### Known Risks
+| Model | Languages | Size | HF Repo |
+|-------|-----------|------|---------|
+| v2 int8 (CURRENT) | English | 460MB | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` |
+| v2 fp16 | English | 1.07GB | GitHub release only (no HF tarball) |
+| v3 int8 | 25 European languages | ~465MB | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` |
 
-- CUDA support has open issues on some GPU/driver combos (https://github.com/k2-fsa/sherpa-onnx/issues/2138)
-- Electron native module path resolution requires `asarUnpack` config for Phase 2
-- CPU mode: expect ~1-3 seconds per short clip (acceptable for voice-to-text)
-- Model download is ~2.5GB on first start — need patience or pre-seed the volume
+**To check for newer models**: Search HuggingFace for `csukuangfj/sherpa-onnx-nemo-parakeet-tdt` — the maintainer publishes new versions there. Also check sherpa-onnx releases at https://github.com/k2-fsa/sherpa-onnx/releases for binary updates.
 
-## Docker Server Details
+### 4. Anti-Hallucination Pipeline Relevance
+The 5-stage anti-hallucination pipeline in whisper-remote.js was built for Whisper's autoregressive decoder issues. Parakeet TDT uses a non-autoregressive architecture that doesn't hallucinate the same way. The pipeline still runs but should rarely trigger. Consider:
+- Keeping it (harmless, catches edge cases)
+- Simplifying it (remove Whisper-specific patterns like "Thank you." filtering)
+- Making it configurable per engine
 
-**Current working server**: `fedirz/faster-whisper-server:latest-cuda` (Oct 2024)
-- Port: 20300 (external) → 8080 (auth proxy) → 8000 (whisper)
-- Server IP: 192.168.1.10
-- GPU: NVIDIA 3080 Ti (12GB VRAM)
-- CUDA: 12.6.3
+### 5. Phase 2: Local CPU Fallback (Not Started)
+Bundle sherpa-onnx-node in Electron for offline use:
+1. Install `sherpa-onnx` npm package in toolbar project
+2. Download Parakeet TDT INT8 model (~661MB)
+3. Build local engine class
+4. Configure electron-builder `asarUnpack` for native module
+5. Add "Local CPU" option to Settings
+6. Test offline mode
 
-**Speaches upgrade attempt**: `ghcr.io/speaches-ai/speaches:latest-cuda` — abandoned, 404 on transcription endpoint. Moving to sherpa-onnx instead.
+## Key Files
 
-**Auth proxy** (`auth-proxy.py`):
-- Pure Python stdlib HTTP proxy (no pip dependencies)
-- LAN (192.168.x.x, 10.x.x.x, 172.16.x.x) → no key needed
-- Remote (Cloudflare tunnel at mvp-echo.ctgs.link) → Bearer token required
-- Usage tracking: cumulative seconds per key in `usage.json`
-- Reads `api-keys.json` on every request (live edit)
-- Logs include app version from User-Agent header
-
-## Key Files (Production Toolbar)
-
+### Production Toolbar
 | File | Purpose |
 |------|---------|
-| `mvp-echo-toolbar/app/main/main-simple.js` | Main process: tray, IPC, popup, welcome window, keybind, single-instance |
-| `mvp-echo-toolbar/app/stt/whisper-remote.js` | Cloud STT: HTTP POST + retry + anti-hallucination pipeline |
+| `mvp-echo-toolbar/app/main/main-simple.js` | Main process: tray, IPC, popup, welcome, keybind |
+| `mvp-echo-toolbar/app/stt/whisper-remote.js` | Cloud STT: HTTP POST + retry + anti-hallucination |
 | `mvp-echo-toolbar/app/main/tray-manager.js` | System tray icon with dynamic tooltip |
-| `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | Settings: endpoint, key, model dropdown, language, test connection, debug |
-| `mvp-echo-toolbar/app/renderer/app/components/TranscriptionDisplay.tsx` | Transcription text display in popup |
-| `mvp-echo-toolbar/package.json` | v2.2.1, deps: node-fetch, form-data, react, electron |
+| `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | Settings UI (endpoint, key, model dropdown, language) |
+| `mvp-echo-toolbar/package.json` | v2.2.1 |
 
-## Key Files (Docker Servers)
-
+### Docker Server (mvp-stt-docker/)
 | File | Purpose |
 |------|---------|
-| `sherpa-onnx-docker/server.py` | FastAPI server wrapping sherpa-onnx with Parakeet TDT (OpenAI-compatible) |
-| `sherpa-onnx-docker/Dockerfile` | CUDA 12.6.3 image with sherpa-onnx GPU, ffmpeg, FastAPI |
-| `sherpa-onnx-docker/entrypoint.sh` | Downloads model on first start, then runs server |
-| `sherpa-onnx-docker/docker-compose.yml` | sherpa-onnx + auth-proxy (port 20300) |
-| `faster-whisper-docker/auth-proxy.py` | Auth + CORS + usage tracking proxy (shared by both servers) |
-| `faster-whisper-docker/docker-compose.yml` | Old faster-whisper server (speaches, broken) + auth-proxy |
-| `faster-whisper-docker/api-keys.json` | API key definitions (shared) |
-| `faster-whisper-docker/usage.json` | Usage tracking data (shared) |
+| `docker-compose.yml` | 3 services: mvp-asr, mvp-bridge, mvp-auth |
+| `Dockerfile.asr` | CUDA 12.6.3 + sherpa-onnx v1.12.23 C++ binaries |
+| `Dockerfile.bridge` | Python 3.12 + ffmpeg + websockets + huggingface-hub |
+| `entrypoint-asr.sh` | Model download from HuggingFace + start WebSocket server |
+| `bridge.py` | HTTP-to-WebSocket bridge (OpenAI-compatible endpoint) |
+| `auth-proxy.py` | CORS + API keys + usage tracking (MVP-branded, [mvp-auth] logs) |
+
+## Key Links
+- sherpa-onnx GitHub: https://github.com/k2-fsa/sherpa-onnx
+- sherpa-onnx releases: https://github.com/k2-fsa/sherpa-onnx/releases
+- Current model: https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+- V3 multilingual: https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8
+- sherpa-onnx npm (for Phase 2): https://www.npmjs.com/package/sherpa-onnx
+- NVIDIA Parakeet TDT original: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+
+## Lessons Learned This Session
+
+1. **No official sherpa-onnx Docker image exists** — `ghcr.io/k2-fsa/sherpa-onnx:latest` returns "denied". Must build from pre-built binary tarballs.
+2. **Python API parameter names differ from documentation** — `sampling_rate` not `sample_rate`, `encoder_filename` not `encoder`. The `from_transducer()` factory method works but the `vocab_size` metadata warning causes crashes. Using the C++ binary is more reliable.
+3. **The C++ WebSocket server works** — Uses a binary protocol (8-byte header + float32 samples). Returns JSON with `text` field. Needs an HTTP bridge for the existing toolbar to talk to it.
+4. **Model download**: GitHub release tarballs only have int8 and fp16 variants (no fp32 tarball). HuggingFace `snapshot_download()` is the most reliable download method — handles retries and checksums.
+5. **Don't commit without review** — Added rule to CLAUDE.md.
 
 ## API Keys
 

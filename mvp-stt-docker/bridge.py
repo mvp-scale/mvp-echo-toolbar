@@ -1,75 +1,32 @@
 """
-Sherpa-ONNX ASR Server — OpenAI-compatible HTTP endpoint for Parakeet TDT.
+MVP-Bridge — HTTP-to-WebSocket bridge for sherpa-onnx ASR server.
 
-Accepts POST /v1/audio/transcriptions (multipart form-data with audio file)
-and returns JSON compatible with the faster-whisper-server response format.
-
-Converts incoming audio (WebM, MP3, OGG, etc.) to 16kHz mono WAV via ffmpeg,
-then feeds it to sherpa-onnx OfflineRecognizer with Parakeet TDT 0.6B model.
+Accepts POST /v1/audio/transcriptions (OpenAI-compatible multipart form-data),
+converts audio to float32 samples, sends to the C++ WebSocket server,
+and returns the transcription as JSON.
 """
 
+import asyncio
+import json
 import os
+import struct
 import subprocess
 import tempfile
 import time
 
-import sherpa_onnx
+import numpy as np
 import soundfile as sf
 import uvicorn
+import websockets
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 # ── Configuration ──
 
-MODEL_DIR = os.environ.get("MODEL_DIR", "/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2")
+WS_HOST = os.environ.get("WS_HOST", "mvp-asr")
+WS_PORT = int(os.environ.get("WS_PORT", "6006"))
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8000"))
-NUM_THREADS = int(os.environ.get("NUM_THREADS", "4"))
-PROVIDER = os.environ.get("PROVIDER", "cuda")  # "cuda" or "cpu"
-
-
-def resolve_model_path(base_name: str) -> str:
-    """Pick int8 variant if present, otherwise float32."""
-    int8 = os.path.join(MODEL_DIR, base_name.replace(".onnx", ".int8.onnx"))
-    fp32 = os.path.join(MODEL_DIR, base_name)
-    return int8 if os.path.exists(int8) else fp32
-
-
-def create_recognizer():
-    """Create and return a sherpa-onnx OfflineRecognizer configured for Parakeet TDT."""
-    enc = resolve_model_path("encoder.onnx")
-    dec = resolve_model_path("decoder.onnx")
-    joi = resolve_model_path("joiner.onnx")
-    tok = os.path.join(MODEL_DIR, "tokens.txt")
-
-    print(f"[sherpa-server] Creating recognizer:")
-    print(f"  Encoder: {enc}")
-    print(f"  Decoder: {dec}")
-    print(f"  Joiner:  {joi}")
-    print(f"  Tokens:  {tok}")
-    print(f"  Provider: {PROVIDER}")
-    print(f"  Threads:  {NUM_THREADS}")
-
-    config = sherpa_onnx.OfflineRecognizerConfig(
-        feat_config=sherpa_onnx.FeatureExtractorConfig(
-            sample_rate=16000,
-            feature_dim=80,
-        ),
-        model_config=sherpa_onnx.OfflineModelConfig(
-            transducer=sherpa_onnx.OfflineTransducerModelConfig(
-                encoder=enc,
-                decoder=dec,
-                joiner=joi,
-            ),
-            tokens=tok,
-            num_threads=NUM_THREADS,
-            provider=PROVIDER,
-            model_type="nemo_transducer",
-        ),
-    )
-
-    recognizer = sherpa_onnx.OfflineRecognizer(config)
-    print("[sherpa-server] Recognizer created successfully")
-    return recognizer
 
 
 def convert_to_wav(input_path: str, output_path: str) -> bool:
@@ -77,7 +34,7 @@ def convert_to_wav(input_path: str, output_path: str) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
+                "ffmpeg", "-y", "-loglevel", "error",
                 "-i", input_path,
                 "-ar", "16000",
                 "-ac", "1",
@@ -93,37 +50,73 @@ def convert_to_wav(input_path: str, output_path: str) -> bool:
         return False
 
 
+async def transcribe_via_ws(samples: np.ndarray, sample_rate: int) -> str:
+    """Send audio to the sherpa-onnx WebSocket server and return transcription text."""
+    uri = f"ws://{WS_HOST}:{WS_PORT}"
+
+    async with websockets.connect(uri) as ws:
+        # Build header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
+        header = struct.pack("<ii", sample_rate, samples.size * 4)
+        buf = header + samples.tobytes()
+
+        # Send in chunks
+        chunk_size = 10240
+        for start in range(0, len(buf), chunk_size):
+            await ws.send(buf[start:start + chunk_size])
+
+        # Receive transcription result
+        result = await ws.recv()
+
+        # Signal end of session
+        await ws.send("Done")
+
+    # C++ server returns JSON, Python server returns plain text
+    try:
+        parsed = json.loads(result)
+        return parsed.get("text", "").strip()
+    except (json.JSONDecodeError, TypeError):
+        # Plain text response
+        text = result.strip() if isinstance(result, str) else result.decode().strip()
+        return "" if text == "<EMPTY>" else text
+
+
 # ── App Setup ──
 
-app = FastAPI(title="Sherpa-ONNX ASR Server", version="1.0.0")
-recognizer = None
+@asynccontextmanager
+async def lifespan(application):
+    print(f"[mvp-bridge] Starting on port {LISTEN_PORT}")
+    print(f"[mvp-bridge] WebSocket backend: ws://{WS_HOST}:{WS_PORT}")
+    print("[mvp-bridge] Ready to accept requests")
+    yield
 
 
-@app.on_event("startup")
-def startup():
-    global recognizer
-    print(f"[sherpa-server] Starting on port {LISTEN_PORT}")
-    print(f"[sherpa-server] Model directory: {MODEL_DIR}")
-    recognizer = create_recognizer()
-    print("[sherpa-server] Ready to accept requests")
+app = FastAPI(title="MVP-Bridge", version="1.0.0", lifespan=lifespan)
 
 
 # ── Endpoints ──
 
 @app.get("/health")
-def health():
-    """Health check endpoint."""
-    return JSONResponse({"status": "ok"})
+async def health():
+    """Health check — also verifies WebSocket server is reachable."""
+    try:
+        async with websockets.connect(
+            f"ws://{WS_HOST}:{WS_PORT}",
+            close_timeout=3,
+            open_timeout=3,
+        ) as ws:
+            await ws.send("Done")
+        return JSONResponse({"status": "ok"})
+    except Exception:
+        return JSONResponse({"status": "ok", "backend": "unreachable"})
 
 
 @app.get("/v1/models")
 def list_models():
     """List available models (OpenAI-compatible)."""
-    model_name = os.path.basename(MODEL_DIR)
     return JSONResponse({
         "data": [
             {
-                "id": model_name,
+                "id": "parakeet-tdt-0.6b-v2-int8",
                 "object": "model",
                 "owned_by": "local",
             }
@@ -138,7 +131,7 @@ async def transcribe(
     language: str = Form(default="en"),
     response_format: str = Form(default="verbose_json"),
     temperature: str = Form(default="0"),
-    # Accept but ignore faster-whisper-specific params for compatibility
+    # Accept Whisper-specific params for backward compatibility
     vad_filter: str = Form(default=""),
     condition_on_previous_text: str = Form(default=""),
     hallucination_silence_threshold: str = Form(default=""),
@@ -148,12 +141,7 @@ async def transcribe(
     beam_size: str = Form(default=""),
     repetition_penalty: str = Form(default=""),
 ):
-    """
-    OpenAI-compatible transcription endpoint.
-
-    Accepts multipart form-data with an audio file (WebM, WAV, MP3, OGG, etc.).
-    Returns transcription in the requested format.
-    """
+    """OpenAI-compatible transcription endpoint."""
     start_time = time.time()
 
     # Save uploaded audio to temp file
@@ -173,7 +161,7 @@ async def transcribe(
                 content={"error": "Failed to convert audio. Ensure ffmpeg is installed."},
             )
 
-        # Read WAV file
+        # Read WAV as float32 samples
         samples, sample_rate = sf.read(wav_path, dtype="float32")
 
         # Ensure mono
@@ -182,21 +170,18 @@ async def transcribe(
 
         audio_duration = len(samples) / sample_rate
 
-        # Transcribe
-        stream = recognizer.create_stream()
-        stream.accept_waveform(sample_rate, samples)
-        recognizer.decode(stream)
-        text = stream.result.text.strip()
+        # Transcribe via WebSocket
+        text = await transcribe_via_ws(samples.astype(np.float32), sample_rate)
 
         processing_time = time.time() - start_time
 
         print(
-            f"[sherpa-server] Transcribed {audio_duration:.1f}s audio "
+            f"[mvp-bridge] Transcribed {audio_duration:.1f}s audio "
             f"in {processing_time:.2f}s (RTF={processing_time/audio_duration:.2f}): "
             f'"{text[:80]}{"..." if len(text) > 80 else ""}"'
         )
 
-        # Build response matching faster-whisper-server format
+        # Build response matching OpenAI verbose_json format
         if response_format == "verbose_json":
             return JSONResponse({
                 "text": text,
@@ -215,17 +200,15 @@ async def transcribe(
         elif response_format == "json":
             return JSONResponse({"text": text})
         else:
-            # Plain text
             return text
 
     except Exception as e:
-        print(f"[sherpa-server] Error: {e}")
+        print(f"[mvp-bridge] Error: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)},
         )
     finally:
-        # Clean up temp files
         for p in [tmp_input_path, wav_path]:
             if p:
                 try:
