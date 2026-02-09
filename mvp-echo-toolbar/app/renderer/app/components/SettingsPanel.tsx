@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 export default function SettingsPanel() {
   const [endpointUrl, setEndpointUrl] = useState('http://192.168.1.10:20300/v1/audio/transcriptions');
   const [apiKey, setApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('Systran/faster-whisper-base');
+  const [selectedModel, setSelectedModel] = useState('deepdml/faster-whisper-large-v3-turbo-ct2');
   const [selectedLanguage, setSelectedLanguage] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'testing' | 'connected'>('disconnected');
   const [configLoaded, setConfigLoaded] = useState(false);

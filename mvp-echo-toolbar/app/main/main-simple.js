@@ -43,6 +43,42 @@ try {
 
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
 
+// ── App Config (configurable keybind) ──
+
+function loadAppConfig() {
+  const configPath = path.join(app.getPath('userData'), 'app-config.json');
+  const defaults = { shortcut: 'CommandOrControl+Alt+Z' };
+
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      // Merge with defaults so new keys are always present
+      const merged = { ...defaults, ...parsed };
+      log('Loaded app config: ' + JSON.stringify(merged));
+      return merged;
+    }
+  } catch (e) {
+    log('Failed to read app-config.json, using defaults: ' + e.message);
+  }
+
+  // Create default config file
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2));
+    log('Created default app-config.json');
+  } catch (e) {
+    log('Failed to write default app-config.json: ' + e.message);
+  }
+
+  return defaults;
+}
+
+function shortcutDisplayLabel(accelerator) {
+  return accelerator
+    .replace('CommandOrControl', 'Ctrl')
+    .replace('CmdOrCtrl', 'Ctrl');
+}
+
 // ── Single Instance Lock ──
 // Prevent multiple instances. If a second copy launches, focus the existing one.
 const gotTheLock = app.requestSingleInstanceLock();
@@ -215,9 +251,95 @@ function togglePopup() {
   }
 }
 
+/**
+ * Show a welcome window on first run (replaces tray balloon which Win11 suppresses)
+ */
+function showWelcomeWindow(shortcutLabel) {
+  const version = require('../../package.json').version;
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e; color: #e0e0e0;
+    padding: 20px 22px 16px; user-select: none;
+    -webkit-app-region: drag;
+  }
+  .header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  h1 { font-size: 16px; font-weight: 600; color: #fff; }
+  .version { font-size: 11px; color: #556; }
+  .subtitle { font-size: 11px; color: #888; margin-bottom: 14px; }
+  .card {
+    background: #16213e; border-radius: 8px; padding: 10px 14px;
+    margin-bottom: 8px; display: flex; align-items: flex-start; gap: 10px;
+  }
+  .card .icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+  .card h2 { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+  .card p { font-size: 11px; color: #aaa; line-height: 1.35; }
+  kbd {
+    background: #0f3460; border-radius: 4px; padding: 1px 5px;
+    font-family: 'Segoe UI', monospace; font-size: 11px; color: #7ec8e3;
+  }
+  .btn {
+    -webkit-app-region: no-drag;
+    display: block; width: 100%; margin-top: 14px; padding: 9px;
+    background: #0f3460; color: #7ec8e3; border: none; border-radius: 8px;
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s;
+  }
+  .btn:hover { background: #1a4a7a; }
+</style></head><body>
+  <div class="header">
+    <h1>MVP-Echo Toolbar</h1>
+    <span class="version">v${version}</span>
+  </div>
+  <p class="subtitle">Quick tips to get started</p>
+  <div class="card">
+    <span class="icon">&#127908;</span>
+    <div><h2>Record</h2><p>Press <kbd>${shortcutLabel}</kbd> to start &amp; stop recording from anywhere.</p></div>
+  </div>
+  <div class="card">
+    <span class="icon">&#128269;</span>
+    <div><h2>System Tray</h2><p>Look for the microphone icon in your system tray (bottom-right). Click it to see transcriptions.</p></div>
+  </div>
+  <div class="card">
+    <span class="icon">&#128203;</span>
+    <div><h2>Auto-Copy</h2><p>Transcriptions are automatically copied to your clipboard when finished.</p></div>
+  </div>
+  <button class="btn" onclick="window.close()">Got it</button>
+</body></html>`;
+
+  const welcomeWin = new BrowserWindow({
+    width: 380,
+    height: 330,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    center: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  welcomeWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+  welcomeWin.once('ready-to-show', () => {
+    welcomeWin.show();
+    welcomeWin.focus();
+  });
+}
+
 // ── App Lifecycle ──
 
 app.whenReady().then(async () => {
+  // Load user config (keybind, etc.)
+  const appConfig = loadAppConfig();
+  const shortcutLabel = shortcutDisplayLabel(appConfig.shortcut);
+
   // Auto-approve microphone permission
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'media') {
@@ -227,28 +349,20 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Create tray icon
+  // Create tray icon (pass shortcut label for dynamic tooltip)
   trayManager.create({
     onTogglePopup: togglePopup,
     onQuit: () => app.quit(),
+    shortcutLabel,
   });
 
-  // First-run balloon: help user find the tray icon
-  const firstRunPath = path.join(app.getPath('userData'), '.first-run-complete');
-  if (!fs.existsSync(firstRunPath)) {
-    log('First run detected, showing tray balloon');
-    setTimeout(() => {
-      if (trayManager.tray) {
-        trayManager.tray.displayBalloon({
-          title: 'MVP-Echo Toolbar is Ready',
-          content: 'Press Ctrl+Alt+Z to record. Click this icon to see transcriptions.\n\nTip: Drag this icon to your taskbar for easy access.',
-          iconType: 'info',
-          respectQuietTime: false,
-        });
-      }
-    }, 2000); // Delay so the tray is fully initialized
+  // Welcome window: show once (marker file prevents repeat)
+  const welcomePath = path.join(app.getPath('userData'), '.welcome-complete');
+  if (!fs.existsSync(welcomePath)) {
+    log('Showing welcome window');
+    showWelcomeWindow(shortcutLabel);
     try {
-      fs.writeFileSync(firstRunPath, new Date().toISOString());
+      fs.writeFileSync(welcomePath, new Date().toISOString());
     } catch (_e) { /* ignore */ }
   }
 
@@ -257,15 +371,15 @@ app.whenReady().then(async () => {
 
   log('MVP-Echo Toolbar: Cloud engine ready');
 
-  // Register global shortcut
-  const ret = globalShortcut.register('CommandOrControl+Alt+Z', () => {
+  // Register global shortcut (configurable)
+  const ret = globalShortcut.register(appConfig.shortcut, () => {
     if (shortcutActive) {
       log('Global shortcut ignored (debounce active)');
       return;
     }
 
     shortcutActive = true;
-    log('Global Ctrl+Alt+Z detected - sending to hidden window');
+    log(`Global ${shortcutLabel} detected - sending to hidden window`);
 
     // Send to hidden window WITHOUT bringing anything to foreground
     if (hiddenWindow && !hiddenWindow.isDestroyed()) {
@@ -278,19 +392,10 @@ app.whenReady().then(async () => {
   });
 
   if (!ret) {
-    log('Global shortcut registration failed');
+    log(`Global shortcut ${shortcutLabel} registration failed`);
   } else {
-    log('Global shortcut Ctrl+Alt+Z registered successfully');
+    log(`Global shortcut ${shortcutLabel} registered successfully`);
   }
-
-  // Debug shortcut: Ctrl+Shift+D opens DevTools for capture window
-  globalShortcut.register('CommandOrControl+Shift+D', () => {
-    if (hiddenWindow && !hiddenWindow.isDestroyed()) {
-      hiddenWindow.webContents.openDevTools({ mode: 'detach' });
-      log('DevTools opened for capture window');
-    }
-  });
-  log('Debug shortcut Ctrl+Shift+D registered');
 });
 
 // Tray app: window-all-closed does NOT quit

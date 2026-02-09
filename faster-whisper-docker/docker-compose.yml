@@ -1,9 +1,9 @@
-# docker-compose.yml for faster-whisper API with GPU support
-# Uses fedirz/faster-whisper-server with auth proxy for CORS + API key validation
+# docker-compose.yml for Speaches (faster-whisper) API with GPU support
+# Uses speaches-ai/speaches with auth proxy for CORS + API key validation
 
 services:
   faster-whisper:
-    image: fedirz/faster-whisper-server:latest-cuda
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
     container_name: faster-whisper-api
 
     # Internal port only (accessed via auth-proxy)
@@ -14,12 +14,13 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      # Anti-hallucination: VAD filters silence before Whisper sees it
-      - _UNSTABLE_VAD_FILTER=true
       # float16 for best accuracy on GPU (vs default/int8)
       - WHISPER__COMPUTE_TYPE=float16
-      # Keep model loaded permanently (no reload delay between requests)
-      - STT_MODEL_TTL=-1
+      # Keep models loaded permanently (no reload delay between requests)
+      - WHISPER__TTL=-1
+      - VAD_MODEL_TTL=-1
+      # Disable Gradio UI (can interfere with API routes)
+      - ENABLE_UI=false
 
     # GPU support (requires nvidia-docker2)
     deploy:
@@ -30,9 +31,9 @@ services:
               count: all
               capabilities: [gpu]
 
-    # Persistent model cache (fedirz uses /root/.cache/huggingface)
+    # Persistent model cache (speaches uses /home/ubuntu/.cache/huggingface/hub)
     volumes:
-      - whisper-models:/root/.cache/huggingface
+      - whisper-models:/home/ubuntu/.cache/huggingface/hub
 
     # Health check
     healthcheck:

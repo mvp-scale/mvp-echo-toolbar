@@ -5,7 +5,7 @@
 
 const { Tray, Menu, nativeImage } = require('electron');
 
-// Tray states
+// Tray states (ready tooltip is set dynamically in create())
 const STATES = {
   ready: { color: '#4285f4', tooltip: 'MVP-Echo - Ready (Ctrl+Alt+Z)' },
   recording: { color: '#ea4335', tooltip: 'MVP-Echo - Recording...' },
@@ -185,6 +185,11 @@ class TrayManager {
   create(callbacks = {}) {
     this.onTogglePopup = callbacks.onTogglePopup || (() => {});
     this.onQuit = callbacks.onQuit || (() => {});
+
+    // Update ready tooltip with configured shortcut
+    if (callbacks.shortcutLabel) {
+      STATES.ready.tooltip = `MVP-Echo - Ready (${callbacks.shortcutLabel})`;
+    }
 
     const icon = this.createIcon(STATES.ready.color);
     this.tray = new Tray(icon);

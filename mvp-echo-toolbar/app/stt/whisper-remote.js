@@ -25,7 +25,7 @@ class WhisperRemoteEngine {
   constructor() {
     this.endpointUrl = null;
     this.apiKey = null;
-    this.selectedModel = 'Systran/faster-whisper-base';
+    this.selectedModel = 'deepdml/faster-whisper-large-v3-turbo-ct2';
     this.language = null;
     this.isConfigured = false;
     this.configPath = path.join(app.getPath('userData'), 'toolbar-endpoint-config.json');
@@ -194,9 +194,10 @@ class WhisperRemoteEngine {
       formData.append('condition_on_previous_text', 'false');
       formData.append('hallucination_silence_threshold', '2');
       formData.append('log_prob_threshold', '-0.5');
-      formData.append('compression_ratio_threshold', '2.4');
+      formData.append('compression_ratio_threshold', '2.0');
       formData.append('no_speech_threshold', '0.6');
       formData.append('beam_size', '5');
+      formData.append('repetition_penalty', '1.15');
 
       // Force language to avoid misdetection-triggered hallucinations
       formData.append('language', options.language || this.language || 'en');
@@ -252,7 +253,10 @@ class WhisperRemoteEngine {
           }
           return true;
         });
-        text = validSegments.map(seg => seg.text).join('').trim();
+
+        // Deduplicate consecutive identical segments (decoder loop detection)
+        const deduped = this.deduplicateSegments(validSegments);
+        text = deduped.map(seg => seg.text).join('').trim();
       }
 
       // Fallback to plain text field if no segments or empty result
@@ -300,12 +304,15 @@ class WhisperRemoteEngine {
     const sentences = text.split(/(?<=[.!?])\s+/);
     if (sentences.length < 2) return text;
 
-    // Check for repeated sentences at the end (threshold lowered from >2 to >1)
-    const lastSentence = sentences[sentences.length - 1].trim().toLowerCase();
+    // Normalize: strip trailing punctuation and whitespace for comparison
+    const norm = (s) => s.trim().toLowerCase().replace(/[.!?,;:]+$/, '').trim();
+
+    // Check for repeated sentences at the end
+    const lastNorm = norm(sentences[sentences.length - 1]);
     let repeatCount = 0;
 
     for (let i = sentences.length - 1; i >= 0; i--) {
-      if (sentences[i].trim().toLowerCase() === lastSentence) {
+      if (norm(sentences[i]) === lastNorm) {
         repeatCount++;
       } else {
         break;
@@ -315,7 +322,7 @@ class WhisperRemoteEngine {
     // If 2+ repetitions at end, keep only one
     if (repeatCount > 1) {
       const cleanSentences = sentences.slice(0, sentences.length - repeatCount + 1);
-      console.log(`Removed ${repeatCount - 1} repeated sentences: "${lastSentence}"`);
+      console.log(`Removed ${repeatCount - 1} repeated sentences: "${lastNorm}"`);
       return cleanSentences.join(' ');
     }
 
@@ -332,8 +339,8 @@ class WhisperRemoteEngine {
     const words = text.trim().split(/\s+/);
     if (words.length < 4) return text;
 
-    // Check phrase lengths from 2 to 5 words
-    for (let phraseLen = 2; phraseLen <= Math.min(5, Math.floor(words.length / 2)); phraseLen++) {
+    // Check phrase lengths from 2 to 15 words (Whisper loops are often 6-12 word phrases)
+    for (let phraseLen = 2; phraseLen <= Math.min(15, Math.floor(words.length / 2)); phraseLen++) {
       const lastPhrase = words.slice(-phraseLen).join(' ').toLowerCase();
       let repeatCount = 0;
 
@@ -407,6 +414,33 @@ class WhisperRemoteEngine {
     }
 
     return cleaned.trim();
+  }
+
+  /**
+   * Deduplicate consecutive segments with identical text (decoder loop detection)
+   * Whisper's decoder sometimes emits the same segment repeatedly when stuck in a loop.
+   * Keep the first occurrence in any run of duplicates.
+   */
+  deduplicateSegments(segments) {
+    if (!segments || segments.length < 2) return segments;
+
+    const norm = (s) => (s || '').trim().toLowerCase().replace(/[.!?,;:]+$/, '').trim();
+    const result = [segments[0]];
+    let dupeCount = 0;
+
+    for (let i = 1; i < segments.length; i++) {
+      if (norm(segments[i].text) === norm(segments[i - 1].text)) {
+        dupeCount++;
+      } else {
+        result.push(segments[i]);
+      }
+    }
+
+    if (dupeCount > 0) {
+      console.log(`Deduplicated ${dupeCount} repeated segment(s) from ${segments.length} total`);
+    }
+
+    return result;
   }
 }
 

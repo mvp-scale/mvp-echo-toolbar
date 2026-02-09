@@ -339,22 +339,12 @@ ipcMain.handle('processAudio', async (event, audioArray) => {
     
   } catch (error) {
     log('❌ Whisper processing failed: ' + error.message);
-    
-    // Fallback to mock behavior if Whisper fails
-    const mockTranscriptions = [
-      "Speech recognition system encountered an error but recovered successfully.",
-      "Audio processing failed gracefully with fallback transcription.",
-      "The application continues to work despite technical difficulties."
-    ];
-    
-    const fallbackText = mockTranscriptions[Math.floor(Math.random() * mockTranscriptions.length)];
-    
+
     return {
-      success: true,
-      text: fallbackText,
-      processingTime: 1000,
-      engine: 'Fallback Engine (CPU)',
-      confidence: 0.8,
+      success: false,
+      text: '',
+      processingTime: 0,
+      engine: 'Error',
       error: error.message
     };
   }

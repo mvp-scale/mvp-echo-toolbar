@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo-toolbar",
-  "version": "2.1.0",
+  "version": "2.2.1",
   "description": "MVP-Echo Toolbar - System Tray Voice-to-Text Transcription",
   "main": "app/main/main-simple.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev:renderer": "vite --port 5173",
     "dev:electron": "NODE_ENV=development electron --no-sandbox --ozone-platform-hint=auto app/main/main-simple.js",
     "build": "vite build",
-    "dist": "npm run build && electron-builder --win --publish=never",
+    "clean": "rm -rf dist",
+    "dist": "npm run clean && npm run build && electron-builder --win --publish=never",
     "start": "electron .",
     "test": "echo \"No tests yet\""
   },
