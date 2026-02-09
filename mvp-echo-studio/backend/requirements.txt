@@ -1,0 +1,22 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+pydub
+
+# pyannote-audio deps (installed --no-deps to avoid torch conflicts)
+# torch, torchvision, torchaudio already in NeMo container
+asteroid-filterbanks
+einops
+huggingface-hub
+lightning
+pyannote-core
+pyannote-database
+pyannote-metrics
+pyannote-pipeline
+pytorch-metric-learning
+rich
+safetensors
+soundfile
+torch-audiomentations
+torchmetrics

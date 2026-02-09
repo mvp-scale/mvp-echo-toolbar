@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --speaker-0: #6366f1;
+    --speaker-1: #ec4899;
+    --speaker-2: #14b8a6;
+    --speaker-3: #f59e0b;
+    --speaker-4: #8b5cf6;
+    --speaker-5: #ef4444;
+    --speaker-6: #06b6d4;
+    --speaker-7: #84cc16;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2a3a transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #2a2a3a;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .speaker-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}

@@ -1,0 +1,54 @@
+# MVP-Echo Studio: Batch transcription + speaker diarization
+#
+# Runs alongside the toolbar stack (mvp-stt-docker) on port 20301.
+# Uses Parakeet TDT 0.6B (NeMo) + Pyannote speaker-diarization-3.1.
+#
+# Usage:
+#   docker compose up -d --build
+#
+# Test:
+#   curl http://localhost:20301/health
+
+services:
+  mvp-scribe:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mvp-scribe
+    ports:
+      - "20301:8001"
+    volumes:
+      - scribe-models:/models
+      - ./api-keys.json:/data/api-keys.json:ro
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MODEL_ID=nvidia/parakeet-tdt-0.6b-v2
+      - PORT=8001
+      - CHUNK_DURATION=500
+      - ENABLE_DIARIZATION=true
+      - INCLUDE_DIARIZATION_IN_TEXT=true
+      - TEMP_DIR=/tmp/parakeet
+      - HF_HOME=/models/huggingface
+      - TORCH_HOME=/models/torch
+      - NEMO_CACHE_DIR=/models/nemo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    mem_limit: 16g
+    memswap_limit: 16g
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  scribe-models:
+    driver: local

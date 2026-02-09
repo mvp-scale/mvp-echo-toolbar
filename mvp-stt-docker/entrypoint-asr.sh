@@ -33,6 +33,7 @@ fi
 echo "[mvp-asr] Starting WebSocket server on port ${WS_PORT:-6006}..."
 exec sherpa-onnx-offline-websocket-server \
     --port="${WS_PORT:-6006}" \
+    --provider=cuda \
     --encoder="$MODEL_DIR/encoder.int8.onnx" \
     --decoder="$MODEL_DIR/decoder.int8.onnx" \
     --joiner="$MODEL_DIR/joiner.int8.onnx" \
