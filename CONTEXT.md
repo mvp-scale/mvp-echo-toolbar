@@ -143,65 +143,78 @@ MVP-Echo Toolbar (Electron)
                        Pyannote segmentation + speaker embeddings
 ```
 
-### Phase 1 Tasks (GPU Docker)
+### Research Findings (completed)
 
-1. **Research sherpa-onnx server API** — What endpoints does it expose? HTTP REST? WebSocket only? What's the request/response format? This is the critical unknown.
+1. **No built-in HTTP server** — sherpa-onnx only has WebSocket servers natively. No official Docker images exist.
+2. **No official Docker images** — `ghcr.io/k2-fsa/sherpa-onnx` does not exist. Must build our own.
+3. **Solution: FastAPI wrapper** — A thin Python HTTP server wrapping `sherpa_onnx.OfflineRecognizer`, exposing the same `POST /v1/audio/transcriptions` endpoint as faster-whisper-server. This means auth-proxy.py and whisper-remote.js need zero changes.
+4. **Audio conversion** — Server-side via ffmpeg (WebM/MP3/OGG → 16kHz mono WAV). No client changes needed.
+5. **GPU Python package**: `pip install sherpa-onnx==1.12.23+cuda12.cudnn9 -f https://k2-fsa.github.io/sherpa/onnx/cuda.html`
+6. **Models on HuggingFace**:
+   - GPU float32: `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2` (2.5 GB — encoder.onnx + encoder.weights + decoder.onnx + joiner.onnx + tokens.txt)
+   - CPU int8: `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` (661 MB — encoder.int8.onnx + decoder.int8.onnx + joiner.int8.onnx + tokens.txt)
+   - V3 multilingual (25 languages) also available at same naming convention with `-v3` suffix
 
-2. **Get Docker container running** — `ghcr.io/k2-fsa/sherpa-onnx:latest` on the 3080 Ti server. Verify GPU access, load Parakeet TDT model. May need to build custom Dockerfile if the official image doesn't have a server mode.
+### Phase 1: GPU Docker Server (BUILT — ready to deploy)
 
-3. **Decide on auth proxy approach** — The current auth-proxy.py is a simple HTTP forwarder. If sherpa-onnx uses WebSocket, the proxy can't just forward POST requests. Options:
-   - If sherpa-onnx has an HTTP REST endpoint: keep auth-proxy as-is, just change backend URL
-   - If WebSocket only: need to add WebSocket proxying to auth-proxy, or put auth in a different layer
-   - If neither: write a thin HTTP wrapper around sherpa-onnx's native API
+Files in `sherpa-onnx-docker/`:
 
-4. **Audio format conversion** — The toolbar currently sends WebM (from MediaRecorder). Sherpa-onnx likely needs 16-bit PCM WAV at 16kHz mono. Options:
-   - Convert server-side (in wrapper/proxy)
-   - Convert client-side in Electron main process (ffmpeg or Web Audio API in renderer)
-   - Use AudioContext in renderer to capture raw PCM instead of MediaRecorder WebM
+| File | Purpose |
+|------|---------|
+| `server.py` | FastAPI server wrapping sherpa-onnx OfflineRecognizer. OpenAI-compatible endpoint. |
+| `Dockerfile` | CUDA 12.6.3 + cuDNN 9 base, sherpa-onnx GPU, ffmpeg, FastAPI. |
+| `entrypoint.sh` | Downloads Parakeet TDT 0.6B model on first start if not in volume. |
+| `docker-compose.yml` | sherpa-onnx server + auth-proxy (reuses existing auth-proxy.py and api-keys.json). |
 
-5. **Build `sherpa-engine.js`** — New engine class alongside `whisper-remote.js`. Same interface: `transcribe(audioFilePath, options) → { text, language, duration, processingTime, engine }`.
+**To deploy on GPU server (192.168.1.10):**
+```bash
+cd sherpa-onnx-docker
+docker compose build          # builds sherpa-onnx-server image
+docker compose up -d          # starts sherpa-onnx + auth-proxy
+# First start downloads ~2.5GB model, subsequent starts are instant
+curl http://localhost:20300/health   # → {"status": "ok"}
+```
 
-6. **Update Settings UI** — Add engine type selector (Cloud Whisper / Cloud Sherpa / Local CPU). Model dropdown changes based on engine type.
+**API compatibility**: The server accepts the exact same multipart form-data POST that faster-whisper-server does. Same endpoint path (`/v1/audio/transcriptions`), same field names (`file`, `model`, `language`, `response_format`), same response shape (`text`, `duration`, `language`, `segments`). The whisper-remote.js anti-hallucination params are accepted and silently ignored (Parakeet TDT doesn't hallucinate like Whisper).
+
+**To switch from faster-whisper to sherpa-onnx:**
+1. Stop faster-whisper: `cd faster-whisper-docker && docker compose down`
+2. Start sherpa-onnx: `cd sherpa-onnx-docker && docker compose up -d`
+3. No toolbar changes needed — same port (20300), same API shape
+
+### Phase 1 Remaining Tasks
+
+- **Deploy and test on 3080 Ti server** — Build image, verify GPU detection, test with real audio
+- **Validate response format** — Ensure whisper-remote.js parses the response correctly (especially `segments` for anti-hallucination pipeline)
+- **Performance benchmark** — Compare RTF (real-time factor) vs faster-whisper with large-v3-turbo
 
 ### Phase 2 Tasks (Local CPU — later)
 
 1. **Install sherpa-onnx npm package** in the inner toolbar project
-2. **Download Parakeet TDT INT8 model** (~240MB) + Silero VAD (~2MB)
+2. **Download Parakeet TDT INT8 model** (~661 MB) + Silero VAD (~2MB)
 3. **Build local engine class** using sherpa-onnx Node.js API
 4. **Configure electron-builder** `asarUnpack` for native module
 5. **Add "Local CPU" option** to Settings engine selector
 6. **Test offline mode** — toolbar should work with no network
 
-### Critical Research Needed (Start of Next Session)
-
-Before writing any code, the next session should research:
-
-1. **Does sherpa-onnx have a server/service mode?** Check the GitHub repo for HTTP server examples, Docker usage docs, or WebSocket server code. The npm package is for embedded/local use — the Docker story might be different.
-
-2. **What's the actual API contract?** Find example request/response for Parakeet TDT transcription. Is it a single HTTP POST? Streaming WebSocket? gRPC?
-
-3. **Model file locations** — Where to download `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3` (GPU) and `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` (CPU)? Verify they're on HuggingFace.
-
-4. **Docker GPU support** — Does `ghcr.io/k2-fsa/sherpa-onnx:latest` include CUDA? Or do you need `ghcr.io/k2-fsa/sherpa-onnx:cuda`? Check available tags.
-
-### Key Research Links
+### Key Links
 
 - sherpa-onnx GitHub: https://github.com/k2-fsa/sherpa-onnx
+- GPU model (float32): https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2
+- CPU model (int8): https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+- V3 multilingual: https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3
 - sherpa-onnx npm: https://www.npmjs.com/package/sherpa-onnx
-- Electron integration issue: https://github.com/k2-fsa/sherpa-onnx/issues/1945
-- Parakeet TDT model: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
-- ONNX INT8 model for CPU: search `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` on HuggingFace
-- NeMo + diarization Docker gist: https://gist.github.com/lokafinnsw/95727707f542a64efc18040aefe47751
-- Docker image: `ghcr.io/k2-fsa/sherpa-onnx:latest`
-- CUDA issue tracker: https://github.com/k2-fsa/sherpa-onnx/issues/2138
+- Electron integration: https://github.com/k2-fsa/sherpa-onnx/issues/1945
+- CUDA wheels: https://k2-fsa.github.io/sherpa/onnx/cuda.html
+- Community reference (FastAPI): https://github.com/ruzhila/voiceapi
+- Community reference (Node.js): https://github.com/hfyydd/sherpa-onnx-server
 
 ### Known Risks
 
-- CUDA support has open issues on some GPU/driver combos
+- CUDA support has open issues on some GPU/driver combos (https://github.com/k2-fsa/sherpa-onnx/issues/2138)
 - Electron native module path resolution requires `asarUnpack` config for Phase 2
-- WebSocket API differs from HTTP POST — may need new engine class and proxy changes
-- Audio format: MediaRecorder WebM → needs conversion to PCM WAV 16kHz mono
 - CPU mode: expect ~1-3 seconds per short clip (acceptable for voice-to-text)
+- Model download is ~2.5GB on first start — need patience or pre-seed the volume
 
 ## Docker Server Details
 
@@ -231,8 +244,19 @@ Before writing any code, the next session should research:
 | `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | Settings: endpoint, key, model dropdown, language, test connection, debug |
 | `mvp-echo-toolbar/app/renderer/app/components/TranscriptionDisplay.tsx` | Transcription text display in popup |
 | `mvp-echo-toolbar/package.json` | v2.2.1, deps: node-fetch, form-data, react, electron |
-| `faster-whisper-docker/auth-proxy.py` | Auth + CORS + usage tracking proxy |
-| `faster-whisper-docker/docker-compose.yml` | speaches (broken) + auth-proxy containers |
+
+## Key Files (Docker Servers)
+
+| File | Purpose |
+|------|---------|
+| `sherpa-onnx-docker/server.py` | FastAPI server wrapping sherpa-onnx with Parakeet TDT (OpenAI-compatible) |
+| `sherpa-onnx-docker/Dockerfile` | CUDA 12.6.3 image with sherpa-onnx GPU, ffmpeg, FastAPI |
+| `sherpa-onnx-docker/entrypoint.sh` | Downloads model on first start, then runs server |
+| `sherpa-onnx-docker/docker-compose.yml` | sherpa-onnx + auth-proxy (port 20300) |
+| `faster-whisper-docker/auth-proxy.py` | Auth + CORS + usage tracking proxy (shared by both servers) |
+| `faster-whisper-docker/docker-compose.yml` | Old faster-whisper server (speaches, broken) + auth-proxy |
+| `faster-whisper-docker/api-keys.json` | API key definitions (shared) |
+| `faster-whisper-docker/usage.json` | Usage tracking data (shared) |
 
 ## API Keys
 

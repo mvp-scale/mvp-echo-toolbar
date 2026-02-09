@@ -1,0 +1,94 @@
+# docker-compose.yml for Sherpa-ONNX ASR Server + Auth Proxy
+#
+# Sherpa-ONNX with Parakeet TDT 0.6B model on GPU
+# Auth proxy for CORS + API key validation + usage tracking
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#
+# Test:
+#   curl http://localhost:20300/health
+
+services:
+  sherpa-onnx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sherpa-onnx-asr
+    image: sherpa-onnx-server:latest
+
+    # Internal only (accessed via auth-proxy)
+    expose:
+      - "8000"
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - MODEL_DIR=/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2
+      - PROVIDER=cuda
+      - NUM_THREADS=4
+      - LISTEN_PORT=8000
+
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Persist downloaded models across container rebuilds
+    volumes:
+      - sherpa-models:/models
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    mem_limit: 8g
+    memswap_limit: 8g
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Auth proxy: CORS + API key validation + usage tracking
+  # Reuses the same auth-proxy.py from faster-whisper-docker/
+  auth-proxy:
+    image: python:3.12-slim
+    container_name: sherpa-onnx-auth
+    ports:
+      - "20300:8080"
+    volumes:
+      - ../faster-whisper-docker/auth-proxy.py:/app/auth-proxy.py:ro
+      - ../faster-whisper-docker/api-keys.json:/data/api-keys.json
+      - ../faster-whisper-docker/usage.json:/data/usage.json
+    working_dir: /app
+    command: python -u auth-proxy.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WHISPER_BACKEND=http://sherpa-onnx-asr:8000
+      - LISTEN_PORT=8080
+      - KEYS_FILE=/data/api-keys.json
+      - USAGE_FILE=/data/usage.json
+    depends_on:
+      sherpa-onnx:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sherpa-models:
+    driver: local
