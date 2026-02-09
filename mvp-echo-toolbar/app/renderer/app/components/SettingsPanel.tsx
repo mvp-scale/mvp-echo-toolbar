@@ -1,23 +1,70 @@
 import { useState, useEffect, useCallback } from 'react';
 
+type ModelState = 'loaded' | 'available' | 'download' | 'switching';
+
+interface ModelOption {
+  id: string;
+  label: string;
+  detail: string;
+  group: 'gpu' | 'local';
+  state: ModelState;
+}
+
+const DEFAULT_MODELS: ModelOption[] = [
+  { id: 'gpu-english', label: 'English', detail: 'Recommended', group: 'gpu', state: 'loaded' },
+  { id: 'gpu-english-hd', label: 'English HD', detail: 'Highest accuracy', group: 'gpu', state: 'available' },
+  { id: 'gpu-multilingual', label: 'Multilingual', detail: '25 languages', group: 'gpu', state: 'available' },
+  { id: 'local-fast', label: 'Fast', detail: '75MB', group: 'local', state: 'download' },
+  { id: 'local-balanced', label: 'Balanced', detail: '150MB', group: 'local', state: 'download' },
+  { id: 'local-accurate', label: 'Accurate', detail: '480MB', group: 'local', state: 'download' },
+];
+
+function StateIndicator({ state }: { state: ModelState }) {
+  switch (state) {
+    case 'loaded':
+      return <span className="flex items-center gap-1 text-[9px] text-green-400 font-medium"><span className="w-1.5 h-1.5 rounded-full bg-green-400" />loaded</span>;
+    case 'available':
+      return <span className="flex items-center gap-1 text-[9px] text-muted-foreground"><span className="w-1.5 h-1.5 rounded-full border border-muted-foreground" />available</span>;
+    case 'download':
+      return <span className="flex items-center gap-1 text-[9px] text-blue-400 font-medium">↓ download</span>;
+    case 'switching':
+      return <span className="flex items-center gap-1 text-[9px] text-yellow-400 font-medium animate-pulse">⏳ switching</span>;
+  }
+}
+
 export default function SettingsPanel() {
   const [endpointUrl, setEndpointUrl] = useState('http://192.168.1.10:20300/v1/audio/transcriptions');
   const [apiKey, setApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('deepdml/faster-whisper-large-v3-turbo-ct2');
-  const [selectedLanguage, setSelectedLanguage] = useState('');
+  const [models, setModels] = useState<ModelOption[]>(DEFAULT_MODELS);
+  const [selectedModelId, setSelectedModelId] = useState('gpu-english');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'testing' | 'connected'>('disconnected');
   const [configLoaded, setConfigLoaded] = useState(false);
 
+  const selectedModel = models.find(m => m.id === selectedModelId);
+  const gpuModels = models.filter(m => m.group === 'gpu');
+  const localModels = models.filter(m => m.group === 'local');
+
+  // Determine if API key is needed (HTTPS or non-local)
+  const isLocal = (() => {
+    try {
+      const url = new URL(endpointUrl);
+      const host = url.hostname;
+      return host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.');
+    } catch { return true; }
+  })();
+  const requiresApiKey = !isLocal || endpointUrl.startsWith('https://');
+
   // Load config on mount
   useEffect(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) { setConfigLoaded(true); return; }
+
     const loadConfig = async () => {
       try {
-        const config = await (window as any).electron.ipcRenderer.invoke('cloud:get-config');
+        const config = await ipc.invoke('cloud:get-config');
         if (config) {
           if (config.endpointUrl) setEndpointUrl(config.endpointUrl);
           if (config.apiKey) setApiKey(config.apiKey);
-          if (config.selectedModel) setSelectedModel(config.selectedModel);
-          if (config.language) setSelectedLanguage(config.language);
           if (config.isConfigured) setConnectionStatus('connected');
         }
       } catch (e) {
@@ -32,47 +79,69 @@ export default function SettingsPanel() {
   // Save config when settings change
   useEffect(() => {
     if (!configLoaded) return;
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) return;
 
-    (window as any).electron.ipcRenderer.invoke('cloud:configure', {
+    ipc.invoke('cloud:configure', {
       endpointUrl,
       apiKey,
-      model: selectedModel,
-      language: selectedLanguage,
+      model: selectedModelId,
     }).catch((err: Error) => console.warn('Failed to save cloud config:', err));
-  }, [configLoaded, endpointUrl, apiKey, selectedModel, selectedLanguage]);
+  }, [configLoaded, endpointUrl, apiKey, selectedModelId]);
 
   const handleDebug = useCallback(() => {
-    (window as any).electron.ipcRenderer.invoke('debug:open-devtools').catch(() => {});
+    (window as any).electron?.ipcRenderer?.invoke('debug:open-devtools').catch(() => {});
   }, []);
 
   const handleTestConnection = useCallback(async () => {
     if (!endpointUrl) return;
-
     setConnectionStatus('testing');
 
     try {
-      await (window as any).electron.ipcRenderer.invoke('cloud:configure', {
+      const ipc = (window as any).electron?.ipcRenderer;
+      if (!ipc) { setConnectionStatus('disconnected'); return; }
+
+      await ipc.invoke('cloud:configure', {
         endpointUrl,
         apiKey,
-        model: selectedModel,
-        language: selectedLanguage,
+        model: selectedModelId,
       });
 
-      const result = await (window as any).electron.ipcRenderer.invoke('cloud:test-connection');
-
-      if (result.success) {
-        setConnectionStatus('connected');
-      } else {
-        setConnectionStatus('disconnected');
-      }
+      const result = await ipc.invoke('cloud:test-connection');
+      setConnectionStatus(result.success ? 'connected' : 'disconnected');
     } catch (_error) {
       setConnectionStatus('disconnected');
     }
-  }, [endpointUrl, apiKey, selectedModel, selectedLanguage]);
+  }, [endpointUrl, apiKey, selectedModelId]);
+
+  const handleSelectModel = (model: ModelOption) => {
+    if (model.state === 'download') {
+      // TODO: trigger download confirmation → progress → ready
+      return;
+    }
+    if (model.state === 'available') {
+      setModels(prev => prev.map(m => ({
+        ...m,
+        state: m.id === model.id ? 'switching' as ModelState :
+               m.id === selectedModelId ? 'available' as ModelState :
+               m.state
+      })));
+      setTimeout(() => {
+        setModels(prev => prev.map(m => ({
+          ...m,
+          state: m.id === model.id ? 'loaded' as ModelState : m.state
+        })));
+        setSelectedModelId(model.id);
+      }, 2000);
+    } else if (model.state === 'loaded') {
+      setSelectedModelId(model.id);
+    }
+  };
 
   return (
     <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[400px] overflow-y-auto">
       <div className="space-y-2">
+        {/* Endpoint URL */}
         <div>
           <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
             Endpoint URL
@@ -85,56 +154,78 @@ export default function SettingsPanel() {
             className="w-full px-2 py-1 text-[10px] bg-background border border-border rounded font-mono"
           />
         </div>
+
+        {/* API Key */}
         <div>
           <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
-            API Key (Optional)
+            API Key {!requiresApiKey && <span className="text-muted-foreground/50">(optional for local)</span>}
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-..."
+            placeholder={requiresApiKey ? 'Required for remote/HTTPS' : 'sk-... (optional)'}
             className="w-full px-2 py-1 text-[10px] bg-background border border-border rounded"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
-              Model
-            </label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full px-1 py-1 text-[10px] bg-background border border-border rounded"
-            >
-              <option value="Systran/faster-whisper-tiny">tiny (fastest, 39M)</option>
-              <option value="Systran/faster-whisper-base">base (balanced, 74M)</option>
-              <option value="Systran/faster-whisper-small">small (better, 244M)</option>
-              <option value="Systran/faster-whisper-medium">medium (great, 769M)</option>
-              <option value="Systran/faster-whisper-large-v2">large-v2 (best, 1.5GB)</option>
-              <option value="Systran/faster-whisper-large-v3">large-v3 (latest, 1.5GB)</option>
-              <option value="deepdml/faster-whisper-large-v3-turbo-ct2">large-v3-turbo (fast+best) *recommended*</option>
-            </select>
+
+        {/* Engine & Model */}
+        <div>
+          <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
+            Engine & Model
+          </label>
+
+          {/* GPU Server */}
+          <div className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider mt-1 mb-0.5 px-1">
+            GPU Server — Industry's Best, Fastest
           </div>
-          <div>
-            <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
-              Language
-            </label>
-            <select
-              value={selectedLanguage}
-              onChange={(e) => setSelectedLanguage(e.target.value)}
-              className="w-full px-1 py-1 text-[10px] bg-background border border-border rounded"
+          {gpuModels.map(model => (
+            <button
+              key={model.id}
+              onClick={() => handleSelectModel(model)}
+              className={`w-full flex items-center justify-between px-2 py-1 rounded transition-colors text-left ${
+                model.id === selectedModelId ? 'bg-primary/10' : 'hover:bg-muted/50'
+              }`}
             >
-              <option value="">Auto-detect</option>
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-              <option value="zh">Chinese</option>
-              <option value="ja">Japanese</option>
-            </select>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px]">⚡</span>
+                <span className="text-[10px] text-foreground">{model.label}</span>
+                {model.detail === 'Recommended' && (
+                  <span className="text-[7px] bg-primary/10 text-primary px-1 py-0.5 rounded font-medium">
+                    recommended
+                  </span>
+                )}
+              </div>
+              <StateIndicator state={model.state} />
+            </button>
+          ))}
+
+          {/* Divider */}
+          <div className="my-1 border-t border-border" />
+
+          {/* Local CPU */}
+          <div className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5 px-1">
+            Local CPU — Industry's Best, No Internet Required
           </div>
+          {localModels.map(model => (
+            <button
+              key={model.id}
+              onClick={() => handleSelectModel(model)}
+              className={`w-full flex items-center justify-between px-2 py-1 rounded transition-colors text-left ${
+                model.id === selectedModelId ? 'bg-primary/10' : 'hover:bg-muted/50'
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px]">💻</span>
+                <span className="text-[10px] text-foreground">{model.label}</span>
+                <span className="text-[9px] text-muted-foreground">({model.detail})</span>
+              </div>
+              <StateIndicator state={model.state} />
+            </button>
+          ))}
         </div>
+
+        {/* Connection Status + Actions */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             {connectionStatus === 'testing' && (

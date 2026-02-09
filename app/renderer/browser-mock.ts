@@ -139,6 +139,15 @@ const mockElectronAPI = {
     console.log('[Mock] onGlobalShortcutToggle listener registered (no-op in browser)');
     // Can't register global shortcuts in browser
     return () => {}; // Return unsubscribe function
+  },
+
+  getWelcomePreference: async () => {
+    return { showOnStartup: true };
+  },
+
+  setWelcomePreference: async (pref: any) => {
+    console.log('[Mock] setWelcomePreference:', pref);
+    return { success: true };
   }
 };
 

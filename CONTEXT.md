@@ -12,9 +12,9 @@
 
 | # | Task | Depends On | Goal | Confidence | Status | Notes |
 |---|------|-----------|------|------------|--------|-------|
-| 1 | Welcome Screen Redesign | — | Larger window, version info, recent features, "don't show again" checkbox | :green_circle: Green | Not Started | HTML/CSS in main-simple.js, mockup below |
+| 1 | Welcome Screen Redesign | — | Larger window, version info, recent features, "don't show again" checkbox | :green_circle: Green | UI Approved | Component: `app/renderer/app/components/WelcomeScreen.tsx` (root project). IPC wired: `welcome:get-preference` / `welcome:set-preference`. Preview: `http://localhost:5173/?preview=welcome`. Integration into toolbar pending |
 | 2 | Remove Faster-Whisper Model References | — | Replace stale model entries in whisper-native.js, whisper-engine.js, EngineSelector.tsx, CaptureApp.tsx | :green_circle: Green | Not Started | No whisper-remote.js exists; stale refs are in local engine files |
-| 3 | Settings Panel: Engine/Model Dropdown | #2, #14 | GPU Server (3 models) + Local CPU (3 models) with status indicators | :green_circle: Green | Not Started | Show loaded/available/not-downloaded states. Reads from engine port |
+| 3 | Settings Panel: Engine/Model Dropdown | #2, #14 | GPU Server (3 models) + Local CPU (3 models) with status indicators | :green_circle: Green | UI Approved | Component: `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx`. Preview: `http://localhost:5174/popup.html`. Brand-free labels, API key smart detection, scrollable in 380x300 popup. Integration with engine port pending |
 | 4 | Server: Hexagonal Architecture (Bridge Refactor) | — | Refactor bridge.py with ModelEngine port + adapter pattern. SubprocessAdapter (new default) + WebSocketAdapter (fallback to current 3-container setup) | :green_circle: Green | Not Started | Archive current docker-compose (`git tag v2.2.1-pre-merge` + copy) before starting. Enables #5, #6, #7 |
 | 5 | Server: Model Switch API | #4 | `POST /v1/models/switch` — port calls adapter to swap model. `GET /v1/models` returns loaded + available | :green_circle: Green | Not Started | ~5-10s switch time. API builds against port, adapter-agnostic |
 | 6 | Server: Idle Timeout / Auto-Unload | #4 | Unload model after 60min idle, reload on next request (~5-10s cold start) | :green_circle: Green | Not Started | Timer reset on every transcription. Configurable via env var. Implemented at port level |
@@ -36,6 +36,11 @@
 | Local CPU model naming | Fast / Balanced / Accurate | Human-readable, conveys speed-vs-quality tradeoff. Replaces tiny/base/small |
 | Toolbar engine layer | Hexagonal (port/adapter) | RemoteAdapter + LocalSidecarAdapter behind same interface. No hard-coded whisper-remote.js |
 | whisper-remote.js | Never created | File doesn't exist in codebase. Remote server access is handled by RemoteAdapter in engine port |
+| Model labels in UI | Brand-free | "English", "English HD", "Multilingual" (GPU) / "Fast", "Balanced", "Accurate" (CPU). No Parakeet/Whisper names shown. Hex adapter swaps backends silently |
+| GPU section header | "Industry's Best, Fastest" | Sets expectation: best available GPU models |
+| CPU section header | "Industry's Best, No Internet Required" | Sets expectation: best available CPU models, with tradeoff (slower but offline) |
+| Welcome screen UI | Approved 2026-02-09 | `WelcomeScreen.tsx` — preview at `?preview=welcome`. Tray-matching icon, no jargon in What's New |
+| Settings panel UI | Approved 2026-02-09 | `SettingsPanel.tsx` in toolbar project — preview at `popup.html`. Scrollable in 380x300, smart API key detection |
 
 ### Test Strategy
 
@@ -101,86 +106,83 @@ Neither side is bound to a specific model engine implementation.
 
 ## Available Models
 
-### GPU Server (Parakeet TDT via sherpa-onnx)
+### GPU Server — Industry's Best, Fastest
+User-facing labels are brand-free. Backend model IDs are internal only.
 
-| ID | Label in Dropdown | Params | Languages | Download | VRAM | HF Repo |
-|----|-------------------|--------|-----------|----------|------|---------|
-| `parakeet-0.6b-en` | Parakeet English (recommended) | 600M | English | 460MB | ~500MB | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` |
-| `parakeet-1.1b-en` | Parakeet English HD | 1.1B | English | ~800MB | ~1GB | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-1.1b-v2-int8` |
-| `parakeet-0.6b-multi` | Parakeet Multilingual (25 langs) | 600M | 25 languages | ~465MB | ~500MB | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` |
+| ID (internal) | Label in UI | Detail | Backend Model | Languages | Download | VRAM |
+|---------------|-------------|--------|---------------|-----------|----------|------|
+| `gpu-english` | English | Recommended | `parakeet-tdt-0.6b-v2-int8` | English | 460MB | ~500MB |
+| `gpu-english-hd` | English HD | Highest accuracy | `parakeet-tdt-1.1b-v2-int8` | English | ~800MB | ~1GB |
+| `gpu-multilingual` | Multilingual | 25 languages | `parakeet-tdt-0.6b-v3-int8` | 25 languages | ~465MB | ~500MB |
 
-### Local CPU (sherpa-onnx sidecar, offline)
+### Local CPU — Industry's Best, No Internet Required
 
-| ID | Label in Dropdown | Size | Speed (est.) | Quality |
-|----|-------------------|------|-------------|---------|
-| `local-fast` | Local: Fast | 75MB | ~1-2s | Basic — fastest, minimal accuracy |
-| `local-balanced` | Local: Balanced | 150MB | ~2-4s | Balanced speed and accuracy |
-| `local-accurate` | Local: Accurate | 480MB | ~4-8s | Best accuracy, slower |
+| ID (internal) | Label in UI | Size | Speed (est.) | Quality |
+|---------------|-------------|------|-------------|---------|
+| `local-fast` | Fast | 75MB | ~1-2s | Basic — fastest, minimal accuracy |
+| `local-balanced` | Balanced | 150MB | ~2-4s | Balanced speed and accuracy |
+| `local-accurate` | Accurate | 480MB | ~4-8s | Best accuracy, slower |
 
 No models ship with installer. All downloaded on demand to userData directory.
+No brand names (Parakeet, Whisper, etc.) shown in UI — hexagonal adapter means we always show the best the industry has.
 
 ---
 
-## Dropdown UX Design
+## Dropdown UX Design (Approved)
+
+Integrated into toolbar popup SettingsPanel (380x300, scrollable).
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ Engine & Model                                    ▼ │
-├─────────────────────────────────────────────────────┤
-│ GPU SERVER                                          │
-│  ⚡ Parakeet English (recommended)      ● loaded    │
-│  ⚡ Parakeet English HD                 ○ available  │
-│  ⚡ Parakeet Multilingual (25 langs)    ○ available  │
-├─────────────────────────────────────────────────────┤
-│ LOCAL CPU (offline, no internet required)            │
-│  💻 Fast (75MB)                        ↓ download   │
-│  💻 Balanced (150MB)                   ↓ download   │
-│  💻 Accurate (480MB)                   ↓ download   │
-└─────────────────────────────────────────────────────┘
+Engine & Model
+─────────────────────────────────────────
+GPU SERVER — INDUSTRY'S BEST, FASTEST
+  ⚡ English            [recommended]  ● loaded
+  ⚡ English HD                        ○ available
+  ⚡ Multilingual                      ○ available
+─────────────────────────────────────────
+LOCAL CPU — INDUSTRY'S BEST, NO INTERNET
+  💻 Fast (75MB)                       ↓ download
+  💻 Balanced (150MB)                  ↓ download
+  💻 Accurate (480MB)                  ↓ download
 
 States:  ● loaded  |  ○ available  |  ↓ download  |  ⏳ switching
 ```
 
 Selecting a GPU model that's "available" → "Switching model (~10s)..." → done.
 Selecting a Local model that's "download" → "Download first?" → progress → ready.
+API key: auto-detected as optional for local (192.168.x.x), required for remote/HTTPS.
 
 ---
 
-## Welcome Screen Mockup
+## Welcome Screen (Approved)
 
-Target: 500x400px centered window, dark theme, dismissable.
+Component: `app/renderer/app/components/WelcomeScreen.tsx` (root project)
+500px wide modal, dark theme, #4285f4 circle + white microphone icon (matches tray icon).
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                                                      │
-│              🎤  MVP-Echo Toolbar                     │
+│            [🎤 blue circle, white mic]               │
+│              MVP-Echo Toolbar                        │
 │                   v3.0.0                             │
-│                                                      │
 │  ─────────────────────────────────────────────────── │
+│  Voice-to-text at your fingertips. Press the         │
+│  shortcut, speak, and your words are copied.         │
 │                                                      │
-│  Voice-to-text at your fingertips.                   │
-│  Press Ctrl+Alt+Z to record, tap Z again to stop.   │
-│  Text is copied to your clipboard automatically.     │
-│                                                      │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐       │
-│  │  🎙️ Record  │ │  📋 Copy    │ │  ⚙️ Config  │       │
-│  │            │ │            │ │            │       │
-│  │ Hold       │ │ Text auto- │ │ Click tray │       │
-│  │ Ctrl+Alt,  │ │ copied to  │ │ icon to    │       │
-│  │ tap Z to   │ │ clipboard  │ │ open       │       │
-│  │ toggle     │ │ on finish  │ │ settings   │       │
-│  └────────────┘ └────────────┘ └────────────┘       │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
+│  │ 🎙️ Record │  │ 📋 Copy   │  │ ⚙️ Config │           │
+│  │ Ctrl+Alt, │  │ Auto-     │  │ Click    │           │
+│  │ tap Z     │  │ clipboard │  │ tray icon│           │
+│  └──────────┘  └──────────┘  └──────────┘           │
 │                                                      │
 │  What's New:                                         │
-│  • GPU server with Parakeet TDT (sub-1s speed)      │
-│  • Model switching (English, HD, Multilingual)       │
-│  • Local CPU mode (no internet required)             │
+│  • Industry-leading GPU transcription — under 1s     │
+│  • Switch between English, HD, and Multilingual      │
+│  • Offline CPU mode — no internet required           │
 │                                                      │
-│                              ┌──────────────────┐   │
-│  ☐ Don't show this again     │   Get Started    │   │
-│                              └──────────────────┘   │
+│  ☐ Don't show this again          [ Get Started ]    │
 └──────────────────────────────────────────────────────┘
 ```
+No brand names in What's New. Checkbox is user's choice, never forced.
 
 ---
 
@@ -218,6 +220,77 @@ Target: 500x400px centered window, dark theme, dismissable.
 | Diarization | Blocked: torchaudio ABI mismatch, testing `torchaudio==2.7.0` on GPU server |
 | Frontend | Built and serving, untested with real diarized data |
 | Location | Being iterated on GPU server (192.168.1.10), will merge back to dev |
+
+---
+
+## Smoke Test Strategy
+
+MVP-level validation. Not production test suites — just "does it work" checks.
+
+### Server (run after any Docker change)
+```bash
+# smoke-test.sh
+echo "1. Health check"
+curl -s http://localhost:8000/health | jq .
+
+echo "2. List models"
+curl -s http://localhost:8000/v1/models | jq .
+
+echo "3. Transcribe test audio"
+curl -s -X POST -F "audio=@test.wav" http://localhost:8000/v1/transcribe | jq .
+
+echo "4. Switch model"
+curl -s -X POST http://localhost:8000/v1/models/switch \
+  -H "Content-Type: application/json" \
+  -d '{"model_id":"parakeet-1.1b-en"}' | jq .
+```
+
+### Toolbar (manual checklist, once per build)
+1. Launch toolbar — does it connect to server?
+2. Record 5 seconds of speech — does text appear?
+3. Open settings — does dropdown show correct models and states?
+4. Switch model — does status cycle through switching → ready?
+5. Disconnect server — does it fall back to local (if downloaded)?
+
+### Extra care: Task #11 (Download Manager)
+Retry + checksum verification on model downloads. Half-downloaded or corrupt models are the #1 support issue risk for a couple thousand users.
+
+---
+
+## Project Structure (Critical)
+
+The repo root contains **multiple projects**. Do not confuse them.
+
+```
+mvp-echo-toolbar/                  ← git repo root
+├── app/                           ← ROOT PROJECT (mvp-echo "lite", older)
+├── mvp-echo-toolbar/              ← THE ACTUAL TOOLBAR (this is the one to edit)
+│   ├── app/main/main-simple.js    ← Electron main process
+│   ├── app/renderer/app/PopupApp.tsx       ← Toolbar popup (380x300)
+│   ├── app/renderer/app/components/        ← SettingsPanel.tsx (APPROVED)
+│   ├── app/renderer/popup.html             ← Popup entry point
+│   ├── app/stt/whisper-remote.js           ← Current remote engine
+│   ├── vite.config.ts                      ← Toolbar Vite config (port 5174)
+│   └── package.json                        ← name: "mvp-echo-toolbar"
+├── mvp-echo-light/                ← Light variant (not active)
+├── mvp-echo-standard/             ← Standard variant (not active)
+├── mvp-echo-studio/               ← Studio (separate effort, GPU server)
+├── mvp-stt-docker/                ← Docker server configs
+├── CONTEXT.md                     ← This file
+├── CLAUDE.md                      ← Project instructions
+└── package.json                   ← name: "mvp-echo" (root/lite)
+```
+
+### Approved UI Components (built, not yet integrated)
+| Component | Location | Preview |
+|-----------|----------|---------|
+| WelcomeScreen | `app/renderer/app/components/WelcomeScreen.tsx` (root) | `npm run dev` from root → `http://localhost:5173/?preview=welcome` |
+| SettingsPanel | `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/popup.html` |
+
+### Browser Preview Notes
+- `mvp-echo-toolbar/app/renderer/app/popup-main.tsx` wraps PopupApp in a 380x300 container for browser preview
+- SettingsPanel IPC calls are guarded with `?.` for browser compatibility
+- Root project has `browser-mock.ts` with `getWelcomePreference`/`setWelcomePreference` mocks
 
 ---
 

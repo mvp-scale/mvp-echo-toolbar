@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback, useReducer } from 'rea
 import OceanVisualizer from './components/OceanVisualizer';
 import { SetupProgress } from './components/SetupProgress';
 import { EngineSelector } from './components/EngineSelector';
+import { WelcomeScreen } from './components/WelcomeScreen';
+import { SettingsPanel } from './components/SettingsPanel';
 
 // Audio recording functionality (renderer process)
 class AudioCapture {
@@ -142,7 +144,23 @@ export default function App() {
   // Setup state
   const [isInitialized, setIsInitialized] = useState(false);
   const [showSetup, setShowSetup] = useState(true);
+
+  // Welcome screen state
+  const [showWelcome, setShowWelcome] = useState(false);
   
+  // Check welcome screen preference on mount
+  useEffect(() => {
+    if (isElectron) {
+      (window as any).electronAPI.getWelcomePreference().then((pref: any) => {
+        if (pref.showOnStartup) {
+          setShowWelcome(true);
+        }
+      }).catch(() => {
+        // If IPC fails (e.g. dev browser), don't show
+      });
+    }
+  }, [isElectron]);
+
   // Debug: Log when component mounts and cleanup on unmount
   useEffect(() => {
     console.log('MVP-Echo: App component mounted successfully');
@@ -375,6 +393,9 @@ export default function App() {
 
 
 
+  // Settings panel toggle
+  const [showSettings, setShowSettings] = useState(false);
+
   return (
     <div className={`min-h-screen bg-background text-foreground transition-all duration-500 ${
       privacyReminder ? 'ring-4 ring-orange-400/50 shadow-2xl shadow-orange-400/20' : ''
@@ -535,13 +556,13 @@ export default function App() {
             <div className="flex items-center justify-between text-[10px]">
               {/* Condensed System Information */}
               <div className="flex items-center gap-2 text-muted-foreground">
-                <span>v1.0.0</span>
+                <span>v3.0.0</span>
                 <span>•</span>
-                <span>{systemInfo?.gpuAvailable ? `${systemInfo.gpuMode}` : 'CPU'}</span>
+                <span>{systemInfo?.gpuAvailable ? `${systemInfo.gpuMode}` : 'GPU Server'}</span>
                 <span>•</span>
-                <span>{systemInfo?.whisperModel?.replace('faster-whisper ', '') || 'tiny'}</span>
+                <span>English</span>
               </div>
-              
+
               {/* Status and Controls */}
               <div className="flex items-center gap-3">
                 {/* Status Indicator */}
@@ -570,42 +591,53 @@ export default function App() {
                     </>
                   )}
                 </div>
-                
+
                 {/* Privacy Mode Toggle Button */}
                 <button
                   onClick={() => {
-                    console.log('Privacy button clicked, current state:', privacyMode);
                     setPrivacyMode(!privacyMode);
-                    console.log('Setting privacy mode to:', !privacyMode);
                   }}
                   className={`px-2 py-0.5 rounded text-[9px] font-medium transition-all duration-200 cursor-pointer border ${
-                    privacyMode 
-                      ? 'bg-orange-500/20 text-orange-600 hover:bg-orange-500/40 border-orange-500/30' 
+                    privacyMode
+                      ? 'bg-orange-500/20 text-orange-600 hover:bg-orange-500/40 border-orange-500/30'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200 border-transparent hover:border-slate-300'
                   }`}
                   title={privacyMode ? "Disable Privacy Mode" : "Enable Privacy Mode"}
                 >
                   Privacy
                 </button>
+
+                {/* Settings Gear */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowSettings(!showSettings)}
+                    className={`p-1 rounded transition-all duration-200 cursor-pointer ${
+                      showSettings
+                        ? 'text-primary bg-primary/10'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                    }`}
+                    title="Settings"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+                    </svg>
+                  </button>
+
+                  {/* Settings Panel - anchored above the gear */}
+                  {showSettings && (
+                    <SettingsPanel onClose={() => setShowSettings(false)} />
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </footer>
       </div>
-      
-      {/* Setup Progress - Shows at bottom during initialization */}
-      {showSetup && (
-        <SetupProgress 
-          onComplete={() => {
-            setIsInitialized(true);
-            setShowSetup(false);
-          }}
-        />
-      )}
-      
-      {/* Engine Selector - Shows engine status and upgrade option */}
-      {isInitialized && !showSetup && (
-        <EngineSelector />
+
+      {/* Welcome Screen - shows on startup unless user opted out */}
+      {showWelcome && (
+        <WelcomeScreen onDismiss={() => setShowWelcome(false)} />
       )}
     </div>
   );

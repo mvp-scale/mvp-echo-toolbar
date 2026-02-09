@@ -18,7 +18,7 @@ export default function TranscriptionDisplay({ text, processingTime, onCopy }: P
 
   return (
     <div
-      className={`flex-1 min-h-[120px] px-3 py-2 cursor-pointer transition-colors ${
+      className={`px-3 py-2 cursor-pointer transition-colors ${
         text ? 'hover:bg-muted/30' : ''
       } ${copied ? 'bg-green-500/10' : ''}`}
       onClick={handleClick}

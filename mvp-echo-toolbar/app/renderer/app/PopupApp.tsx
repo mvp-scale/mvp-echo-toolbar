@@ -52,8 +52,8 @@ export default function PopupApp() {
     }
   }, []);
 
-  const modelDisplay = transcription.model?.split('/').pop() || 'base';
-  const langDisplay = transcription.language?.toUpperCase() || 'EN';
+  const modelDisplay = transcription.model?.split('/').pop() || '';
+  const langDisplay = '';
 
   return (
     <div className="w-full h-full bg-background text-foreground rounded-lg border border-border shadow-xl overflow-hidden flex flex-col select-none">
@@ -79,19 +79,23 @@ export default function PopupApp() {
         </button>
       </div>
 
-      {/* Transcription area */}
-      <TranscriptionDisplay
-        text={transcription.text}
-        processingTime={transcription.processingTime}
-        onCopy={handleCopy}
-      />
+      {/* Scrollable content area — transcription + settings share this space */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        <TranscriptionDisplay
+          text={transcription.text}
+          processingTime={transcription.processingTime}
+          onCopy={handleCopy}
+        />
 
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-muted/30 text-[10px]">
+        {/* Collapsible settings */}
+        {showSettings && <SettingsPanel />}
+      </div>
+
+      {/* Status bar — always pinned to bottom */}
+      <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border bg-muted/30 text-[10px]">
         <div className="flex items-center gap-2">
           <StatusIndicator />
-          <span className="text-muted-foreground">{modelDisplay}</span>
-          <span className="text-muted-foreground">{langDisplay}</span>
+          {modelDisplay && <span className="text-muted-foreground">{modelDisplay}</span>}
         </div>
         <button
           onClick={() => setShowSettings(!showSettings)}
@@ -104,9 +108,6 @@ export default function PopupApp() {
           Settings
         </button>
       </div>
-
-      {/* Collapsible settings */}
-      {showSettings && <SettingsPanel />}
     </div>
   );
 }

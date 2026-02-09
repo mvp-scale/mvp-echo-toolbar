@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
   bringToForeground: () => ipcRenderer.invoke('bring-to-foreground'),
   
+  // Welcome screen preference
+  getWelcomePreference: () => ipcRenderer.invoke('welcome:get-preference'),
+  setWelcomePreference: (pref) => ipcRenderer.invoke('welcome:set-preference', pref),
+
   // Global shortcut event listeners
   onGlobalShortcutToggle: (callback) => {
     // Remove any existing listeners to prevent accumulation

@@ -350,6 +350,32 @@ ipcMain.handle('processAudio', async (event, audioArray) => {
   }
 });
 
+// Welcome screen preference handlers
+const welcomeConfigPath = path.join(app.getPath('userData'), 'welcome-config.json');
+
+ipcMain.handle('welcome:get-preference', async () => {
+  try {
+    if (fs.existsSync(welcomeConfigPath)) {
+      const data = JSON.parse(fs.readFileSync(welcomeConfigPath, 'utf8'));
+      return { showOnStartup: data.showOnStartup !== false };
+    }
+  } catch (err) {
+    log('Failed to read welcome config: ' + err.message);
+  }
+  return { showOnStartup: true };
+});
+
+ipcMain.handle('welcome:set-preference', async (event, preference) => {
+  try {
+    fs.writeFileSync(welcomeConfigPath, JSON.stringify(preference, null, 2), 'utf8');
+    log('Welcome preference saved: ' + JSON.stringify(preference));
+    return { success: true };
+  } catch (err) {
+    log('Failed to save welcome config: ' + err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 // Export file handler
 ipcMain.handle('export-text', async (event, content, filename) => {
   const { dialog } = require('electron');
