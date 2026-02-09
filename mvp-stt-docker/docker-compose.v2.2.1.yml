@@ -1,20 +1,18 @@
-# MVP Speech-to-Text Docker Stack (v3.0 — Hexagonal Architecture)
+# MVP Speech-to-Text Docker Stack
 #
-# mvp-bridge: HTTP API server with pluggable STT adapters
+# mvp-asr:    sherpa-onnx C++ WebSocket server (GPU, downloads model on first run)
+# mvp-bridge: HTTP-to-WebSocket bridge (OpenAI-compatible API)
 # mvp-auth:   Auth proxy (CORS + API keys + usage tracking)
 #
-# Default mode (websocket adapter — proven stable):
+# Usage:
 #   docker compose up -d --build
-#
-# Subprocess mode (experimental — sherpa-onnx-offline CLI):
-#   Set ADAPTER_TYPE=subprocess in mvp-bridge environment
 #
 # Test:
 #   curl http://localhost:20300/health
 
 services:
-  # -- ASR Engine (sherpa-onnx C++ WebSocket server + GPU) --
-  # Required for default websocket adapter mode.
+  # ── ASR Engine (sherpa-onnx C++ WebSocket server + GPU) ──
+  # Downloads model from HuggingFace on first start, then runs WebSocket server
   mvp-asr:
     build:
       context: .
@@ -48,7 +46,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # -- HTTP Bridge (hexagonal architecture with pluggable adapters) --
+  # ── HTTP Bridge (translates HTTP POST → WebSocket) ──
   mvp-bridge:
     build:
       context: .
@@ -56,25 +54,12 @@ services:
     container_name: mvp-bridge
     expose:
       - "8000"
-    volumes:
-      - mvp-models:/models
     environment:
-      - ADAPTER_TYPE=websocket
-      - LISTEN_PORT=8000
-      - MODEL_DIR=/models
-      - DEFAULT_MODEL=parakeet-tdt-0.6b-v2-int8
-      - SHERPA_PROVIDER=cuda
-      - SHERPA_NUM_THREADS=4
-      # WebSocket adapter settings (used when ADAPTER_TYPE=websocket)
       - WS_HOST=mvp-asr
       - WS_PORT=6006
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - LISTEN_PORT=8000
+    depends_on:
+      - mvp-asr
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -82,7 +67,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # -- Auth Proxy (CORS + API keys + usage tracking) --
+  # ── Auth Proxy (CORS + API keys + usage tracking) ──
   mvp-auth:
     image: python:3.12-slim
     container_name: mvp-auth

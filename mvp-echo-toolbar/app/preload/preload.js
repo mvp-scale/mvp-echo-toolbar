@@ -37,6 +37,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Popup: hide
   hidePopup: () => ipcRenderer.invoke('popup:hide'),
+
+  // Welcome screen
+  getWelcomePreference: () => ipcRenderer.invoke('welcome:get-preference'),
+  setWelcomePreference: (pref) => ipcRenderer.invoke('welcome:set-preference', pref),
+  closeWelcome: () => ipcRenderer.invoke('welcome:close'),
+
+  // App info
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 });
 
 // Cloud configuration IPC (used by popup settings panel)
@@ -45,6 +53,7 @@ contextBridge.exposeInMainWorld('electron', {
     invoke: (channel, ...args) => {
       const validChannels = [
         'cloud:configure', 'cloud:test-connection', 'cloud:get-config',
+        'engine:list-models', 'engine:switch-model', 'engine:status',
         'debug:open-devtools', 'debug:renderer-log'
       ];
       if (validChannels.includes(channel)) {

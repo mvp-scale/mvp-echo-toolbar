@@ -3,10 +3,10 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-const WhisperRemoteEngine = require('../stt/whisper-remote');
+const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
 
-const cloudEngine = new WhisperRemoteEngine();
+const engineManager = new EngineManager();
 const trayManager = new TrayManager();
 
 // File logging
@@ -96,8 +96,6 @@ app.on('second-instance', () => {
 let hiddenWindow = null;
 let popupWindow = null;
 let shortcutActive = false;
-let lastTranscription = '';
-let lastTranscriptionMeta = {};
 
 function getPreloadPath() {
   return path.resolve(__dirname, '../preload/preload.js');
@@ -241,10 +239,7 @@ function togglePopup() {
     popupWindow.hide();
   } else {
     // Send latest transcription data before showing
-    popupWindow.webContents.send('transcription-updated', {
-      text: lastTranscription,
-      ...lastTranscriptionMeta,
-    });
+    popupWindow.webContents.send('transcription-updated', engineManager.getLastTranscription());
     positionPopup();
     popupWindow.show();
     popupWindow.focus();
@@ -252,84 +247,46 @@ function togglePopup() {
 }
 
 /**
- * Show a welcome window on first run (replaces tray balloon which Win11 suppresses)
+ * Show the approved React welcome screen on first run.
+ * Uses welcome-config.json to track "don't show again" preference.
  */
-function showWelcomeWindow(shortcutLabel) {
-  const version = require('../../package.json').version;
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; }
-  body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #1a1a2e; color: #e0e0e0;
-    padding: 20px 22px 16px; user-select: none;
-    -webkit-app-region: drag;
-  }
-  .header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
-  h1 { font-size: 16px; font-weight: 600; color: #fff; }
-  .version { font-size: 11px; color: #556; }
-  .subtitle { font-size: 11px; color: #888; margin-bottom: 14px; }
-  .card {
-    background: #16213e; border-radius: 8px; padding: 10px 14px;
-    margin-bottom: 8px; display: flex; align-items: flex-start; gap: 10px;
-  }
-  .card .icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
-  .card h2 { font-size: 12px; font-weight: 600; color: #fff; margin-bottom: 2px; }
-  .card p { font-size: 11px; color: #aaa; line-height: 1.35; }
-  kbd {
-    background: #0f3460; border-radius: 4px; padding: 1px 5px;
-    font-family: 'Segoe UI', monospace; font-size: 11px; color: #7ec8e3;
-  }
-  .btn {
-    -webkit-app-region: no-drag;
-    display: block; width: 100%; margin-top: 14px; padding: 9px;
-    background: #0f3460; color: #7ec8e3; border: none; border-radius: 8px;
-    font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s;
-  }
-  .btn:hover { background: #1a4a7a; }
-</style></head><body>
-  <div class="header">
-    <h1>MVP-Echo Toolbar</h1>
-    <span class="version">v${version}</span>
-  </div>
-  <p class="subtitle">Quick tips to get started</p>
-  <div class="card">
-    <span class="icon">&#127908;</span>
-    <div><h2>Record</h2><p>Press <kbd>${shortcutLabel}</kbd> to start &amp; stop recording from anywhere.</p></div>
-  </div>
-  <div class="card">
-    <span class="icon">&#128269;</span>
-    <div><h2>System Tray</h2><p>Look for the microphone icon in your system tray (bottom-right). Click it to see transcriptions.</p></div>
-  </div>
-  <div class="card">
-    <span class="icon">&#128203;</span>
-    <div><h2>Auto-Copy</h2><p>Transcriptions are automatically copied to your clipboard when finished.</p></div>
-  </div>
-  <button class="btn" onclick="window.close()">Got it</button>
-</body></html>`;
+let welcomeWindow = null;
 
-  const welcomeWin = new BrowserWindow({
-    width: 380,
-    height: 330,
+function showWelcomeWindow() {
+  const preloadPath = getPreloadPath();
+
+  welcomeWindow = new BrowserWindow({
+    width: 540,
+    height: 640,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: false,
     center: true,
     show: false,
+    transparent: false,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
+      preload: preloadPath,
     },
   });
 
-  welcomeWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  if (process.env.NODE_ENV === 'development') {
+    welcomeWindow.loadURL('http://localhost:5173/welcome.html');
+  } else {
+    const htmlPath = path.join(__dirname, '../../dist/renderer/welcome.html');
+    welcomeWindow.loadFile(htmlPath);
+  }
 
-  welcomeWin.once('ready-to-show', () => {
-    welcomeWin.show();
-    welcomeWin.focus();
+  welcomeWindow.once('ready-to-show', () => {
+    welcomeWindow.show();
+    welcomeWindow.focus();
+  });
+
+  welcomeWindow.on('closed', () => {
+    welcomeWindow = null;
   });
 }
 
@@ -356,20 +313,37 @@ app.whenReady().then(async () => {
     shortcutLabel,
   });
 
-  // Welcome window: show once (marker file prevents repeat)
-  const welcomePath = path.join(app.getPath('userData'), '.welcome-complete');
-  if (!fs.existsSync(welcomePath)) {
+  // Welcome window: show unless user dismissed this version's welcome
+  const welcomeCfgPath = path.join(app.getPath('userData'), 'welcome-config.json');
+  const currentVersion = app.getVersion();
+  let showWelcome = true;
+  try {
+    if (fs.existsSync(welcomeCfgPath)) {
+      const data = JSON.parse(fs.readFileSync(welcomeCfgPath, 'utf8'));
+      // Show welcome again if version changed (new release)
+      showWelcome = data.dismissedVersion !== currentVersion;
+    }
+  } catch (_e) { /* show by default on error */ }
+
+  if (showWelcome) {
     log('Showing welcome window');
-    showWelcomeWindow(shortcutLabel);
-    try {
-      fs.writeFileSync(welcomePath, new Date().toISOString());
-    } catch (_e) { /* ignore */ }
+    showWelcomeWindow();
   }
 
   // Create hidden capture window
   createHiddenWindow();
 
-  log('MVP-Echo Toolbar: Cloud engine ready');
+  // Initialize engine manager (probes adapters, selects best one)
+  const engineStatus = await engineManager.initialize();
+  log('EngineManager initialized: ' + JSON.stringify(engineStatus));
+
+  // Register engine IPC handlers (processAudio, cloud:*, engine:*, get-last-transcription)
+  engineManager.setupIPC({
+    hiddenWindow,
+    getPopupWindow: () => popupWindow,
+  });
+
+  log('MVP-Echo Toolbar: Engine ready');
 
   // Register global shortcut (configurable)
   const ret = globalShortcut.register(appConfig.shortcut, () => {
@@ -437,18 +411,11 @@ ipcMain.handle('tray:update-state', async (_event, state) => {
   return { success: true };
 });
 
-// Get last transcription (for popup)
-ipcMain.handle('get-last-transcription', async () => {
-  return {
-    text: lastTranscription,
-    ...lastTranscriptionMeta,
-  };
-});
-
 // Copy last transcription and close popup
 ipcMain.handle('popup:copy-and-close', async () => {
-  if (lastTranscription) {
-    clipboard.writeText(lastTranscription);
+  const last = engineManager.getLastTranscription();
+  if (last.text) {
+    clipboard.writeText(last.text);
   }
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.hide();
@@ -464,105 +431,6 @@ ipcMain.handle('popup:hide', async () => {
   return { success: true };
 });
 
-// Process audio with Cloud STT
-ipcMain.handle('processAudio', async (_event, audioArray, options = {}) => {
-  log('Processing audio array of length: ' + audioArray.length);
-
-  try {
-    if (!cloudEngine.isConfigured) {
-      throw new Error('Cloud endpoint not configured. Please configure in Settings.');
-    }
-
-    const tempPath = path.join(os.tmpdir(), `mvp-echo-audio-${Date.now()}.webm`);
-    const audioBuffer = Buffer.from(audioArray);
-    fs.writeFileSync(tempPath, audioBuffer);
-
-    const result = await cloudEngine.transcribe(tempPath, {
-      model: options.model,
-      language: options.language,
-    });
-
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tempPath);
-    } catch (e) {
-      log('Failed to clean up temp file: ' + e.message);
-    }
-
-    // Store last transcription for popup
-    lastTranscription = result.text;
-    lastTranscriptionMeta = {
-      processingTime: result.processingTime,
-      engine: result.engine,
-      language: result.language,
-      model: result.model,
-    };
-
-    // Notify popup if it's open
-    if (popupWindow && !popupWindow.isDestroyed()) {
-      popupWindow.webContents.send('transcription-updated', {
-        text: lastTranscription,
-        ...lastTranscriptionMeta,
-      });
-    }
-
-    log('Cloud transcription result: ' + JSON.stringify(result));
-
-    return {
-      success: true,
-      text: result.text,
-      processingTime: result.processingTime,
-      engine: result.engine,
-      language: result.language,
-      model: result.model,
-    };
-  } catch (error) {
-    log('Cloud processing failed: ' + error.message);
-
-    // Clean up temp file on error
-    try {
-      const tmpDir = os.tmpdir();
-      const orphans = fs.readdirSync(tmpDir).filter(f => f.startsWith('mvp-echo-audio-') && f.endsWith('.webm'));
-      orphans.forEach(f => {
-        try { fs.unlinkSync(path.join(tmpDir, f)); } catch (_e) { /* ignore */ }
-      });
-    } catch (_e) { /* ignore */ }
-
-    return {
-      success: false,
-      text: '',
-      processingTime: 0,
-      engine: 'Cloud (error)',
-      error: error.message,
-    };
-  }
-});
-
-// Cloud configuration
-ipcMain.handle('cloud:configure', async (_event, config) => {
-  log('Configuring cloud endpoint: ' + config.endpointUrl);
-
-  cloudEngine.endpointUrl = config.endpointUrl;
-  cloudEngine.apiKey = config.apiKey || null;
-  if (config.model) cloudEngine.selectedModel = config.model;
-  if (config.language !== undefined) cloudEngine.language = config.language || null;
-  cloudEngine.isConfigured = !!config.endpointUrl;
-  cloudEngine.saveConfig();
-
-  return { success: true };
-});
-
-ipcMain.handle('cloud:test-connection', async () => {
-  log('Testing cloud connection...');
-  const result = await cloudEngine.testConnection();
-  log('Connection test result: ' + JSON.stringify(result));
-  return result;
-});
-
-ipcMain.handle('cloud:get-config', () => {
-  return cloudEngine.getConfig();
-});
-
 // Debug: open DevTools for capture window (where audio/transcription logs are)
 ipcMain.handle('debug:open-devtools', async () => {
   log('Opening DevTools for capture window');
@@ -575,4 +443,44 @@ ipcMain.handle('debug:open-devtools', async () => {
 // Debug: receive log messages from capture window renderer
 ipcMain.handle('debug:renderer-log', async (_event, message) => {
   log(`[capture] ${message}`);
+});
+
+// Welcome screen preference handlers
+const welcomeConfigPath = path.join(app.getPath('userData'), 'welcome-config.json');
+
+ipcMain.handle('welcome:get-preference', async () => {
+  try {
+    const currentVersion = app.getVersion();
+    if (fs.existsSync(welcomeConfigPath)) {
+      const data = JSON.parse(fs.readFileSync(welcomeConfigPath, 'utf8'));
+      // Show welcome if this version hasn't been dismissed
+      return { showOnStartup: data.dismissedVersion !== currentVersion };
+    }
+  } catch (err) {
+    log('Failed to read welcome config: ' + err.message);
+  }
+  return { showOnStartup: true };
+});
+
+ipcMain.handle('welcome:set-preference', async (_event, preference) => {
+  try {
+    const data = { dismissedVersion: preference.dismissedVersion || app.getVersion() };
+    fs.writeFileSync(welcomeConfigPath, JSON.stringify(data, null, 2), 'utf8');
+    log('Welcome preference saved: ' + JSON.stringify(data));
+    return { success: true };
+  } catch (err) {
+    log('Failed to save welcome config: ' + err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('app:get-version', async () => {
+  return app.getVersion();
+});
+
+ipcMain.handle('welcome:close', async () => {
+  if (welcomeWindow && !welcomeWindow.isDestroyed()) {
+    welcomeWindow.close();
+  }
+  return { success: true };
 });

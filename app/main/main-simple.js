@@ -193,18 +193,21 @@ app.on('will-quit', () => {
 });
 
 app.on('before-quit', async () => {
-  // Cleanup Whisper engine resources
+  // Cleanup engine manager resources (native + Python engines)
   try {
-    await whisperEngine.cleanup();
+    if (engineManager.pythonEngine && typeof engineManager.pythonEngine.cleanup === 'function') {
+      await engineManager.pythonEngine.cleanup();
+      log('Engine manager: Python engine cleanup completed');
+    }
   } catch (error) {
-    log('Error during app cleanup: ' + error.message);
+    log('Error during engine cleanup: ' + error.message);
   }
-  
+
   // Cleanup Python manager if available
   if (pythonManager) {
     try {
       await pythonManager.cleanup();
-      log('✅ Python manager cleanup completed');
+      log('Python manager cleanup completed');
     } catch (error) {
       log('Error during Python manager cleanup: ' + error.message);
     }
@@ -230,16 +233,18 @@ ipcMain.handle('get-system-info', async () => {
   let hasGpu = false;
   let gpuProvider = 'CPU';
   
-  // No longer using ONNX Runtime - Python Whisper handles GPU detection
-  log('Using Python faster-whisper for speech recognition');
-  hasGpu = false; // Will be determined by Python service
-  gpuProvider = 'Python faster-whisper';
-  
-  // Get current Whisper model information
-  const whisperStatus = whisperEngine.getStatus();
-  const modelInfo = whisperStatus.initialized 
-    ? whisperStatus.modelPath 
-    : 'faster-whisper tiny'; // Default model that will be used
+  // Get engine status from the engine manager
+  let engineStatus = { current: 'native', gpu: false };
+  try {
+    engineStatus = engineManager.getStatus();
+    hasGpu = engineStatus.gpu || false;
+    gpuProvider = hasGpu ? 'GPU' : 'CPU';
+    log('Engine manager status: ' + JSON.stringify(engineStatus));
+  } catch (err) {
+    log('Failed to get engine status: ' + err.message);
+  }
+
+  const modelInfo = engineStatus.current || 'native';
   
   // Get portable session info if available
   const portableInfo = pythonManager ? pythonManager.getSessionInfo() : { active: false, portable: false };

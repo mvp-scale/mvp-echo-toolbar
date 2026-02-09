@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         main: path.resolve(__dirname, 'app/renderer/index.html'),
         popup: path.resolve(__dirname, 'app/renderer/popup.html'),
+        welcome: path.resolve(__dirname, 'app/renderer/welcome.html'),
       },
     },
   },

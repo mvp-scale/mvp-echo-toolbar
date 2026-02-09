@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 type ModelState = 'loaded' | 'available' | 'download' | 'switching';
 
@@ -10,10 +10,23 @@ interface ModelOption {
   state: ModelState;
 }
 
+// Client-side label fallback for when server doesn't return label/detail
+const GPU_MODEL_MAP: Record<string, { label: string; detail: string }> = {
+  'parakeet-tdt-0.6b-v2-int8': { label: 'English', detail: 'Recommended' },
+  'parakeet-tdt-1.1b-v2-int8': { label: 'English HD', detail: 'Highest accuracy' },
+  'parakeet-tdt-0.6b-v3-int8': { label: 'Multilingual', detail: '25 languages' },
+};
+
 const DEFAULT_MODELS: ModelOption[] = [
-  { id: 'gpu-english', label: 'English', detail: 'Recommended', group: 'gpu', state: 'loaded' },
+  { id: 'gpu-english', label: 'English', detail: 'Recommended', group: 'gpu', state: 'available' },
   { id: 'gpu-english-hd', label: 'English HD', detail: 'Highest accuracy', group: 'gpu', state: 'available' },
   { id: 'gpu-multilingual', label: 'Multilingual', detail: '25 languages', group: 'gpu', state: 'available' },
+  { id: 'local-fast', label: 'Fast', detail: '75MB', group: 'local', state: 'download' },
+  { id: 'local-balanced', label: 'Balanced', detail: '150MB', group: 'local', state: 'download' },
+  { id: 'local-accurate', label: 'Accurate', detail: '480MB', group: 'local', state: 'download' },
+];
+
+const LOCAL_MODELS: ModelOption[] = [
   { id: 'local-fast', label: 'Fast', detail: '75MB', group: 'local', state: 'download' },
   { id: 'local-balanced', label: 'Balanced', detail: '150MB', group: 'local', state: 'download' },
   { id: 'local-accurate', label: 'Accurate', detail: '480MB', group: 'local', state: 'download' },
@@ -26,9 +39,9 @@ function StateIndicator({ state }: { state: ModelState }) {
     case 'available':
       return <span className="flex items-center gap-1 text-[9px] text-muted-foreground"><span className="w-1.5 h-1.5 rounded-full border border-muted-foreground" />available</span>;
     case 'download':
-      return <span className="flex items-center gap-1 text-[9px] text-blue-400 font-medium">↓ download</span>;
+      return <span className="flex items-center gap-1 text-[9px] text-blue-400 font-medium">&darr; download</span>;
     case 'switching':
-      return <span className="flex items-center gap-1 text-[9px] text-yellow-400 font-medium animate-pulse">⏳ switching</span>;
+      return <span className="flex items-center gap-1 text-[9px] text-yellow-400 font-medium animate-pulse">&#9203; switching</span>;
   }
 }
 
@@ -39,24 +52,55 @@ export default function SettingsPanel() {
   const [selectedModelId, setSelectedModelId] = useState('gpu-english');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'testing' | 'connected'>('disconnected');
   const [configLoaded, setConfigLoaded] = useState(false);
+  const ipcRef = useRef<any>(null);
 
-  const selectedModel = models.find(m => m.id === selectedModelId);
   const gpuModels = models.filter(m => m.group === 'gpu');
   const localModels = models.filter(m => m.group === 'local');
 
-  // Determine if API key is needed (HTTPS or non-local)
-  const isLocal = (() => {
+  // Fetch real model list from engine manager via IPC
+  const fetchModels = useCallback(async () => {
+    const ipc = ipcRef.current;
+    if (!ipc) return;
+
     try {
-      const url = new URL(endpointUrl);
-      const host = url.hostname;
-      return host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.');
-    } catch { return true; }
-  })();
-  const requiresApiKey = !isLocal || endpointUrl.startsWith('https://');
+      const serverModels: Array<{ id: string; label: string; group: string; state: string }> =
+        await ipc.invoke('engine:list-models');
+
+      if (!serverModels || serverModels.length === 0) return;
+
+      // Map server GPU models, applying client-side fallback labels
+      const gpuFromServer: ModelOption[] = serverModels
+        .filter(m => m.group === 'gpu')
+        .map(m => {
+          const fallback = GPU_MODEL_MAP[m.id];
+          return {
+            id: m.id,
+            label: fallback?.label || m.label || m.id,
+            detail: fallback?.detail || '',
+            group: 'gpu' as const,
+            state: m.state as ModelState,
+          };
+        });
+
+      // Merge with static local CPU models
+      const merged = [...gpuFromServer, ...LOCAL_MODELS];
+      setModels(merged);
+
+      // Auto-select the loaded model
+      const loaded = gpuFromServer.find(m => m.state === 'loaded');
+      if (loaded) {
+        setSelectedModelId(loaded.id);
+      }
+    } catch (e) {
+      console.error('Failed to fetch models:', e);
+      // Keep current models as fallback
+    }
+  }, []);
 
   // Load config on mount
   useEffect(() => {
     const ipc = (window as any).electron?.ipcRenderer;
+    ipcRef.current = ipc;
     if (!ipc) { setConfigLoaded(true); return; }
 
     const loadConfig = async () => {
@@ -65,7 +109,10 @@ export default function SettingsPanel() {
         if (config) {
           if (config.endpointUrl) setEndpointUrl(config.endpointUrl);
           if (config.apiKey) setApiKey(config.apiKey);
-          if (config.isConfigured) setConnectionStatus('connected');
+          if (config.selectedModel) setSelectedModelId(config.selectedModel);
+          if (config.isConfigured) {
+            setConnectionStatus('connected');
+          }
         }
       } catch (e) {
         console.error('Failed to load cloud config:', e);
@@ -73,21 +120,20 @@ export default function SettingsPanel() {
         setConfigLoaded(true);
       }
     };
-    loadConfig();
-  }, []);
+    loadConfig().then(() => fetchModels());
+  }, [fetchModels]);
 
-  // Save config when settings change
+  // Save config when endpoint/apiKey change (not selectedModelId -- saved explicitly on switch)
   useEffect(() => {
     if (!configLoaded) return;
-    const ipc = (window as any).electron?.ipcRenderer;
+    const ipc = ipcRef.current;
     if (!ipc) return;
 
     ipc.invoke('cloud:configure', {
       endpointUrl,
       apiKey,
-      model: selectedModelId,
     }).catch((err: Error) => console.warn('Failed to save cloud config:', err));
-  }, [configLoaded, endpointUrl, apiKey, selectedModelId]);
+  }, [configLoaded, endpointUrl, apiKey]);
 
   const handleDebug = useCallback(() => {
     (window as any).electron?.ipcRenderer?.invoke('debug:open-devtools').catch(() => {});
@@ -98,45 +144,71 @@ export default function SettingsPanel() {
     setConnectionStatus('testing');
 
     try {
-      const ipc = (window as any).electron?.ipcRenderer;
+      const ipc = ipcRef.current;
       if (!ipc) { setConnectionStatus('disconnected'); return; }
 
       await ipc.invoke('cloud:configure', {
         endpointUrl,
         apiKey,
-        model: selectedModelId,
       });
 
       const result = await ipc.invoke('cloud:test-connection');
       setConnectionStatus(result.success ? 'connected' : 'disconnected');
+
+      if (result.success) {
+        await fetchModels();
+      }
     } catch (_error) {
       setConnectionStatus('disconnected');
     }
-  }, [endpointUrl, apiKey, selectedModelId]);
+  }, [endpointUrl, apiKey, fetchModels]);
 
-  const handleSelectModel = (model: ModelOption) => {
-    if (model.state === 'download') {
-      // TODO: trigger download confirmation → progress → ready
+  const handleSelectModel = useCallback(async (model: ModelOption) => {
+    if (model.state === 'download' || model.state === 'switching') {
       return;
     }
-    if (model.state === 'available') {
-      setModels(prev => prev.map(m => ({
-        ...m,
-        state: m.id === model.id ? 'switching' as ModelState :
-               m.id === selectedModelId ? 'available' as ModelState :
-               m.state
-      })));
-      setTimeout(() => {
+
+    if (model.state === 'loaded') {
+      setSelectedModelId(model.id);
+      return;
+    }
+
+    // state === 'available': optimistic UI then real IPC switch
+    const previousSelectedId = selectedModelId;
+
+    setModels(prev => prev.map(m => ({
+      ...m,
+      state: m.id === model.id ? 'switching' as ModelState :
+             m.id === previousSelectedId ? 'available' as ModelState :
+             m.state
+    })));
+
+    const ipc = ipcRef.current;
+    if (!ipc) return;
+
+    try {
+      const result = await ipc.invoke('engine:switch-model', model.id);
+      if (result.success) {
         setModels(prev => prev.map(m => ({
           ...m,
-          state: m.id === model.id ? 'loaded' as ModelState : m.state
+          state: m.id === model.id ? 'loaded' as ModelState :
+                 m.group === 'gpu' && m.state === 'loaded' ? 'available' as ModelState :
+                 m.state
         })));
         setSelectedModelId(model.id);
-      }, 2000);
-    } else if (model.state === 'loaded') {
-      setSelectedModelId(model.id);
+
+        // Persist the new model selection
+        ipc.invoke('cloud:configure', { model: model.id }).catch(() => {});
+      } else {
+        // Switch failed -- re-fetch real state
+        console.error('Model switch failed:', result.error);
+        await fetchModels();
+      }
+    } catch (e) {
+      console.error('Model switch error:', e);
+      await fetchModels();
     }
-  };
+  }, [selectedModelId, fetchModels]);
 
   return (
     <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[400px] overflow-y-auto">
@@ -158,13 +230,13 @@ export default function SettingsPanel() {
         {/* API Key */}
         <div>
           <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
-            API Key {!requiresApiKey && <span className="text-muted-foreground/50">(optional for local)</span>}
+            API Key
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={requiresApiKey ? 'Required for remote/HTTPS' : 'sk-... (optional)'}
+            placeholder="sk-..."
             className="w-full px-2 py-1 text-[10px] bg-background border border-border rounded"
           />
         </div>
@@ -188,7 +260,7 @@ export default function SettingsPanel() {
               }`}
             >
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">⚡</span>
+                <span className="text-[10px]">&#9889;</span>
                 <span className="text-[10px] text-foreground">{model.label}</span>
                 {model.detail === 'Recommended' && (
                   <span className="text-[7px] bg-primary/10 text-primary px-1 py-0.5 rounded font-medium">
@@ -216,7 +288,7 @@ export default function SettingsPanel() {
               }`}
             >
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]">💻</span>
+                <span className="text-[10px]">&#128187;</span>
                 <span className="text-[10px] text-foreground">{model.label}</span>
                 <span className="text-[9px] text-muted-foreground">({model.detail})</span>
               </div>

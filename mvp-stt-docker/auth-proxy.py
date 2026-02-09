@@ -134,15 +134,8 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
     def authenticate(self):
         """
         Validate the request. Returns (api_key, name) tuple or None if unauthorized.
-        Local IPs bypass auth and return ("local", "Local Network").
+        All requests require a valid API key regardless of source IP.
         """
-        client_ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        if not client_ip:
-            client_ip = self.client_address[0]
-
-        if is_private_ip(client_ip):
-            return ("local", "Local Network")
-
         auth_header = self.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return None
@@ -161,7 +154,11 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
     def proxy_request(self, method):
         """Proxy the request to the ASR backend."""
         auth_result = None
-        if self.path not in ("/health", "/v1/models"):
+        if self.path == "/health":
+            # Health check is always unauthenticated (for uptime monitoring)
+            auth_result = ("health", "Health Check")
+        else:
+            # All other endpoints require a valid API key
             auth_result = self.authenticate()
             if auth_result is None:
                 client_ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
@@ -172,8 +169,6 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Invalid or missing API key"}).encode())
                 return
-        else:
-            auth_result = ("health", "Health Check")
 
         # Extract app version from User-Agent
         ua = self.headers.get("User-Agent", "")
@@ -264,7 +259,7 @@ if __name__ == "__main__":
     print(f"[mvp-auth] Backend: {ASR_BACKEND}")
     print(f"[mvp-auth] Keys file: {KEYS_FILE}")
     print(f"[mvp-auth] Usage file: {USAGE_FILE}")
-    print(f"[mvp-auth] Private IPs bypass auth")
+    print(f"[mvp-auth] API key required for all requests (except /health)")
 
     keys = load_keys()
     print(f"[mvp-auth] Loaded {len(keys)} active API key(s)")

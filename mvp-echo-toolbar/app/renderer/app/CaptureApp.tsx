@@ -10,7 +10,7 @@ import { playCompletionSound } from './audio/completion-sound';
 export default function CaptureApp() {
   const audioCapture = useRef(new AudioCapture());
   const isRecordingRef = useRef(false);
-  const selectedModelRef = useRef('deepdml/faster-whisper-large-v3-turbo-ct2');
+  const selectedModelRef = useRef('gpu-english');
   const selectedLanguageRef = useRef('');
 
   // Load saved config on mount to get model/language

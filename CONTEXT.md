@@ -1,8 +1,8 @@
 # MVP-Echo Toolbar — Roadmap & Task Tracker
 
-**Version**: `v2.2.1` → targeting `v3.0.0`
+**Version**: `v2.2.1` → `v3.0.0-alpha.5` (in testing)
 **Branch**: `dev`
-**Updated**: 2026-02-09
+**Updated**: 2026-02-09 (Session 2)
 
 ---
 
@@ -12,20 +12,84 @@
 
 | # | Task | Depends On | Goal | Confidence | Status | Notes |
 |---|------|-----------|------|------------|--------|-------|
-| 1 | Welcome Screen Redesign | — | Larger window, version info, recent features, "don't show again" checkbox | :green_circle: Green | UI Approved | Component: `app/renderer/app/components/WelcomeScreen.tsx` (root project). IPC wired: `welcome:get-preference` / `welcome:set-preference`. Preview: `http://localhost:5173/?preview=welcome`. Integration into toolbar pending |
-| 2 | Remove Faster-Whisper Model References | — | Replace stale model entries in whisper-native.js, whisper-engine.js, EngineSelector.tsx, CaptureApp.tsx | :green_circle: Green | Not Started | No whisper-remote.js exists; stale refs are in local engine files |
+| 1 | Welcome Screen Redesign | — | Light theme, squircle icon, tray guidance, version-scoped dismiss, 4 tray state icons | :green_circle: Green | Approved (Session 2) | Light theme (white bg, blue accents). Squircle mic icon (rounded-[16px]). Intro text guides users to notification area / system tray. Tray Icon card shows 4 state icons (ready/recording/processing/done) as colored squircle SVGs. "Don't show again" is version-scoped: stores `dismissedVersion` in `welcome-config.json`, re-shows on new version. Version fetched dynamically via `app:get-version` IPC. Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/welcome.html` |
+| 2 | Remove Faster-Whisper Model References | — | Replace stale model entries with new brand-free IDs | :green_circle: Green | Complete | All Systran/deepdml refs replaced with `gpu-english` etc. in: `whisper-remote.js`, `CaptureApp.tsx`, `SettingsPanel.tsx` |
 | 3 | Settings Panel: Engine/Model Dropdown | #2, #14 | GPU Server (3 models) + Local CPU (3 models) with status indicators | :green_circle: Green | UI Approved | Component: `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx`. Preview: `http://localhost:5174/popup.html`. Brand-free labels, API key smart detection, scrollable in 380x300 popup. Integration with engine port pending |
-| 4 | Server: Hexagonal Architecture (Bridge Refactor) | — | Refactor bridge.py with ModelEngine port + adapter pattern. SubprocessAdapter (new default) + WebSocketAdapter (fallback to current 3-container setup) | :green_circle: Green | Not Started | Archive current docker-compose (`git tag v2.2.1-pre-merge` + copy) before starting. Enables #5, #6, #7 |
-| 5 | Server: Model Switch API | #4 | `POST /v1/models/switch` — port calls adapter to swap model. `GET /v1/models` returns loaded + available | :green_circle: Green | Not Started | ~5-10s switch time. API builds against port, adapter-agnostic |
+| 4 | Server: Hexagonal Architecture (Bridge Refactor) | — | Refactor bridge.py with ModelEngine port + adapter pattern. SubprocessAdapter (new default) + WebSocketAdapter (fallback to current 3-container setup) | :green_circle: Green | Complete | `ports.py` + `adapters/{websocket_adapter.py, subprocess_adapter.py}` created. bridge.py refactored. docker-compose.v2.2.1.yml archived. SubprocessAdapter has sherpa-onnx CLI incompatibility; WebSocketAdapter set as default (proven stable) |
+| 5 | Server: Model Switch API | #4 | `POST /v1/models/switch` — port calls adapter to swap model. `GET /v1/models` returns loaded + available | :green_circle: Green | Complete | Built into bridge.py v3.0. API works with both adapters. Not fully tested (SubprocessAdapter blocked by CLI issue) |
 | 6 | Server: Idle Timeout / Auto-Unload | #4 | Unload model after 60min idle, reload on next request (~5-10s cold start) | :green_circle: Green | Not Started | Timer reset on every transcription. Configurable via env var. Implemented at port level |
 | 7 | Server: Pre-Download All GPU Models | #4 | Download all 3 Parakeet TDT models on first start (~1.7GB total) | :green_circle: Green | Not Started | entrypoint.sh downloads all to shared volume |
 | 8 | Toolbar: Model Switch UX | #3, #5, #14 | User picks model → "Switching..." status → ready in 5-10s | :green_circle: Green | Not Started | Engine manager calls switch via RemoteAdapter, polls until ready |
 | 9 | Toolbar: Server Status in Settings | #5, #14 | Show loaded model, idle time, model states (loaded/sleeping/available) | :green_circle: Green | Not Started | RemoteAdapter polls `/v1/models` and `/health` |
 | 10 | Local CPU Engine (sherpa-onnx sidecar) | #14 | Bundle prebuilt sherpa-onnx CLI binary as sidecar process, communicate via stdio | :green_circle: Green | Not Started | Sidecar approach — no native Node addon, no ASAR issues. Matches existing subprocess pattern |
 | 11 | Local CPU: Model Download Manager | #10 | Download Fast/Balanced/Accurate models on demand with progress UI | :yellow_circle: Yellow | Not Started | Store in userData dir. No model ships with installer |
-| 12 | Anti-Hallucination Pipeline Review | — | Simplify pipeline for Parakeet TDT (non-autoregressive, less hallucination) | :green_circle: Green | Not Started | Keep as safety net, remove Whisper-specific patterns |
-| 13 | Keybind Display in UI | — | Show current shortcut in Settings, note about config file for changing | :green_circle: Green | Not Started | Read from app-config.json, display read-only |
-| 14 | Toolbar: Hexagonal Engine Refactor | #2 | Refactor engine-manager.js with Engine port (transcribe, isAvailable, getHealth) + adapters: RemoteAdapter (HTTP to server), LocalSidecarAdapter (sherpa-onnx CLI subprocess) | :green_circle: Green | Not Started | Replaces whisper-native.js / whisper-engine.js with adapter pattern. No whisper-remote.js — remote is just another adapter |
+| 12 | Anti-Hallucination Pipeline Review | — | Simplify pipeline for Parakeet TDT (non-autoregressive, less hallucination) | :green_circle: Green | Deferred | Decision: not needed for Parakeet TDT. Can be added as optional adapter-level post-processing hook if future models require it |
+| 13 | Keybind Display in UI | — | Show current shortcut in Settings, note about config file for changing | :green_circle: Green | Dropped | Not in approved UI mockups. Users can check GitHub docs if needed |
+| 14 | Toolbar: Hexagonal Engine Refactor | #2 | Refactor engine-manager.js with Engine port (transcribe, isAvailable, getHealth) + adapters: RemoteAdapter (HTTP to server), LocalSidecarAdapter (sherpa-onnx CLI subprocess) | :green_circle: Green | Complete | `engine-port.js` (contract), `engine-manager.js` (coordinator), `adapters/{remote-adapter.js, local-sidecar-adapter.js}` created. RemoteAdapter hits new `/v1/models/switch` API. LocalSidecar is stub for Task #10. Auth now required: isAvailable() hits `/v1/models` (authenticated endpoint) |
+
+### Session 2: 2026-02-09 — Welcome Screen Polish + Version Logic
+
+**Completed**: Task #1 finalized (approved)
+
+**Changes**:
+- `WelcomeScreen.tsx` (toolbar): Light theme (semantic Tailwind classes, not hardcoded dark), squircle icon, tray notification area guidance, 4 tray state SVG icons (blue/red/yellow/green), version-scoped "don't show again"
+- `welcome-main.tsx`: Fetches version dynamically via `app:get-version` IPC (falls back to `'3.0.0'` in browser)
+- `main-simple.js`: Welcome logic now version-scoped (`dismissedVersion` instead of `showOnStartup`). Added `app:get-version` IPC handler
+- `preload.js`: Added `getAppVersion()` API
+
+**Design Decisions**:
+- Welcome screen is always light theme (white background) regardless of toolbar theme
+- Header icon is squircle (rounded-[16px]), not circle — matches modern app icon style
+- Tray Icon card shows 4 colored squircle mic SVGs with labels: Ready (#4285f4), Rec (#ea4335), Busy (#fbbc04), Done (#34a853)
+- Intro text explicitly tells users about the notification area and to drag icon from overflow
+- "Don't show again" stores `{ dismissedVersion: "3.0.0-alpha.5" }` — new app version triggers welcome again automatically
+
+**Next**: Tasks 3 (Settings Panel wiring), 8 (Model Switch UX), 9 (Server Status), 6 (Idle Timeout), 7 (Pre-Download Models), 10 (Local CPU sidecar)
+
+---
+
+### Session 1: 2026-02-09 — Hexagonal Architecture Implementation
+
+**Completed Tasks**: 1, 2, 4, 5, 12 (deferred), 13 (dropped), 14
+
+**Files Created**:
+- Toolbar: `engine-port.js`, `engine-manager.js`, `adapters/remote-adapter.js`, `adapters/local-sidecar-adapter.js`, `components/WelcomeScreen.tsx`, `welcome.html`, `welcome-main.tsx`
+- Server: `ports.py`, `adapters/{__init__.py, websocket_adapter.py, subprocess_adapter.py}`, `docker-compose.v2.2.1.yml`
+
+**Files Modified**:
+- Toolbar: `main-simple.js` (engine wiring, welcome integration, bug fixes), `CaptureApp.tsx` (model defaults), `SettingsPanel.tsx` (API key always required), `package.json` (v3.0.0-alpha.5), `vite.config.ts` (welcome entry)
+- Server: `bridge.py` (hexagonal refactor, model switch API), `docker-compose.yml` (websocket default), `Dockerfile.bridge` (CUDA + sherpa-onnx), `entrypoint.sh` (MODEL_DIR), `auth-proxy.py` (API keys always required)
+
+**Build Artifacts**: `MVP-Echo Toolbar 3.0.0-alpha.5.exe` (140MB portable)
+
+**Known Issues**:
+- SubprocessAdapter fails with sherpa-onnx CLI (`vocab_size` metadata error) — using WebSocketAdapter as default until resolved
+- SubprocessAdapter fix options: remove `--model-type=transducer` flag, or use Python sherpa-onnx bindings instead of CLI
+
+**Bug Fixes**:
+- `app/main/main-simple.js` (root project): Fixed 4 undefined `whisperEngine` references (should be `engineManager.pythonEngine`)
+- `mvp-echo-toolbar/app/main/main-simple.js`: Replaced inline HTML welcome with React component
+
+**API Keys**:
+- File: `mvp-stt-docker/api-keys.json`
+- Test key: `SK-QUICKTEST` (easy to type, no auth bypass for local IPs anymore)
+- 10 random user keys generated (48-char hex)
+
+**Deployment (Server)**:
+```bash
+# Push updated files to server
+rsync -av --delete --exclude='__pycache__' mvp-stt-docker/ root@192.168.1.10:/mnt/user/appdata/mvp-stt-docker/
+
+# Rebuild and restart
+ssh root@192.168.1.10
+cd /mnt/user/appdata/mvp-stt-docker
+docker compose down
+docker compose up -d --build
+```
+
+**Ready for Next Session**: Tasks 3 (Settings Panel full wiring), 8 (Model Switch UX), 9 (Server Status), 10 (Local CPU sidecar)
+
+---
 
 ### Decisions Log
 
@@ -35,18 +99,23 @@
 | Local CPU integration | Sidecar process (prebuilt CLI binary) | Avoids Electron native addon ASAR issues, matches existing subprocess pattern, low risk |
 | Local CPU model naming | Fast / Balanced / Accurate | Human-readable, conveys speed-vs-quality tradeoff. Replaces tiny/base/small |
 | Toolbar engine layer | Hexagonal (port/adapter) | RemoteAdapter + LocalSidecarAdapter behind same interface. No hard-coded whisper-remote.js |
-| whisper-remote.js | Never created | File doesn't exist in codebase. Remote server access is handled by RemoteAdapter in engine port |
-| Model labels in UI | Brand-free | "English", "English HD", "Multilingual" (GPU) / "Fast", "Balanced", "Accurate" (CPU). No Parakeet/Whisper names shown. Hex adapter swaps backends silently |
+| whisper-remote.js | Replaced by RemoteAdapter | Old file preserved at `mvp-echo-toolbar/app/stt/whisper-remote.js` (no longer imported). RemoteAdapter is the hexagonal replacement |
+| Model labels in UI | Brand-free | "English", "English HD", "Multilingual" (GPU) / "Fast", "Balanced", "Accurate" (CPU). No Parakeet/Whisper names shown. Internal IDs: `gpu-english`, `gpu-english-hd`, `gpu-multilingual`, `local-fast`, `local-balanced`, `local-accurate` |
+| Auth enforcement | API keys always required | Private IP bypass removed from auth-proxy.py. All requests (except `/health`) require valid API key. Test connection validates auth against `/v1/models` |
 | GPU section header | "Industry's Best, Fastest" | Sets expectation: best available GPU models |
 | CPU section header | "Industry's Best, No Internet Required" | Sets expectation: best available CPU models, with tradeoff (slower but offline) |
-| Welcome screen UI | Approved 2026-02-09 | `WelcomeScreen.tsx` — preview at `?preview=welcome`. Tray-matching icon, no jargon in What's New |
+| Welcome screen UI | Approved 2026-02-09 (Session 2) | Light theme (white bg), squircle icon, tray area guidance, 4 state SVGs. Preview: `localhost:5174/welcome.html` |
+| Welcome screen theme | Always light (white) | Professional popup feel. Toolbar popup can be dark, welcome is always light |
+| Welcome "don't show" | Version-scoped | Stores `dismissedVersion` in `welcome-config.json`. New app version re-triggers welcome automatically |
+| Icon shape | Squircle (rounded-[16px]) | Modern app icon style, matches Windows 11 aesthetic. Same shape in header + tray state icons |
+| Tray state icons in welcome | 4 states: Ready/Rec/Busy/Done | Blue #4285f4 / Red #ea4335 / Yellow #fbbc04 / Green #34a853. Matches `tray-manager.js` STATES |
 | Settings panel UI | Approved 2026-02-09 | `SettingsPanel.tsx` in toolbar project — preview at `popup.html`. Scrollable in 380x300, smart API key detection |
 
 ### Test Strategy
 
 | # | Validation |
 |---|-----------|
-| 1 | Welcome screen renders at correct size, "don't show again" persists across restarts, version displays correctly |
+| 1 | Welcome screen renders light theme at 500px, squircle icon visible, tray guidance in intro text, 4 tray state SVGs render, version matches `package.json`, "don't show again" saves `dismissedVersion`, new app version re-shows welcome |
 | 2 | No references to `Systran/faster-whisper-*` or `deepdml/faster-whisper-*` remain in codebase |
 | 3 | Dropdown shows correct engine/model list, states reflect server reality via engine port |
 | 4 | bridge.py starts with SubprocessAdapter, transcription works end-to-end. Switch to WebSocketAdapter, same test passes against 3-container setup |
@@ -154,25 +223,29 @@ API key: auto-detected as optional for local (192.168.x.x), required for remote/
 
 ---
 
-## Welcome Screen (Approved)
+## Welcome Screen (Approved — Session 2)
 
-Component: `app/renderer/app/components/WelcomeScreen.tsx` (root project)
-500px wide modal, dark theme, #4285f4 circle + white microphone icon (matches tray icon).
+Component: `mvp-echo-toolbar/app/renderer/app/components/WelcomeScreen.tsx`
+Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/welcome.html`
+500px wide, **light theme** (white bg, blue accents), squircle mic icon.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│            [🎤 blue circle, white mic]               │
+│          [🎤 blue squircle, white mic]               │
 │              MVP-Echo Toolbar                        │
-│                   v3.0.0                             │
+│              v3.0.0-alpha.5                          │
 │  ─────────────────────────────────────────────────── │
-│  Voice-to-text at your fingertips. Press the         │
-│  shortcut, speak, and your words are copied.         │
+│  A microphone icon has been added to your            │
+│  notification area (system tray). You may need to    │
+│  drag it from the overflow into the visible section. │
+│  Click it to access settings and models.             │
 │                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-│  │ 🎙️ Record │  │ 📋 Copy   │  │ ⚙️ Config │           │
-│  │ Ctrl+Alt, │  │ Auto-     │  │ Click    │           │
-│  │ tap Z     │  │ clipboard │  │ tray icon│           │
-│  └──────────┘  └──────────┘  └──────────┘           │
+│  ┌──────────┐  ┌──────────┐  ┌────────────────┐     │
+│  │ 🎙️ Record │  │ 📋 Copy   │  │ 🔵🔴🟡🟢       │     │
+│  │ Ctrl+Alt, │  │ Auto-     │  │ Tray Icon      │     │
+│  │ tap Z     │  │ clipboard │  │ Changes color   │     │
+│  │           │  │           │  │ with status     │     │
+│  └──────────┘  └──────────┘  └────────────────┘     │
 │                                                      │
 │  What's New:                                         │
 │  • Industry-leading GPU transcription — under 1s     │
@@ -182,7 +255,12 @@ Component: `app/renderer/app/components/WelcomeScreen.tsx` (root project)
 │  ☐ Don't show this again          [ Get Started ]    │
 └──────────────────────────────────────────────────────┘
 ```
-No brand names in What's New. Checkbox is user's choice, never forced.
+- Light theme always (white background, dark text, blue primary)
+- Squircle icons (rounded square, not circle)
+- Tray state icons are colored squircle SVGs with white mic silhouette
+- "Don't show again" = version-scoped (re-shows on new app version)
+- Version fetched dynamically from `app.getVersion()` via IPC
+- No brand names in What's New
 
 ---
 
@@ -281,11 +359,11 @@ mvp-echo-toolbar/                  ← git repo root
 └── package.json                   ← name: "mvp-echo" (root/lite)
 ```
 
-### Approved UI Components (built, not yet integrated)
-| Component | Location | Preview |
-|-----------|----------|---------|
-| WelcomeScreen | `app/renderer/app/components/WelcomeScreen.tsx` (root) | `npm run dev` from root → `http://localhost:5173/?preview=welcome` |
-| SettingsPanel | `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/popup.html` |
+### Approved UI Components
+| Component | Location | Preview | Status |
+|-----------|----------|---------|--------|
+| WelcomeScreen | `mvp-echo-toolbar/app/renderer/app/components/WelcomeScreen.tsx` | `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/welcome.html` | Approved Session 2, wired into main-simple.js |
+| SettingsPanel | `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/popup.html` | UI Approved, engine port integration pending |
 
 ### Browser Preview Notes
 - `mvp-echo-toolbar/app/renderer/app/popup-main.tsx` wraps PopupApp in a 380x300 container for browser preview

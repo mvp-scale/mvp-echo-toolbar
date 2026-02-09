@@ -25,7 +25,7 @@ class WhisperRemoteEngine {
   constructor() {
     this.endpointUrl = null;
     this.apiKey = null;
-    this.selectedModel = 'deepdml/faster-whisper-large-v3-turbo-ct2';
+    this.selectedModel = 'gpu-english';
     this.language = null;
     this.isConfigured = false;
     this.configPath = path.join(app.getPath('userData'), 'toolbar-endpoint-config.json');
@@ -81,7 +81,7 @@ class WhisperRemoteEngine {
         const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
         this.endpointUrl = config.endpointUrl || null;
         this.apiKey = config.apiKey || null;
-        this.selectedModel = config.selectedModel || 'Systran/faster-whisper-base';
+        this.selectedModel = config.selectedModel || 'gpu-english';
         this.language = config.language || null;
         this.isConfigured = !!this.endpointUrl;
         console.log('MVP-Echo Toolbar: Loaded endpoint config:', this.endpointUrl);
@@ -188,7 +188,7 @@ class WhisperRemoteEngine {
       formData.append('model', model);
       formData.append('response_format', 'verbose_json');
 
-      // Anti-hallucination parameters (per-request, passed to faster-whisper transcribe())
+      // Anti-hallucination parameters (per-request, legacy — ignored by Parakeet TDT server)
       formData.append('temperature', '0');
       formData.append('vad_filter', 'true');
       formData.append('condition_on_previous_text', 'false');

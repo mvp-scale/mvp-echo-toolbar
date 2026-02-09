@@ -1,15 +1,16 @@
 """
-MVP-Bridge — HTTP-to-WebSocket bridge for sherpa-onnx ASR server.
+MVP-Bridge -- Hexagonal HTTP bridge for sherpa-onnx ASR.
 
 Accepts POST /v1/audio/transcriptions (OpenAI-compatible multipart form-data),
-converts audio to float32 samples, sends to the C++ WebSocket server,
+converts audio to float32 samples, delegates to the active ModelEngine adapter,
 and returns the transcription as JSON.
+
+Adapter selection (via ADAPTER_TYPE env var):
+    "subprocess" (default) -- manages sherpa-onnx as a child process
+    "websocket"            -- relays to an external C++ WebSocket server
 """
 
-import asyncio
-import json
 import os
-import struct
 import subprocess
 import tempfile
 import time
@@ -17,17 +18,29 @@ import time
 import numpy as np
 import soundfile as sf
 import uvicorn
-import websockets
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
+from pydantic import BaseModel
 
-# ── Configuration ──
+from ports import ModelEngine
+from adapters import SubprocessAdapter, WebSocketAdapter
 
-WS_HOST = os.environ.get("WS_HOST", "mvp-asr")
-WS_PORT = int(os.environ.get("WS_PORT", "6006"))
+# -- Model Metadata --
+
+MODEL_METADATA = {
+    "parakeet-tdt-0.6b-v2-int8": {"label": "English", "group": "gpu"},
+    "parakeet-tdt-1.1b-v2-int8": {"label": "English HD", "group": "gpu"},
+    "parakeet-tdt-0.6b-v3-int8": {"label": "Multilingual", "group": "gpu"},
+}
+
+# -- Configuration --
+
+ADAPTER_TYPE = os.environ.get("ADAPTER_TYPE", "subprocess")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8000"))
 
+
+# -- Audio Utilities --
 
 def convert_to_wav(input_path: str, output_path: str) -> bool:
     """Convert any audio format to 16kHz mono 16-bit WAV using ffmpeg."""
@@ -50,78 +63,135 @@ def convert_to_wav(input_path: str, output_path: str) -> bool:
         return False
 
 
-async def transcribe_via_ws(samples: np.ndarray, sample_rate: int) -> str:
-    """Send audio to the sherpa-onnx WebSocket server and return transcription text."""
-    uri = f"ws://{WS_HOST}:{WS_PORT}"
+# -- Adapter Factory --
 
-    async with websockets.connect(uri) as ws:
-        # Build header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
-        header = struct.pack("<ii", sample_rate, samples.size * 4)
-        buf = header + samples.tobytes()
+def create_engine(adapter_type: str) -> ModelEngine:
+    """
+    Instantiate the appropriate ModelEngine adapter.
 
-        # Send in chunks
-        chunk_size = 10240
-        for start in range(0, len(buf), chunk_size):
-            await ws.send(buf[start:start + chunk_size])
+    Args:
+        adapter_type: One of "subprocess" or "websocket".
 
-        # Receive transcription result
-        result = await ws.recv()
+    Returns:
+        A ModelEngine implementation ready for use.
 
-        # Signal end of session
-        await ws.send("Done")
-
-    # C++ server returns JSON, Python server returns plain text
-    try:
-        parsed = json.loads(result)
-        return parsed.get("text", "").strip()
-    except (json.JSONDecodeError, TypeError):
-        # Plain text response
-        text = result.strip() if isinstance(result, str) else result.decode().strip()
-        return "" if text == "<EMPTY>" else text
+    Raises:
+        ValueError: If the adapter type is not recognized.
+    """
+    if adapter_type == "subprocess":
+        return SubprocessAdapter()
+    elif adapter_type == "websocket":
+        return WebSocketAdapter()
+    else:
+        raise ValueError(
+            f"Unknown ADAPTER_TYPE: '{adapter_type}'. "
+            "Valid options: 'subprocess', 'websocket'"
+        )
 
 
-# ── App Setup ──
+# -- Request/Response Models --
+
+class ModelSwitchRequest(BaseModel):
+    model_id: str
+
+
+# -- Application --
+
+engine: ModelEngine = create_engine(ADAPTER_TYPE)
+
 
 @asynccontextmanager
-async def lifespan(application):
+async def lifespan(application: FastAPI):
+    """Application startup and shutdown lifecycle."""
     print(f"[mvp-bridge] Starting on port {LISTEN_PORT}")
-    print(f"[mvp-bridge] WebSocket backend: ws://{WS_HOST}:{WS_PORT}")
+    print(f"[mvp-bridge] Adapter: {ADAPTER_TYPE}")
+
+    # Auto-load default model for subprocess adapter
+    if ADAPTER_TYPE == "subprocess":
+        default_model = os.environ.get(
+            "DEFAULT_MODEL", "parakeet-tdt-0.6b-v2-int8"
+        )
+        try:
+            await engine.load_model(default_model)
+            print(f"[mvp-bridge] Default model loaded: {default_model}")
+        except Exception as e:
+            print(f"[mvp-bridge] WARNING: Failed to load default model: {e}")
+            print("[mvp-bridge] Server will start but transcription will fail until a model is loaded.")
+    else:
+        ws_host = os.environ.get("WS_HOST", "mvp-asr")
+        ws_port = os.environ.get("WS_PORT", "6006")
+        print(f"[mvp-bridge] WebSocket backend: ws://{ws_host}:{ws_port}")
+
     print("[mvp-bridge] Ready to accept requests")
     yield
+    print("[mvp-bridge] Shutting down")
+    await engine.unload_model()
 
 
-app = FastAPI(title="MVP-Bridge", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="MVP-Bridge", version="3.0.0", lifespan=lifespan)
 
 
-# ── Endpoints ──
+# -- Endpoints --
 
 @app.get("/health")
 async def health():
-    """Health check — also verifies WebSocket server is reachable."""
-    try:
-        async with websockets.connect(
-            f"ws://{WS_HOST}:{WS_PORT}",
-            close_timeout=3,
-            open_timeout=3,
-        ) as ws:
-            await ws.send("Done")
-        return JSONResponse({"status": "ok"})
-    except Exception:
-        return JSONResponse({"status": "ok", "backend": "unreachable"})
+    """Health check -- reports engine status."""
+    status = await engine.get_status()
+    response = {
+        "status": "ok" if status.get("state") == "loaded" else "degraded",
+        "engine": status,
+    }
+    return JSONResponse(response)
 
 
 @app.get("/v1/models")
-def list_models():
+async def list_models():
     """List available models (OpenAI-compatible)."""
-    return JSONResponse({
-        "data": [
-            {
-                "id": "parakeet-tdt-0.6b-v2-int8",
-                "object": "model",
-                "owned_by": "local",
-            }
-        ]
-    })
+    available = await engine.list_available()
+    status = await engine.get_status()
+    loaded_id = status.get("model_id")
+
+    # Mark which model is currently loaded and add metadata
+    for model in available:
+        model["active"] = model["id"] == loaded_id
+        meta = MODEL_METADATA.get(model["id"], {})
+        model["label"] = meta.get("label", model["id"])
+        model["group"] = meta.get("group", "gpu")
+
+    return JSONResponse({"data": available})
+
+
+@app.post("/v1/models/switch")
+async def switch_model(request: ModelSwitchRequest):
+    """Switch to a different model."""
+    model_id = request.model_id
+
+    # Check if model is available
+    available = await engine.list_available()
+    available_ids = [m["id"] for m in available]
+
+    if model_id not in available_ids:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Model '{model_id}' not found.",
+                "available": available_ids,
+            },
+        )
+
+    try:
+        await engine.load_model(model_id)
+        status = await engine.get_status()
+        return JSONResponse({
+            "status": "ok",
+            "message": f"Switched to model: {model_id}",
+            "engine": status,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to switch model: {e}"},
+        )
 
 
 @app.post("/v1/audio/transcriptions")
@@ -170,14 +240,15 @@ async def transcribe(
 
         audio_duration = len(samples) / sample_rate
 
-        # Transcribe via WebSocket
-        text = await transcribe_via_ws(samples.astype(np.float32), sample_rate)
+        # Transcribe via the active engine adapter
+        text = await engine.transcribe(samples.astype(np.float32), sample_rate)
 
         processing_time = time.time() - start_time
 
+        rtf = processing_time / audio_duration if audio_duration > 0 else 0
         print(
             f"[mvp-bridge] Transcribed {audio_duration:.1f}s audio "
-            f"in {processing_time:.2f}s (RTF={processing_time/audio_duration:.2f}): "
+            f"in {processing_time:.2f}s (RTF={rtf:.2f}): "
             f'"{text[:80]}{"..." if len(text) > 80 else ""}"'
         )
 
