@@ -2,97 +2,111 @@
 
 ## Current State (2026-02-08)
 
-**Version**: `v2.1.0` (released to GitHub)
-**Build**: Portable exe only (135MB), no installer
+**Version**: `v2.2.1` (built, not yet released)
+**Build**: Portable exe only (140MB), no installer
 **Branch**: `dev` (daily work), `main` (releases via GitHub Actions)
 
-## What Was Just Implemented
+## What Changed in v2.2.1
 
-### 1. Anti-Hallucination Settings (Whisper transcription quality)
+### 1. Welcome Window (replaces broken tray balloon)
+- Frameless, dark-themed 380x330 BrowserWindow with 3 quick-start cards
+- Shows app name + version, uses `.welcome-complete` marker (different from old `.first-run-complete`)
+- File: `mvp-echo-toolbar/app/main/main-simple.js` (`showWelcomeWindow()` function)
 
-**Problem**: Users getting repetitive "thank you thank you" and phantom words in transcriptions.
+### 2. Configurable Keybind
+- `app-config.json` in `%APPDATA%/mvp-echo-toolbar/` with `{ "shortcut": "CommandOrControl+Alt+Z" }`
+- `loadAppConfig()` reads/creates config, `shortcutDisplayLabel()` converts for display
+- Tray tooltip dynamically shows configured shortcut
+- Files: `main-simple.js`, `tray-manager.js`
 
-**Solution**: Server-side + client-side tuning for faster-whisper Docker.
+### 3. Removed Ctrl+Shift+D Debug Shortcut
+- Global shortcut removed; Settings > Debug button still opens DevTools via IPC
 
-**Files Changed**:
-- `faster-whisper-docker/docker-compose.yml` -- Added env vars:
-  - `_UNSTABLE_VAD_FILTER=true` (silence stripping before Whisper)
-  - `WHISPER__COMPUTE_TYPE=float16` (better accuracy on GPU)
-  - `STT_MODEL_TTL=-1` (keep model loaded)
-- `mvp-echo-toolbar/app/stt/whisper-remote.js` -- Added per-request params:
-  - `vad_filter=true`, `condition_on_previous_text=false`, `hallucination_silence_threshold=2`, `log_prob_threshold=-0.5`, `beam_size=5`, `language=en`
+### 4. Anti-Hallucination Pipeline (client-side)
+- **Segment dedup** (`deduplicateSegments()`): Catches decoder loops before text assembly
+- **Sentence dedup** (`removeRepetitions()`): Fixed — now normalizes punctuation before comparing
+- **Phrase dedup** (`removeTrailingPhraseRepetitions()`): Expanded from 2-5 to 2-15 word phrases
+- **Server params**: Added `repetition_penalty=1.15`, tightened `compression_ratio_threshold` to 2.0
+- File: `mvp-echo-toolbar/app/stt/whisper-remote.js`
 
-**Status**: Deployed to production server, working.
+### 5. Model Default Changed
+- Default model: `deepdml/faster-whisper-large-v3-turbo-ct2` (was `Systran/faster-whisper-base`)
+- Changed in: `whisper-remote.js`, `SettingsPanel.tsx`, `CaptureApp.tsx`
+- UI dropdown already had large-v3-turbo as an option; now it's the default for fresh installs
 
-### 2. Auth Proxy with Usage Tracking
+### 6. Build & UI Polish
+- `npm run dist` now runs `rm -rf dist` first (clean build, no recursive inclusion)
+- Settings scrollbar: 6px wide, blue thumb (primary color at 50% opacity)
+- Removed mock transcription fallback in root `app/main/main-simple.js`
 
-**Problem**: Need to share server via Cloudflare tunnel with API key auth and track who's using it.
+### 7. Docker Compose (speaches upgrade — NOT YET WORKING)
+- Image changed to `ghcr.io/speaches-ai/speaches:latest-cuda`
+- Updated env vars: `WHISPER__TTL=-1`, `VAD_MODEL_TTL=-1`, `ENABLE_UI=false`
+- Updated volume path: `/home/ubuntu/.cache/huggingface/hub`
+- **Status: 404 on transcription endpoint.** Speaches requires models to be pre-downloaded and has permission issues. The old `fedirz/faster-whisper-server:latest-cuda` image still works but is from Oct 2024.
 
-**Solution**: Python auth proxy replaces nginx, validates Bearer tokens, tracks cumulative seconds per user.
+## NEXT SESSION: Sherpa-ONNX Migration
 
-**Files Created**:
-- `faster-whisper-docker/auth-proxy.py` -- CORS + key validation + usage tracking
-- `faster-whisper-docker/api-keys.json` -- Key registry (7 keys: Corey, Alex, Guest 1-5)
-- `faster-whisper-docker/usage.json` -- Auto-updated usage stats
+### Decision Made
+Replace faster-whisper-server with sherpa-onnx for both GPU (Docker) and CPU (bundled in Electron) modes. Key reasons:
+- Zero telemetry, fully air-gapped, no API keys to NVIDIA
+- Parakeet TDT 0.6B model: #1 on HF ASR leaderboard, 6.05% WER, beats Whisper large-v3
+- Non-autoregressive TDT architecture = far fewer hallucination loops than Whisper
+- Built-in speaker diarization for batch MP3 processing
+- npm package exists (`sherpa-onnx` v1.12.23, actively maintained)
 
-**How it works**:
-- LAN requests (192.168.x.x, 10.x.x.x, etc.) bypass auth entirely
-- Remote requests (via Cloudflare) require `Authorization: Bearer sk-...`
-- Logs: `[auth-proxy] Corey (dev) [v2.1.0] +2 seconds  >>>  cumulative: 1 minute 6 seconds`
+### Architecture Target
 
-**Status**: Deployed, auth working, usage tracking working.
+```
+MVP-Echo Toolbar (Electron)
+  |
+  |-- [Online + GPU] --> sherpa-onnx Docker (3080 Ti, WebSocket/REST)
+  |                       Parakeet TDT 0.6B + CUDA
+  |
+  |-- [Offline/CPU] --> sherpa-onnx-node (bundled native addon)
+  |                      Parakeet TDT 0.6B INT8 (~240MB)
+  |                      Silero VAD (~2MB)
+  |
+  |-- [Batch MP3s] --> Same GPU server + diarization
+                        Pyannote segmentation + speaker embeddings
+```
 
-### 3. Network Hardening (Cloudflare/WAF compatibility)
+### Settings UI Changes Needed
+- Model/engine dropdown: "Local CPU" option alongside remote URL
+- API key: only required for non-LAN remote access (same auth proxy behavior)
+- Test Connection: should validate AND download model if needed
+- Same Debug button, same everything else
 
-**Problem**: Bot Fight Mode blocking app, residential IPs getting challenged, requests failing.
+### Implementation Steps (for next session)
+1. **Validate Docker GPU server** — get sherpa-onnx container running on 3080 Ti with Parakeet TDT model
+2. **Understand the API shape** — sherpa-onnx uses WebSocket or its own REST format, NOT OpenAI's `/v1/audio/transcriptions` multipart form
+3. **Build `sherpa-engine.js`** — new engine class alongside existing `whisper-remote.js`
+4. **Bundle sherpa-onnx-node** — CPU fallback, ~260MB added to exe, requires `asarUnpack` for native module
+5. **Update Settings UI** — add Local CPU option, engine selection
+6. **Audio format** — sherpa-onnx may need WAV (mono 16-bit 16kHz), toolbar currently sends WebM
 
-**Solution**:
-- Browser-like User-Agent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 MVP-Echo-Toolbar/2.1.0`
-- Standard headers: Accept, Accept-Language, Accept-Encoding, Connection, Cache-Control
-- Retry logic: 502-504 and network errors auto-retry with exponential backoff (1s, 2s)
+### Key Research Links
+- sherpa-onnx GitHub: https://github.com/k2-fsa/sherpa-onnx
+- sherpa-onnx npm: https://www.npmjs.com/package/sherpa-onnx
+- Electron integration: https://github.com/k2-fsa/sherpa-onnx/issues/1945
+- Parakeet TDT model: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+- ONNX INT8 model for CPU: search `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` on HuggingFace
+- NeMo + diarization Docker gist: https://gist.github.com/lokafinnsw/95727707f542a64efc18040aefe47751
+- Docker image: `ghcr.io/k2-fsa/sherpa-onnx:latest`
 
-**Files Changed**:
-- `mvp-echo-toolbar/app/stt/whisper-remote.js` -- Reads version from `package.json`, hardened headers, retry wrapper
-
-**Status**: Deployed in v2.1.0 release.
-
-### 4. Developer Experience Improvements
-
-**API Key Persistence Fix**:
-- `whisper-remote.js` `getConfig()` now returns `apiKey`
-- `SettingsPanel.tsx` loads and displays saved key as dots on startup
-
-**Debug Improvements**:
-- Settings → Debug button opens DevTools for capture window
-- Console forwarding from renderer to main process log file
-- Diagnostic logging in AudioCapture: mic access, chunk sizes, buffer sizes
-- Startup cleanup: fresh log file, sweep orphaned audio temp files
-
-**Build Process**:
-- `npm run build:toolbar` from repo root (no cd needed)
-- Version auto-flows from `package.json` → User-Agent → auth proxy logs
-- Portable exe only, removed NSIS installer
-
-**Files Changed**:
-- `mvp-echo-toolbar/app/main/main-simple.js` -- Startup cleanup, debug IPC, first-run balloon
-- `mvp-echo-toolbar/app/renderer/app/audio/AudioCapture.ts` -- Diagnostic logging
-- `mvp-echo-toolbar/app/renderer/app/CaptureApp.tsx` -- Console forwarding, logging
-- `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` -- Debug button, API key loading
-- `mvp-echo-toolbar/app/preload/preload.js` -- Debug IPC channels
-- `package.json` (root) -- `build:toolbar` and `build:light` scripts
-
-**Status**: All committed to dev, v2.1.0 released to GitHub.
-
-## Current Known Issue
-
-**First-run balloon not yet tested.** The code is in place but needs validation on Windows. The balloon should appear 2 seconds after first launch, pointing users to the tray icon location.
+### Known Risks
+- CUDA support has open issues on some GPU/driver combos (https://github.com/k2-fsa/sherpa-onnx/issues/2138)
+- Electron native module path resolution requires `asarUnpack` config
+- WebSocket API differs from HTTP POST — client needs new engine class
+- CPU mode: expect ~1-3 seconds per short clip (not sub-100ms)
 
 ## Architecture
 
 ```
 MVP-Echo Toolbar (Windows Electron app)
     |
-    | HTTP POST with Bearer token
+    | HTTP POST with Bearer token (current)
+    | WebSocket (planned for sherpa-onnx)
     v
 Cloudflare Tunnel (mvp-echo.ctgs.link)
     |
@@ -100,56 +114,37 @@ Cloudflare Tunnel (mvp-echo.ctgs.link)
 auth-proxy (Docker, validates keys, tracks usage)
     |
     v
-faster-whisper-server (Docker, GPU, Whisper models)
+ASR Server (Docker, GPU)
+  - Current: fedirz/faster-whisper-server (Oct 2024, working)
+  - Target: sherpa-onnx with Parakeet TDT 0.6B
 ```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `mvp-echo-toolbar/app/main/main-simple.js` | Main process, IPC handlers, tray lifecycle |
-| `mvp-echo-toolbar/app/stt/whisper-remote.js` | Cloud STT client with retry/headers |
-| `mvp-echo-toolbar/app/renderer/app/CaptureApp.tsx` | Hidden window, handles Ctrl+Alt+Z recording |
-| `faster-whisper-docker/auth-proxy.py` | Auth + usage tracking + CORS |
-| `faster-whisper-docker/docker-compose.yml` | Whisper server + auth proxy containers |
-| `faster-whisper-docker/api-keys.json` | User API keys (edit to add/revoke) |
-| `faster-whisper-docker/usage.json` | Auto-updated cumulative usage per key |
+| `mvp-echo-toolbar/app/main/main-simple.js` | Main process, IPC, tray, welcome window, keybind config |
+| `mvp-echo-toolbar/app/stt/whisper-remote.js` | Cloud STT client with retry/headers/anti-hallucination |
+| `mvp-echo-toolbar/app/main/tray-manager.js` | System tray icon, dynamic tooltip |
+| `mvp-echo-toolbar/app/renderer/app/CaptureApp.tsx` | Hidden capture window, handles shortcut recording |
+| `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx` | Settings UI (endpoint, key, model, language) |
+| `mvp-echo-toolbar/app/renderer/app/styles/globals.css` | Global styles including scrollbar |
+| `mvp-echo-toolbar/package.json` | v2.2.1, build scripts with clean step |
+| `faster-whisper-docker/auth-proxy.py` | Auth + usage tracking + CORS proxy |
+| `faster-whisper-docker/docker-compose.yml` | ASR server + auth proxy containers |
 
-## Build & Deploy Workflow
+## Docker Server Details
 
-**Dev work:**
-```bash
-npm run build:toolbar    # Build portable exe from repo root
-```
+**Current working server**: `fedirz/faster-whisper-server:latest-cuda` (Oct 2024)
+- Port: 20300 (external) → 8080 (auth proxy) → 8000 (whisper)
+- Server IP: 192.168.1.10
+- GPU: NVIDIA 3080 Ti (12GB VRAM)
+- CUDA: 12.6.3
 
-**Release to production:**
-1. Commit to `dev` and push
-2. GitHub Actions → "Release to Main" → enter version (e.g., `v2.1.0`)
-3. GitHub Actions → "Build MVP-Echo Toolbar Windows App" (auto-triggers or manual)
-4. Download artifact and create GitHub release with `gh release create`
-
-**Docker updates:**
-```bash
-scp faster-whisper-docker/{docker-compose.yml,auth-proxy.py,api-keys.json} root@192.168.1.10:/mnt/user/appdata/faster-whisper-docker/
-ssh root@192.168.1.10 "cd /mnt/user/appdata/faster-whisper-docker && docker-compose down && docker-compose up -d"
-```
-
-## Testing Checklist
-
-**Local testing:**
-- Run exe, check tray icon appears
-- Press Ctrl+Alt+Z, speak, check transcription in popup
-- Settings → Debug → verify DevTools opens with console logs
-- Check temp folder for orphaned files (should be clean)
-
-**Network testing:**
-- `curl https://mvp-echo.ctgs.link/health` (should return JSON)
-- Check auth proxy logs: `docker-compose logs -f auth-proxy`
-- Verify user agent shows in Cloudflare Security → Events
-
-**First-run balloon:**
-- Delete `%APPDATA%/mvp-echo-toolbar/.first-run-complete` and restart app
-- Should see balloon notification after 2 seconds pointing to tray
+**Auth proxy behavior**:
+- LAN (192.168.x.x, 10.x.x.x) → no key needed
+- Remote (Cloudflare tunnel) → Bearer token required
+- Usage tracking: cumulative seconds per key in usage.json
 
 ## API Keys
 
@@ -159,23 +154,19 @@ ssh root@192.168.1.10 "cd /mnt/user/appdata/faster-whisper-docker && docker-comp
 | Alex | `sk-alex-2026` | Yes |
 | Guest 1-5 | Various | Yes |
 
-LAN access (192.168.x.x) requires no key. Remote access via Cloudflare requires key.
+## Testing Checklist
 
-## Cloudflare Configuration Notes
+**Toolbar (v2.2.1):**
+- Launch exe, welcome window should appear (dark, 3 cards, Got it button)
+- Second launch: no welcome window
+- Ctrl+Alt+Z: record/stop, transcription appears in popup
+- Ctrl+Shift+D: should do nothing (removed)
+- Settings > Debug: DevTools should open
+- Settings scrollbar: visible blue bar on right
+- Tray tooltip: "MVP-Echo - Ready (Ctrl+Alt+Z)"
+- Edit `app-config.json` shortcut, restart: new shortcut should work
 
-**Bot Fight Mode** was blocking non-browser user agents. Solution: hardened User-Agent string in app. May still need to disable Bot Fight Mode if issues persist.
-
-**Custom Rules**:
-- WHITELIST (skip for certain URLs)
-- Block Non US (country filter)
-- Bot Stopper (verified bot category)
-- ThreatBlock (threat score filter)
-
-**IP reputation**: Residential IPs can have poor scores from previous tenants. If user gets challenged, check Security → Events for their IP and either whitelist or create a rule to skip based on `Authorization header contains sk-`.
-
-## Next Steps / Open Questions
-
-- Test first-run balloon on Windows
-- Monitor auth proxy logs for version tags (should show `[v2.1.0]`)
-- Verify cleanup works (no orphaned temp files)
-- Consider removing `Ctrl+Shift+D` global shortcut since Debug button exists
+**Docker (current — faster-whisper):**
+- `curl http://192.168.1.10:20300/health` → OK
+- Transcription works with large-v3-turbo model (auto-downloads on first use)
+- Auth proxy logs show version tag `[v2.2.1]`
