@@ -13,7 +13,6 @@ interface ModelOption {
 // Mock data — will be replaced with IPC calls via RemoteAdapter / LocalSidecarAdapter
 const MOCK_MODELS: ModelOption[] = [
   { id: 'gpu-english', label: 'English', detail: 'Recommended', group: 'gpu', state: 'loaded' },
-  { id: 'gpu-english-hd', label: 'English HD', detail: 'Highest accuracy', group: 'gpu', state: 'available' },
   { id: 'gpu-multilingual', label: 'Multilingual', detail: '25 languages', group: 'gpu', state: 'available' },
   { id: 'local-fast', label: 'Fast', detail: '75MB', group: 'local', state: 'download' },
   { id: 'local-balanced', label: 'Balanced', detail: '150MB', group: 'local', state: 'download' },

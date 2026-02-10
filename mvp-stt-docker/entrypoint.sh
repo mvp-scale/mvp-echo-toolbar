@@ -11,7 +11,6 @@ DEFAULT_MODEL="${DEFAULT_MODEL:-parakeet-tdt-0.6b-v2-int8}"
 declare -A MODELS
 MODELS=(
     ["parakeet-tdt-0.6b-v2-int8"]="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-    ["parakeet-tdt-1.1b-v2-int8"]="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-1.1b-v2-int8"
     ["parakeet-tdt-0.6b-v3-int8"]="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 )
 

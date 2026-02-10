@@ -6,8 +6,9 @@ converts audio to float32 samples, delegates to the active ModelEngine adapter,
 and returns the transcription as JSON.
 
 Adapter selection (via ADAPTER_TYPE env var):
-    "subprocess" (default) -- manages sherpa-onnx as a child process
-    "websocket"            -- relays to an external C++ WebSocket server
+    "subprocess" (default)    -- manages sherpa-onnx as a child process
+    "websocket"               -- relays to an external C++ WebSocket server
+    "managed-websocket"       -- manages a sherpa-onnx WebSocket server subprocess
 """
 
 import os
@@ -24,13 +25,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ports import ModelEngine
-from adapters import SubprocessAdapter, WebSocketAdapter
+from adapters import SubprocessAdapter, WebSocketAdapter, ManagedWebSocketAdapter
 
 # -- Model Metadata --
 
 MODEL_METADATA = {
     "parakeet-tdt-0.6b-v2-int8": {"label": "English", "group": "gpu"},
-    "parakeet-tdt-1.1b-v2-int8": {"label": "English HD", "group": "gpu"},
     "parakeet-tdt-0.6b-v3-int8": {"label": "Multilingual", "group": "gpu"},
 }
 
@@ -82,10 +82,12 @@ def create_engine(adapter_type: str) -> ModelEngine:
         return SubprocessAdapter()
     elif adapter_type == "websocket":
         return WebSocketAdapter()
+    elif adapter_type == "managed-websocket":
+        return ManagedWebSocketAdapter()
     else:
         raise ValueError(
             f"Unknown ADAPTER_TYPE: '{adapter_type}'. "
-            "Valid options: 'subprocess', 'websocket'"
+            "Valid options: 'subprocess', 'websocket', 'managed-websocket'"
         )
 
 
@@ -106,8 +108,8 @@ async def lifespan(application: FastAPI):
     print(f"[mvp-bridge] Starting on port {LISTEN_PORT}")
     print(f"[mvp-bridge] Adapter: {ADAPTER_TYPE}")
 
-    # Auto-load default model for subprocess adapter
-    if ADAPTER_TYPE == "subprocess":
+    # Auto-load default model for adapters that manage their own model lifecycle
+    if ADAPTER_TYPE in ("subprocess", "managed-websocket"):
         default_model = os.environ.get(
             "DEFAULT_MODEL", "parakeet-tdt-0.6b-v2-int8"
         )
@@ -117,7 +119,7 @@ async def lifespan(application: FastAPI):
         except Exception as e:
             print(f"[mvp-bridge] WARNING: Failed to load default model: {e}")
             print("[mvp-bridge] Server will start but transcription will fail until a model is loaded.")
-    else:
+    elif ADAPTER_TYPE == "websocket":
         ws_host = os.environ.get("WS_HOST", "mvp-asr")
         ws_port = os.environ.get("WS_PORT", "6006")
         print(f"[mvp-bridge] WebSocket backend: ws://{ws_host}:{ws_port}")

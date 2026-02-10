@@ -12,7 +12,7 @@ Model directory layout (each model is a subdirectory of MODEL_DIR):
             decoder.int8.onnx
             joiner.int8.onnx
             tokens.txt
-        parakeet-tdt-1.1b-v2-int8/
+        parakeet-tdt-0.6b-v3-int8/
             ...
 """
 
@@ -33,10 +33,6 @@ KNOWN_MODELS: dict[str, dict] = {
     "parakeet-tdt-0.6b-v2-int8": {
         "hf_repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
         "dir_prefix": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
-    },
-    "parakeet-tdt-1.1b-v2-int8": {
-        "hf_repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-1.1b-v2-int8",
-        "dir_prefix": "sherpa-onnx-nemo-parakeet-tdt-1.1b-v2-int8",
     },
     "parakeet-tdt-0.6b-v3-int8": {
         "hf_repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
