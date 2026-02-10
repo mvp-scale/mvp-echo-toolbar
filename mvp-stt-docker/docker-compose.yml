@@ -1,21 +1,20 @@
 # MVP Speech-to-Text Docker Stack (v3.0 — Hexagonal Architecture)
 #
-# mvp-bridge: HTTP API server with pluggable STT adapters
+# mvp-bridge: HTTP API server with managed WebSocket adapter (model switching)
 # mvp-auth:   Auth proxy (CORS + API keys + usage tracking)
 #
-# Default mode (websocket adapter — proven stable):
+# Usage:
 #   docker compose up -d --build
-#
-# Subprocess mode (experimental — sherpa-onnx-offline CLI):
-#   Set ADAPTER_TYPE=subprocess in mvp-bridge environment
 #
 # Test:
 #   curl http://localhost:20300/health
 
 services:
-  # -- ASR Engine (sherpa-onnx C++ WebSocket server + GPU) --
-  # Required for default websocket adapter mode.
+  # -- ASR Engine (legacy standalone C++ WebSocket server) --
+  # Only needed when using ADAPTER_TYPE=websocket (single-model, no switching).
+  # Not started by default. To use: docker compose --profile legacy up -d
   mvp-asr:
+    profiles: ["legacy"]
     build:
       context: .
       dockerfile: Dockerfile.asr
@@ -29,7 +28,6 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - MODEL_DIR=/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
       - HF_REPO=csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
-      # - HF_TOKEN=hf_xxxxx  # Optional: only needed for gated/private models
       - WS_PORT=6006
       - NUM_THREADS=4
     deploy:
@@ -65,11 +63,7 @@ services:
       - DEFAULT_MODEL=parakeet-tdt-0.6b-v2-int8
       - SHERPA_PROVIDER=cuda
       - SHERPA_NUM_THREADS=4
-      # Managed WebSocket adapter settings
       - WS_LOCAL_PORT=7100
-      # Legacy WebSocket adapter settings (used when ADAPTER_TYPE=websocket)
-      - WS_HOST=mvp-asr
-      - WS_PORT=6006
     deploy:
       resources:
         reservations:
