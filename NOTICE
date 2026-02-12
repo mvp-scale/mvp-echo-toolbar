@@ -1,17 +1,33 @@
 MVP-Echo Toolbar
 Copyright 2026 MVP-Scale.com
 
-This project was built with passion by the team at MVP-Scale.com --
-hundreds of hours of development to make voice-to-text simple, private,
-and accessible to everyone.
+MVP-Scale.com is building the world's first SaaS foundry -- a community
+and pipeline for launching foundational MVPs at 5-10x speed. This tool
+is one piece of that pipeline.
 
-You're free to use, modify, and distribute this software under the
-Apache License 2.0. We just ask that you keep this notice and give
-credit where it's due.
+MVP-Echo started as a simple idea: what if you could talk instead of type
+while coding? Not dictation in the traditional sense, but real-time voice
+as a development accelerator. Larger prompts. Faster iteration. Hands on
+the keyboard for code, voice for everything else.
 
-If you build something on top of MVP-Echo, we'd love to hear about it.
-We're building more tools in this space and your use case might shape
-what comes next. Reach out at:
+It went through multiple iterations -- from cloud-dependent to local CPU,
+from prototype to production, from a personal tool to something we could
+share. Every version was test-driven. Every decision was about speed
+without sacrificing quality.
+
+The result: voice-to-text that runs in under 300ms with 99% accuracy,
+lives in your system tray, and never sends your audio to the cloud.
+It makes us 3-10x faster. It might do the same for you.
+
+We're not building through vibe coding or AI hype. We're taking real
+ideas, pushing them fast, iterating relentlessly, and shipping things
+that work. This is our pipeline in practice.
+
+If you build on this, fork it, extend it, or just find it useful --
+we'd love to hear from you. We're building more tools like this, and
+your use case might shape what comes next.
 
   https://github.com/mvp-scale/mvp-echo-toolbar/discussions
   https://mvp-scale.com
+
+This is the way.

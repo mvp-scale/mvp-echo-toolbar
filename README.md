@@ -8,6 +8,8 @@ MVP-Echo sits in your system tray and turns speech into text with a single keybo
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg)]()
 [![Latest Release](https://img.shields.io/github/v/release/mvp-scale/mvp-echo-toolbar)](../../releases/latest)
 
+![MVP-Echo Toolbar in the Windows 11 system tray](mvp-echo-toolbar/assets/toolbar-screenshot.png)
+
 ---
 
 ## Quick Start
@@ -33,6 +35,8 @@ That's it. The app is invisible during normal use. It lives in your notification
 
 ## Features
 
+![MVP-Echo Toolbar Setup Guide](mvp-echo-toolbar/assets/setup-guide.png)
+
 - **GPU Transcription** — 99% accuracy, under 300ms via a hosted GPU server on your LAN
 - **Local CPU Mode** — Works offline with no internet and no setup required
 - **Model Switching** — Choose between English (GPU), Multilingual (GPU), or English CPU
@@ -53,9 +57,9 @@ That's it. The app is invisible during normal use. It lives in your notification
 
 | Model | Engine | Accuracy | Speed | Internet Required |
 |-------|--------|----------|-------|-------------------|
-| English | GPU (Parakeet TDT) | 99% | <300ms | LAN only |
-| Multilingual | GPU (Whisper) | 97% | <500ms | LAN only |
-| English CPU | Local (sherpa-onnx) | 80% | <2s | No |
+| English | GPU (Parakeet TDT 0.6b v2) | 99% | <300ms | LAN only |
+| Multilingual | GPU (Parakeet TDT 0.6b v3) | 97% | <500ms | LAN only |
+| English CPU | Local (Parakeet TDT via sherpa-onnx) | 80% | <2s | No |
 
 ## Architecture
 
