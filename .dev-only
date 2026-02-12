@@ -27,6 +27,10 @@ mvp-echo-light/
 mvp-echo-standard/
 mvp-echo/
 
+# Superseded / separate projects
+faster-whisper-docker/
+mvp-echo-studio/
+
 # Legacy root-level app code (not used by toolbar)
 app/
 python/
@@ -47,3 +51,11 @@ setup.md
 
 # Temporary image files in root
 image.png
+*.png
+
+# Dev context (internal notes)
+CONTEXT.md
+ISSUES-*.md
+
+# Dev-only config (not needed on main)
+.gitignore
