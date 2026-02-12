@@ -5,30 +5,16 @@ const fs = require('fs');
 
 const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
+const { log, clearLog, getLogPath } = require('./logger');
 
 const engineManager = new EngineManager();
 const trayManager = new TrayManager();
-
-// File logging
-const logPath = path.join(os.tmpdir(), 'mvp-echo-toolbar-debug.log');
-
-function log(message) {
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${message}\n`;
-  console.log(message);
-  try {
-    fs.appendFileSync(logPath, logMessage);
-  } catch (err) {
-    // ignore log errors
-  }
-}
+const logPath = getLogPath();
 
 // ── Startup Cleanup (Boy Scout: leave no trace) ──
 
 // Fresh log file each session
-try {
-  fs.writeFileSync(logPath, '');
-} catch (_e) { /* ignore */ }
+clearLog();
 
 // Sweep orphaned audio temp files from previous sessions
 try {
@@ -132,6 +118,19 @@ function createHiddenWindow() {
 
   hiddenWindow.on('closed', () => {
     hiddenWindow = null;
+  });
+
+  // Detect renderer crashes — log and recover tray state
+  hiddenWindow.webContents.on('render-process-gone', (_event, details) => {
+    log(`CRITICAL: Hidden window renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`);
+    // Reset tray so user isn't stuck on "processing" forever
+    try {
+      if (trayIcon) trayIcon.setToolTip('MVP-Echo Toolbar - Ready');
+    } catch (_e) {}
+  });
+
+  hiddenWindow.webContents.on('crashed', () => {
+    log('CRITICAL: Hidden window webContents crashed');
   });
 }
 
@@ -405,9 +404,20 @@ ipcMain.handle('copy-to-clipboard', async (_event, text) => {
   return { success: true };
 });
 
-// Tray state update
+// Tray state update with safety timeout
+let processingTimer = null;
 ipcMain.handle('tray:update-state', async (_event, state) => {
   trayManager.setState(state);
+  // Clear any existing timeout
+  if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
+  // If entering processing/recording, set a 30s safety reset
+  if (state === 'processing' || state === 'recording') {
+    processingTimer = setTimeout(() => {
+      log(`WARN: Tray stuck on "${state}" for 30s — resetting to ready`);
+      trayManager.setState('ready');
+      processingTimer = null;
+    }, 30000);
+  }
   return { success: true };
 });
 

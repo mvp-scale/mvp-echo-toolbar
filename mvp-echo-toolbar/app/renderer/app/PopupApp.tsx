@@ -55,6 +55,10 @@ export default function PopupApp() {
   const modelDisplay = transcription.model?.split('/').pop() || '';
   const langDisplay = '';
 
+  const handleDebug = useCallback(() => {
+    (window as any).electron?.ipcRenderer?.invoke('debug:open-devtools').catch(() => {});
+  }, []);
+
   return (
     <div className="w-full h-full bg-background text-foreground rounded-lg border border-border shadow-xl overflow-hidden flex flex-col select-none">
       {/* Title bar (draggable) */}
@@ -97,16 +101,24 @@ export default function PopupApp() {
           <StatusIndicator />
           {modelDisplay && <span className="text-muted-foreground">{modelDisplay}</span>}
         </div>
-        <button
-          onClick={() => setShowSettings(!showSettings)}
-          className={`px-2 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer border ${
-            showSettings
-              ? 'bg-slate-200 text-slate-900 border-slate-300'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted border-transparent'
-          }`}
-        >
-          Settings
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleDebug}
+            className="px-2 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer border text-muted-foreground hover:text-foreground hover:bg-muted border-transparent"
+          >
+            Debug
+          </button>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className={`px-2 py-0.5 rounded text-[9px] font-medium transition-all cursor-pointer border ${
+              showSettings
+                ? 'bg-slate-200 text-slate-900 border-slate-300'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted border-transparent'
+            }`}
+          >
+            Settings
+          </button>
+        </div>
       </div>
     </div>
   );

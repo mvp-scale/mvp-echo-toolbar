@@ -1,87 +1,217 @@
 /**
- * LocalSidecarAdapter -- Stub adapter for future local sherpa-onnx sidecar.
- *
- * This adapter will eventually manage a sherpa-onnx CLI binary as a child
- * process, providing fully offline, on-device transcription with no network
- * dependency.  The binary will be bundled with the Electron app or downloaded
- * on first use.
- *
- * Implementation is tracked as CONTEXT.md Task #10.
- *
- * For now, every method either returns a safe default or throws an error
- * indicating the feature is not yet available.
+ * LocalSidecarAdapter -- Runs sherpa-onnx-offline.exe as a subprocess.
+ * Implements the Engine Port contract.
  */
+
+const { app } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
+const { LocalModelManager } = require('../local-model-manager');
+const { log } = require('../../main/logger');
 
 class LocalSidecarAdapter {
   constructor() {
-    // Future: paths to sherpa-onnx binary, model directory, process handle, etc.
+    this.modelManager = new LocalModelManager();
+    this.activeModelId = null;
+    this.configPath = path.join(app.getPath('userData'), 'local-sidecar-config.json');
+    this._loadConfig();
+  }
+
+  _loadConfig() {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const data = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+        this.activeModelId = data.activeModelId || null;
+      }
+    } catch (err) {
+      log('LocalSidecarAdapter: failed to load config:', err.message);
+    }
+  }
+
+  _saveConfig() {
+    try {
+      fs.writeFileSync(this.configPath, JSON.stringify({
+        activeModelId: this.activeModelId,
+      }, null, 2));
+    } catch (err) {
+      log('LocalSidecarAdapter: failed to save config:', err.message);
+    }
   }
 
   // ── Engine Port: transcribe ──
 
+  async transcribe(audioFilePath, _options = {}) {
+    const binaryPath = this.modelManager.getBinaryPath();
+    if (!binaryPath) {
+      throw new Error('sherpa-onnx binary not found');
+    }
+    if (!this.activeModelId || !this.modelManager.isModelDownloaded(this.activeModelId)) {
+      throw new Error('No local model selected or downloaded');
+    }
+
+    const modelDir = this.modelManager.getModelPath(this.activeModelId);
+    const modelFile = path.join(modelDir, 'model.int8.onnx');
+    const tokensFile = path.join(modelDir, 'tokens.txt');
+    const startTime = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        '--nemo-ctc-model=' + modelFile,
+        '--tokens=' + tokensFile,
+        '--num-threads=4',
+        audioFilePath,
+      ];
+
+      log(`LocalSidecarAdapter: spawning ${binaryPath} ${args.join(' ')}`);
+
+      const binDir = path.dirname(binaryPath);
+      const env = { ...process.env };
+      env.PATH = binDir + path.delimiter + (env.PATH || '');
+
+      const child = spawn(binaryPath, args, {
+        env,
+        cwd: binDir,
+        windowsHide: true,
+        timeout: 120000,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+      child.on('error', (err) => {
+        reject(new Error(`sherpa-onnx spawn error: ${err.message}`));
+      });
+
+      child.on('close', (code) => {
+        const processingTime = Date.now() - startTime;
+        log(`LocalSidecarAdapter: sherpa-onnx exited code=${code}, time=${processingTime}ms`);
+        log(`LocalSidecarAdapter: stdout [${stdout.length} bytes]: ${stdout.trim()}`);
+        log(`LocalSidecarAdapter: stderr [${stderr.length} bytes]: ${stderr.trim()}`);
+
+        if (code !== 0) {
+          reject(new Error(`sherpa-onnx exited with code ${code}: ${stderr.trim()}`));
+          return;
+        }
+
+        // sherpa-onnx may write results to stdout or stderr depending
+        // on platform/build.  Parse whichever has content.
+        const text = this._parseOutput(stdout, stderr);
+        log('LocalSidecarAdapter: parsed text: "' + text + '"');
+        resolve({
+          text,
+          language: 'en',
+          duration: 0,
+          processingTime,
+          engine: `local-cpu (${this.activeModelId})`,
+          model: this.activeModelId,
+        });
+      });
+    });
+  }
+
   /**
-   * @param {string} _audioFilePath
-   * @param {Object} [_options]
-   * @throws {Error} Always -- not yet implemented.
+   * Parse sherpa-onnx-offline output.
+   *
+   * All output goes to stderr. The result is a JSON line like:
+   *   {"lang":"","emotion":"","event":"","text":"Hello world","timestamps":[],...}
+   *
+   * Extract the "text" field from that JSON.
    */
-  async transcribe(_audioFilePath, _options = {}) {
-    throw new Error('Local sidecar not yet implemented. Please use the remote adapter.');
+  _parseOutput(stdout, stderr) {
+    const raw = (stdout + '\n' + stderr).trim();
+    if (!raw) return '';
+
+    // Find the JSON result line and extract the text field
+    for (const line of raw.split('\n')) {
+      const l = line.trim();
+      if (!l.startsWith('{')) continue;
+      try {
+        const parsed = JSON.parse(l);
+        if (typeof parsed.text === 'string') {
+          return parsed.text;
+        }
+      } catch (_e) {
+        // Not valid JSON, skip
+      }
+    }
+
+    return '';
   }
 
   // ── Engine Port: isAvailable ──
 
-  /**
-   * @returns {Promise<{available: boolean, error?: string}>} Always unavailable -- no sidecar binary bundled yet.
-   */
   async isAvailable() {
-    return { available: false, error: 'Local sidecar not yet implemented' };
+    const hasBinary = !!this.modelManager.getBinaryPath();
+    if (!hasBinary) {
+      return { available: false, error: 'sherpa-onnx binary not found' };
+    }
+    const hasActiveModel = this.activeModelId && this.modelManager.isModelDownloaded(this.activeModelId);
+    if (!hasActiveModel) {
+      return { available: false, error: 'No local model downloaded' };
+    }
+    return { available: true };
   }
 
   // ── Engine Port: getHealth ──
 
-  /**
-   * @returns {Promise<{adapter: string, state: string}>}
-   */
   async getHealth() {
-    return { adapter: 'local-sidecar', state: 'unavailable' };
+    const binaryPath = this.modelManager.getBinaryPath();
+    const models = this.modelManager.listModels();
+    const downloadedModels = models.filter(m => m.downloaded);
+    return {
+      adapter: 'local-sidecar',
+      state: binaryPath && downloadedModels.length > 0 ? 'loaded' : 'unavailable',
+      model: this.activeModelId,
+      extra: {
+        binaryFound: !!binaryPath,
+        downloadedModels: downloadedModels.map(m => m.id),
+      },
+    };
   }
 
   // ── Engine Port: switchModel ──
 
-  /**
-   * @param {string} _modelId
-   * @throws {Error} Always -- not yet implemented.
-   */
-  async switchModel(_modelId) {
-    throw new Error('Local sidecar not yet implemented.');
+  async switchModel(modelId) {
+    if (!this.modelManager.isModelDownloaded(modelId)) {
+      throw new Error(`Model ${modelId} is not downloaded`);
+    }
+    this.activeModelId = modelId;
+    this._saveConfig();
   }
 
   // ── Engine Port: listModels ──
 
-  /**
-   * @returns {Promise<Array>} Always empty -- no models available yet.
-   */
   async listModels() {
-    return [];
+    return this.modelManager.listModels().map(m => ({
+      id: m.id,
+      label: m.label,
+      detail: m.detail,
+      group: 'local',
+      state: m.downloaded
+        ? (m.id === this.activeModelId ? 'loaded' : 'available')
+        : 'download',
+    }));
   }
 
   // ── Engine Port: getConfig ──
 
-  /**
-   * @returns {{isConfigured: boolean}}
-   */
   getConfig() {
-    return { isConfigured: false };
+    return {
+      activeModelId: this.activeModelId,
+      isConfigured: !!this.activeModelId,
+    };
   }
 
   // ── Engine Port: configure ──
 
-  /**
-   * No-op for the stub. Future implementation will persist sidecar settings.
-   * @param {Object} _config
-   */
-  configure(_config) {
-    // No-op
+  configure(config) {
+    if (config.activeModelId) {
+      this.activeModelId = config.activeModelId;
+      this._saveConfig();
+    }
   }
 }
 

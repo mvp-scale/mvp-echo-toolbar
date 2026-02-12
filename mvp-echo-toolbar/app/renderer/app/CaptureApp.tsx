@@ -87,7 +87,7 @@ export default function CaptureApp() {
               }
             } catch (_e) { /* use cached values */ }
 
-            console.log(`CaptureApp: Sending to cloud (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
+            console.log(`CaptureApp: Sending to engine (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
             const audioArray = Array.from(new Uint8Array(audioBuffer));
             const result = await api.processAudio(audioArray, {
               model: selectedModelRef.current,

@@ -37,14 +37,15 @@ contextBridge.exposeInMainWorld('electron', {
     invoke: (channel, ...args) => {
       const validChannels = [
         'init:check', 'init:start', 'init:get-status',
-        'engine:status', 'engine:switch', 'engine:upgrade', 'engine:process-audio'
+        'engine:status', 'engine:switch', 'engine:upgrade', 'engine:process-audio',
+        'local:download-model', 'local:cancel-download'
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);
       }
     },
     on: (channel, callback) => {
-      const validChannels = ['init:status', 'engine:upgrade-progress'];
+      const validChannels = ['init:status', 'engine:upgrade-progress', 'local:download-progress'];
       if (validChannels.includes(channel)) {
         ipcRenderer.on(channel, callback);
       }

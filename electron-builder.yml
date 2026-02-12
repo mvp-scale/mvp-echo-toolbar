@@ -9,7 +9,9 @@ asarUnpack:
   - "**/node_modules/onnxruntime-node/**/*"
 
 files:
+  - "app/**/*"
   - "dist/**/*"
+  - "node_modules/**/*"
   - "package.json"
   - "!**/node_modules/*/{CHANGELOG.md,README.md}"
   - "!**/node_modules/.bin"
@@ -22,8 +24,16 @@ extraResources:
     to: "python"
   - from: "python-embedded"
     to: "python-embedded"
-    filter: 
+    filter:
       - "**/*"
+  - from: "sherpa-onnx-bin"
+    to: "sherpa-onnx-bin"
+  - from: "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8"
+    to: "local-models/parakeet-tdt_ctc-110m-en-int8"
+  - from: "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-ctc-0.6b-en-int8"
+    to: "local-models/parakeet-ctc-0.6b-en-int8"
+  - from: "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-1.1b-en-int8"
+    to: "local-models/parakeet-tdt_ctc-1.1b-en-int8"
 
 win:
   target:

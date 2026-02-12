@@ -79,3 +79,16 @@ CLAUDE.local.md
 # Whisper binary builds
 whisper-bin/
 .aoa/
+
+# Large binary assets (bundled at build time, not in git)
+sherpa-onnx-bin/
+sherpa_onnx_models/
+mvp-echo-toolbar/sherpa-onnx-bin/
+mvp-echo-toolbar/sherpa_onnx_models/
+mvp-echo-toolbar/ffmpeg-essentials.zip
+mvp-echo-toolbar/ffmpeg-master-latest-win64-lgpl/
+mvp-echo-toolbar/mvp-sherpa-demo/
+
+# Test audio files
+*.wav
+*.m4a

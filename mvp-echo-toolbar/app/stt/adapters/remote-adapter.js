@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 const fetch = require('node-fetch');
+const { log } = require('../../main/logger');
 
 // Read version from package.json so it stays in sync with builds
 const APP_VERSION = (() => {
@@ -142,7 +143,7 @@ class RemoteAdapter {
       };
 
     } catch (error) {
-      console.error('RemoteAdapter: transcription failed:', error);
+      log('RemoteAdapter: transcription failed:', error);
       throw new Error(`Remote transcription failed: ${error.message}`);
     }
   }
@@ -414,7 +415,7 @@ class RemoteAdapter {
         // Retry on transient server errors
         if (response.status >= 502 && response.status <= 504 && attempt < retries) {
           const delay = Math.pow(2, attempt) * 1000;
-          console.log(
+          log(
             `RemoteAdapter: HTTP ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -429,7 +430,7 @@ class RemoteAdapter {
           (error.type === 'system' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')
         ) {
           const delay = Math.pow(2, attempt) * 1000;
-          console.log(
+          log(
             `RemoteAdapter: Network error (${error.code || error.type}), retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -452,10 +453,10 @@ class RemoteAdapter {
         this.selectedModel = config.selectedModel || 'gpu-english';
         this.language = config.language || null;
         this.isConfigured = !!this.endpointUrl;
-        console.log('RemoteAdapter: Loaded config:', this.endpointUrl);
+        log('RemoteAdapter: Loaded config:', this.endpointUrl);
       }
     } catch (error) {
-      console.error('RemoteAdapter: Failed to load config:', error);
+      log('RemoteAdapter: Failed to load config:', error);
     }
   }
 
@@ -471,9 +472,9 @@ class RemoteAdapter {
         language: this.language,
       };
       fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
-      console.log('RemoteAdapter: Saved config');
+      log('RemoteAdapter: Saved config');
     } catch (error) {
-      console.error('RemoteAdapter: Failed to save config:', error);
+      log('RemoteAdapter: Failed to save config:', error);
     }
   }
 }

@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { WhisperNativeEngine } = require('./whisper-native');
 const { whisperEngine } = require('./whisper-engine');
+const { LocalSidecarAdapter } = require('./adapters/local-sidecar-adapter');
 
 /**
  * Engine Manager - Handles switching between native and Python engines
@@ -13,10 +14,11 @@ class EngineManager {
     this.currentEngine = 'native';
     this.nativeEngine = new WhisperNativeEngine();
     this.pythonEngine = whisperEngine; // Existing Python engine
+    this.localAdapter = new LocalSidecarAdapter();
     this.config = null;
     this.configPath = path.join(app.getPath('userData'), 'engine-config.json');
     this.mainWindow = null;
-    
+
     this.loadConfig();
   }
 
@@ -109,37 +111,37 @@ class EngineManager {
    * Process audio with current engine
    */
   async processAudio(audioData, options = {}) {
-    const engine = this.currentEngine === 'python' ? this.pythonEngine : this.nativeEngine;
-    
     try {
-      // For native engine, we need to save audio to temp file
-      if (this.currentEngine === 'native') {
-        const tempPath = path.join(app.getPath('temp'), `audio_${Date.now()}.wav`);
-        
-        // Convert audio data to WAV file
-        await this.saveAudioToFile(audioData, tempPath);
-        
-        // Process with native engine
-        const result = await this.nativeEngine.transcribe(tempPath, options);
-        
-        // Clean up temp file
-        fs.unlinkSync(tempPath);
-        
+      // Save audio to temp WAV file (needed by all engines)
+      const tempPath = path.join(app.getPath('temp'), `audio_${Date.now()}.wav`);
+      await this.saveAudioToFile(audioData, tempPath);
+
+      let result;
+
+      if (this.currentEngine === 'local-cpu') {
+        result = await this.localAdapter.transcribe(tempPath);
+      } else if (this.currentEngine === 'python') {
+        result = await this.pythonEngine.processAudio(audioData, options);
+        // Python engine manages its own temp files, so remove ours
+        try { fs.unlinkSync(tempPath); } catch (_) {}
         return result;
       } else {
-        // Use Python engine
-        return await this.pythonEngine.processAudio(audioData, options);
+        result = await this.nativeEngine.transcribe(tempPath, options);
       }
+
+      // Clean up temp file
+      try { fs.unlinkSync(tempPath); } catch (_) {}
+      return result;
     } catch (error) {
       console.error('Process audio failed:', error);
-      
-      // Fallback to native if Python fails
-      if (this.currentEngine === 'python') {
+
+      // Fallback chain: local-cpu → native, python → native
+      if (this.currentEngine !== 'native') {
         console.log('Falling back to native engine...');
         this.currentEngine = 'native';
         return await this.processAudio(audioData, options);
       }
-      
+
       throw error;
     }
   }
@@ -273,6 +275,36 @@ class EngineManager {
     
     ipcMain.handle('engine:process-audio', async (event, audioData, options) => {
       return await this.processAudio(audioData, options);
+    });
+
+    // --- Local CPU model management ---
+
+    ipcMain.handle('local:download-model', async (event, modelId) => {
+      try {
+        const result = await this.localAdapter.modelManager.downloadModel(modelId, (pct) => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('local:download-progress', { modelId, percent: pct });
+          }
+        });
+
+        // Auto-select the model after download
+        this.localAdapter.switchModel(modelId);
+
+        // Switch engine to local-cpu
+        this.currentEngine = 'local-cpu';
+        this.config.engine = 'local-cpu';
+        this.saveConfig();
+
+        return result;
+      } catch (error) {
+        console.error('local:download-model failed:', error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle('local:cancel-download', async () => {
+      // No-op in test build — bundled copies are instant
+      return { success: true };
     });
   }
 }

@@ -54,11 +54,17 @@ contextBridge.exposeInMainWorld('electron', {
       const validChannels = [
         'cloud:configure', 'cloud:test-connection', 'cloud:get-config',
         'engine:list-models', 'engine:switch-model', 'engine:status',
-        'debug:open-devtools', 'debug:renderer-log'
+        'debug:open-devtools', 'debug:renderer-log',
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);
       }
+    },
+    on: (channel, callback) => {
+      ipcRenderer.on(channel, callback);
+    },
+    removeListener: (channel, callback) => {
+      ipcRenderer.removeListener(channel, callback);
     },
   }
 });

@@ -1,8 +1,76 @@
 # MVP-Echo Toolbar — Roadmap & Task Tracker
 
-**Version**: `v2.2.1` → `v3.0.0-alpha.5` (in testing)
+**Version**: `v3.0.2` (in progress)
 **Branch**: `dev`
-**Updated**: 2026-02-09 (Session 2)
+**Updated**: 2026-02-11 (Session 5)
+
+---
+
+## Session 5: 2026-02-11 — Local CPU Integration + UI Finalization
+
+**Goal**: Ship v3.0.2 with pre-baked Fast (110m) local CPU model and finalized settings UI.
+
+**UI Changes Finalized**:
+- SettingsPanel redesigned: 2 GPU models (English 99% / Multilingual 97%), 1 local CPU model (English 80%)
+- Quality/Speed/Rating columns added (99% <300ms ⭐⭐⭐⭐⭐, 97% <500ms ⭐⭐⭐⭐, 80% <2s ⭐⭐½)
+- Rating dots changed from yellow to blue for visibility
+- GPU section header: "Hosted GPU — Industry's Best, Fastest"
+- Default model: English (isDefault flag in GPU_MODEL_MAP)
+- State indicators: green dot (loaded), orange pulse (switching), hollow (available)
+- Endpoint URL and API key hide when local CPU selected
+
+**Critical Finding: Renderer-Based Audio Processing Not Viable**
+
+Attempted two approaches for WebM→WAV conversion in the renderer, both crashed Electron's hidden window on Windows with `ACCESS_VIOLATION` exit code `-1073741819`:
+
+1. **AudioContext.decodeAudioData()** after recording → crash within 1-2s
+2. **ScriptProcessorNode** during recording → crash within 200ms of starting
+
+Exit code `0xC0000005` = native crash in Chromium's audio subsystem. Not fixable with try-catch or code changes.
+
+**Solution: ffmpeg in Main Process**
+
+- Renderer sends WebM over IPC (works, confirmed stable)
+- Main process writes WebM to temp file
+- If local adapter active: spawn `ffmpeg.exe -i input.webm -ar 16000 -ac 1 output.wav`
+- Pass WAV to sherpa-onnx
+- Clean up both temp files
+
+**Build Size Impact**:
+- ffmpeg LGPL static build: 163 MB
+- Total installer: 228 MB → 391 MB (Electron + model + sherpa + ffmpeg)
+- Well under 2 GB NSIS limit
+
+**Files Created** (Session 5):
+- `app/main/logger.js` — centralized logging for main process (all logs go to debug file)
+- `app/renderer/app/audio/webm-to-wav.ts` — deleted (not viable)
+
+**Files Modified** (Session 5, ready for build):
+- `app/main/main-simple.js` — uses centralized logger, crash detection, 30s tray timeout
+- `app/stt/engine-manager.js` — ffmpeg conversion for local path, centralized logging
+- `app/stt/adapters/{remote-adapter.js, local-sidecar-adapter.js}` — centralized logging
+- `app/stt/local-model-manager.js` — simplified to single pre-baked model, centralized logging
+- `app/renderer/app/audio/AudioCapture.ts` — reverted to MediaRecorder-only (no ScriptProcessor crash)
+- `app/renderer/app/CaptureApp.tsx` — reverted to send WebM only
+- `app/renderer/app/components/SettingsPanel.tsx` — UI finalized, GPU_MODEL_MAP includes full display props
+- `package.json` — v3.0.2, extraResources includes Fast model only
+- `sherpa-onnx-bin/ffmpeg.exe` — added (163 MB, LGPL build, will be code-signed)
+
+**Next Build Will Include**:
+1. Centralized logging (all engine logs visible in debug file)
+2. ffmpeg WebM→WAV conversion for local CPU path
+3. GPU model stats display correctly (quality/speed/rating)
+4. Default to English on fresh install
+5. Blue rating dots (visible on dark background)
+6. Renderer crash detection + tray safety timeout
+
+**Test Plan for v3.0.2**:
+1. Fresh install (clear AppData Roaming)
+2. Verify defaults to GPU English
+3. GPU English + Multilingual transcriptions
+4. Switch to Local CPU, verify transcription works
+5. Verify all logs appear in `%TEMP%\mvp-echo-toolbar-debug.log`
+6. Check installer size (~391 MB expected)
 
 ---
 
@@ -14,18 +82,110 @@
 |---|------|-----------|------|------------|--------|-------|
 | 1 | Welcome Screen Redesign | — | Light theme, squircle icon, tray guidance, version-scoped dismiss, 4 tray state icons | :green_circle: Green | Approved (Session 2) | Light theme (white bg, blue accents). Squircle mic icon (rounded-[16px]). Intro text guides users to notification area / system tray. Tray Icon card shows 4 state icons (ready/recording/processing/done) as colored squircle SVGs. "Don't show again" is version-scoped: stores `dismissedVersion` in `welcome-config.json`, re-shows on new version. Version fetched dynamically via `app:get-version` IPC. Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5174/welcome.html` |
 | 2 | Remove Faster-Whisper Model References | — | Replace stale model entries with new brand-free IDs | :green_circle: Green | Complete | All Systran/deepdml refs replaced with `gpu-english` etc. in: `whisper-remote.js`, `CaptureApp.tsx`, `SettingsPanel.tsx` |
-| 3 | Settings Panel: Engine/Model Dropdown | #2, #14 | GPU Server (3 models) + Local CPU (3 models) with status indicators | :green_circle: Green | UI Approved | Component: `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx`. Preview: `http://localhost:5174/popup.html`. Brand-free labels, API key smart detection, scrollable in 380x300 popup. Integration with engine port pending |
-| 4 | Server: Hexagonal Architecture (Bridge Refactor) | — | Refactor bridge.py with ModelEngine port + adapter pattern. SubprocessAdapter (new default) + WebSocketAdapter (fallback to current 3-container setup) | :green_circle: Green | Complete | `ports.py` + `adapters/{websocket_adapter.py, subprocess_adapter.py}` created. bridge.py refactored. docker-compose.v2.2.1.yml archived. SubprocessAdapter has sherpa-onnx CLI incompatibility; WebSocketAdapter set as default (proven stable) |
-| 5 | Server: Model Switch API | #4 | `POST /v1/models/switch` — port calls adapter to swap model. `GET /v1/models` returns loaded + available | :green_circle: Green | Complete | Built into bridge.py v3.0. API works with both adapters. Not fully tested (SubprocessAdapter blocked by CLI issue) |
+| 3 | Settings Panel: Engine/Model Dropdown | #2, #14 | GPU Server (2 models) + Local CPU (3 models) with status indicators | :green_circle: Green | UI Approved | Component: `mvp-echo-toolbar/app/renderer/app/components/SettingsPanel.tsx`. Preview: `http://localhost:5174/popup.html`. Brand-free labels, API key smart detection, scrollable in 380x300 popup. English HD removed (1.1b model doesn't exist). Integration with engine port pending |
+| 4 | Server: Hexagonal Architecture (Bridge Refactor) | — | Refactor bridge.py with ModelEngine port + adapter pattern. ManagedWebSocketAdapter (default) + SubprocessAdapter + WebSocketAdapter (legacy) | :green_circle: Green | Complete | `ports.py` + 3 adapters created. ManagedWebSocketAdapter is production default: manages C++ WebSocket server as subprocess inside bridge container, enabling model switching. SubprocessAdapter has CLI incompatibility. WebSocketAdapter (legacy, single-model) behind `profiles: ["legacy"]` in compose |
+| 5 | Server: Model Switch API | #4 | `POST /v1/models/switch` — port calls adapter to swap model. `GET /v1/models` returns loaded + available | :green_circle: Green | Complete | Built into bridge.py v3.0. Confirmed working with ManagedWebSocketAdapter: kills subprocess, restarts with new model, ready in ~5s. Tested on production server (Session 3) |
 | 6 | Server: Idle Timeout / Auto-Unload | #4 | Unload model after 60min idle, reload on next request (~5-10s cold start) | :green_circle: Green | Not Started | Timer reset on every transcription. Configurable via env var. Implemented at port level |
-| 7 | Server: Pre-Download All GPU Models | #4 | Download all 3 Parakeet TDT models on first start (~1.7GB total) | :green_circle: Green | Not Started | entrypoint.sh downloads all to shared volume |
+| 7 | Server: Pre-Download All GPU Models | #4 | Download all 2 Parakeet TDT models on first start (~1.3GB total) | :green_circle: Green | Complete | entrypoint.sh downloads both models to shared volume. 1.1b removed (no sherpa-onnx conversion on HuggingFace). Verified on production server: 631MB + 641MB |
 | 8 | Toolbar: Model Switch UX | #3, #5, #14 | User picks model → "Switching..." status → ready in 5-10s | :green_circle: Green | Not Started | Engine manager calls switch via RemoteAdapter, polls until ready |
 | 9 | Toolbar: Server Status in Settings | #5, #14 | Show loaded model, idle time, model states (loaded/sleeping/available) | :green_circle: Green | Not Started | RemoteAdapter polls `/v1/models` and `/health` |
-| 10 | Local CPU Engine (sherpa-onnx sidecar) | #14 | Bundle prebuilt sherpa-onnx CLI binary as sidecar process, communicate via stdio | :green_circle: Green | Not Started | Sidecar approach — no native Node addon, no ASAR issues. Matches existing subprocess pattern |
-| 11 | Local CPU: Model Download Manager | #10 | Download Fast/Balanced/Accurate models on demand with progress UI | :yellow_circle: Yellow | Not Started | Store in userData dir. No model ships with installer |
+| 10 | Local CPU Engine (sherpa-onnx sidecar) | #14 | Bundle prebuilt sherpa-onnx CLI binary + Fast model pre-baked in installer | :green_circle: Green | In Progress | Sidecar approach validated (Session 4). Binary works, Fast model transcribes accurately. Requires WebM→WAV conversion (ffmpeg or AudioContext). Ship Fast model pre-baked (~126 MB), no download step needed |
+| 11 | Local CPU: Model Download Manager | #10 | Download Balanced model on demand with progress UI | :yellow_circle: Yellow | Descoped | Only Balanced (624 MB) would need download. Fast ships pre-baked. Accurate (1.1b) is broken — ONNX runtime incompatibility |
 | 12 | Anti-Hallucination Pipeline Review | — | Simplify pipeline for Parakeet TDT (non-autoregressive, less hallucination) | :green_circle: Green | Deferred | Decision: not needed for Parakeet TDT. Can be added as optional adapter-level post-processing hook if future models require it |
 | 13 | Keybind Display in UI | — | Show current shortcut in Settings, note about config file for changing | :green_circle: Green | Dropped | Not in approved UI mockups. Users can check GitHub docs if needed |
 | 14 | Toolbar: Hexagonal Engine Refactor | #2 | Refactor engine-manager.js with Engine port (transcribe, isAvailable, getHealth) + adapters: RemoteAdapter (HTTP to server), LocalSidecarAdapter (sherpa-onnx CLI subprocess) | :green_circle: Green | Complete | `engine-port.js` (contract), `engine-manager.js` (coordinator), `adapters/{remote-adapter.js, local-sidecar-adapter.js}` created. RemoteAdapter hits new `/v1/models/switch` API. LocalSidecar is stub for Task #10. Auth now required: isAvailable() hits `/v1/models` (authenticated endpoint) |
+
+### Session 3: 2026-02-10 — Managed WebSocket Adapter + 1.1b Removal
+
+**Completed**: Task #5 (verified), #7 (verified), new ManagedWebSocketAdapter, 1.1b model cleanup
+
+**Problem**: The WebSocket adapter connected to a separate `mvp-asr` container running the C++ server, but that server only loads one model at startup with no API for switching. The 1.1b "English HD" model doesn't exist as a sherpa-onnx conversion on HuggingFace.
+
+**Solution**: Created `ManagedWebSocketAdapter` that runs the C++ WebSocket server as a subprocess *inside* the bridge container. Model switching = kill subprocess, restart with new model paths.
+
+**Files Created**:
+- `mvp-stt-docker/adapters/managed_ws_adapter.py` — new adapter combining subprocess model scanning + WebSocket transcription protocol
+- `mvp-stt-docker/README.md` — stack documentation with architecture, files, adapters, history
+- `mvp-stt-docker/SHERPA-ONNX-GPU-GUIDE.md` — guide for running sherpa-onnx on GPU in Docker
+
+**Files Modified**:
+- `mvp-stt-docker/bridge.py` — added `managed-websocket` to adapter factory, removed 1.1b from MODEL_METADATA
+- `mvp-stt-docker/adapters/__init__.py` — added ManagedWebSocketAdapter export
+- `mvp-stt-docker/adapters/subprocess_adapter.py` — removed 1.1b from KNOWN_MODELS
+- `mvp-stt-docker/docker-compose.yml` — `ADAPTER_TYPE=managed-websocket`, `mvp-asr` behind `profiles: ["legacy"]`
+- `mvp-stt-docker/entrypoint.sh` — removed 1.1b from MODELS array
+- `app/renderer/app/components/SettingsPanel.tsx` — removed English HD from mock models
+- `app/renderer/app/components/WelcomeScreen.tsx` — "English and Multilingual" (was "English, HD, and Multilingual")
+
+**Deployment**:
+```bash
+rsync -av --delete --exclude='__pycache__' mvp-stt-docker/ root@192.168.1.10:/mnt/user/appdata/mvp-stt-docker/
+ssh root@192.168.1.10 "cd /mnt/user/appdata/mvp-stt-docker && docker compose down && docker compose up -d --build --no-cache"
+```
+
+**Verified on server**:
+- Model switching works (English <-> Multilingual)
+- `mvp-asr` no longer starts by default (was consuming 426MB VRAM unnecessarily)
+- 1.1b empty directory removed from Docker volume
+
+**Next**: Tasks 3 (Settings Panel wiring to live data), 6 (Idle Timeout), 8 (Model Switch UX), 9 (Server Status), 10 (Local CPU sidecar)
+
+---
+
+### Session 4: 2026-02-11 — Local CPU Model Validation
+
+**Goal**: Validate whether sherpa-onnx local CPU models are worth integrating into the toolbar.
+
+**Test Setup**: Built `mvp-sherpa-demo/` — Node.js server + HTML page for isolated model testing. Downloaded native Linux sherpa-onnx binary (v1.12.23) for testing. Used ffmpeg to convert test audio (51.2s M4A recording) to 16kHz mono WAV.
+
+**Results** (on Linux dev machine, 4 threads):
+
+| Model | File | Size | Time | RTF | Punctuation | Capitalization | Quality |
+|-------|------|------|------|-----|-------------|----------------|---------|
+| **Fast (110m)** | `parakeet-tdt_ctc-110m-en-int8` | 126 MB | **1.35s** | 0.026 | Yes | Yes | Good — got "Corey", proper sentences |
+| **Balanced (0.6b)** | `parakeet-ctc-0.6b-en-int8` | 624 MB | **3.38s** | 0.066 | No | No | Decent — missed "Corey" → "coy", no punctuation |
+| **Accurate (1.1b)** | `parakeet-tdt_ctc-1.1b-en-int8` | 1.1 GB | **BROKEN** | — | — | — | ONNX runtime error: node name mismatch in self_attn layer |
+
+**Key Findings**:
+1. **Fast (110m) is the clear winner** — fastest, has punctuation + capitalization, best name recognition
+2. **Balanced (0.6b) is worse** — 2.5x slower, no punctuation/caps, worse on proper nouns
+3. **Accurate (1.1b) is broken** — `Ort::Exception` during initialization, incompatible with sherpa-onnx v1.12.23 ONNX runtime
+4. **sherpa-onnx only accepts WAV** — toolbar records WebM (MediaRecorder API). Integration requires WebM→WAV conversion via ffmpeg or browser AudioContext before passing to sherpa-onnx
+5. **Audio format is the only remaining integration blocker** — the model loads, transcribes accurately, and is fast enough for short utterances
+
+**Decision**: Ship only the **Fast (110m) model pre-baked** in the toolbar installer (~126 MB added to build size). No download step — it's already there when the user installs. Remove Balanced and Accurate from the UI. When user selects "Local CPU", it just works.
+
+**Integration TODO** (for next session):
+1. Add WebM→WAV conversion in `processAudio` pipeline (ffmpeg bundled, or AudioContext decode in renderer)
+2. `local-sidecar-adapter.js` — already written and working (Session 4), just needs the audio format fix
+3. `local-model-manager.js` — simplify to just locate the pre-baked Fast model (no download logic needed)
+4. `SettingsPanel.tsx` — remove Balanced/Accurate rows, Fast shows as "available" (no download badge since it's pre-baked)
+5. `package.json` build config — bundle only `sherpa-onnx-bin/` (~18 MB) + Fast model (~126 MB). Total build size increase: ~144 MB
+6. `electron-builder.yml` or `package.json` `extraResources` — add the two directories
+
+**Files Created** (Session 4, in toolbar project):
+- `mvp-echo-toolbar/app/stt/adapters/local-sidecar-adapter.js` — full Engine Port implementation, spawns sherpa-onnx-offline.exe
+- `mvp-echo-toolbar/app/stt/local-model-manager.js` — model registry + path resolution (needs simplification for pre-baked approach)
+- `mvp-echo-toolbar/mvp-sherpa-demo/server.js` — isolated test server (not for production)
+- `mvp-echo-toolbar/mvp-sherpa-demo/index.html` — test UI (not for production)
+
+**Files Modified** (Session 4, rolled back — re-apply in next session):
+- `engine-manager.js` — added `local:download-model` IPC handler (change to simpler activation since pre-baked)
+- `preload.js` — added `local:download-model`, `local:cancel-download` to valid channels + `on`/`removeListener` for progress events
+- `SettingsPanel.tsx` — updated sizes, wired download, hid endpoint/apikey when local active
+- `package.json` — added `extraResources` for models + binary
+
+**Assets on disk** (not committed, needed for build):
+- `mvp-echo-toolbar/sherpa-onnx-bin/` — Windows binary + DLLs (18 MB): `sherpa-onnx-offline.exe`, `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `cargs.dll`
+- `mvp-echo-toolbar/sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8/` — Fast model (126 MB): `model.int8.onnx`, `tokens.txt`
+- `/tmp/sherpa-linux/sherpa-onnx-v1.12.23-linux-x64-shared-no-tts/` — Linux binary used for testing (not bundled)
+
+**Build Notes**:
+- electron-builder portable target uses NSIS internally — fails with `mmap` error on payloads >2 GB. Keep total under 2 GB or use zip of `win-unpacked/`
+- `package.json` `"build"` section overrides `electron-builder.yml` when both exist. Put all config in `package.json`
+- The root project `package.json` is NOT the toolbar — always edit `mvp-echo-toolbar/package.json`
+
+---
 
 ### Session 2: 2026-02-09 — Welcome Screen Polish + Version Logic
 
@@ -100,7 +260,7 @@ docker compose up -d --build
 | Local CPU model naming | Fast / Balanced / Accurate | Human-readable, conveys speed-vs-quality tradeoff. Replaces tiny/base/small |
 | Toolbar engine layer | Hexagonal (port/adapter) | RemoteAdapter + LocalSidecarAdapter behind same interface. No hard-coded whisper-remote.js |
 | whisper-remote.js | Replaced by RemoteAdapter | Old file preserved at `mvp-echo-toolbar/app/stt/whisper-remote.js` (no longer imported). RemoteAdapter is the hexagonal replacement |
-| Model labels in UI | Brand-free | "English", "English HD", "Multilingual" (GPU) / "Fast", "Balanced", "Accurate" (CPU). No Parakeet/Whisper names shown. Internal IDs: `gpu-english`, `gpu-english-hd`, `gpu-multilingual`, `local-fast`, `local-balanced`, `local-accurate` |
+| Model labels in UI | Brand-free | "English", "Multilingual" (GPU) / "Fast", "Balanced", "Accurate" (CPU). No Parakeet/Whisper names shown. Internal IDs: `gpu-english`, `gpu-multilingual`, `local-fast`, `local-balanced`, `local-accurate` |
 | Auth enforcement | API keys always required | Private IP bypass removed from auth-proxy.py. All requests (except `/health`) require valid API key. Test connection validates auth against `/v1/models` |
 | GPU section header | "Industry's Best, Fastest" | Sets expectation: best available GPU models |
 | CPU section header | "Industry's Best, No Internet Required" | Sets expectation: best available CPU models, with tradeoff (slower but offline) |
@@ -110,6 +270,12 @@ docker compose up -d --build
 | Icon shape | Squircle (rounded-[16px]) | Modern app icon style, matches Windows 11 aesthetic. Same shape in header + tray state icons |
 | Tray state icons in welcome | 4 states: Ready/Rec/Busy/Done | Blue #4285f4 / Red #ea4335 / Yellow #fbbc04 / Green #34a853. Matches `tray-manager.js` STATES |
 | Settings panel UI | Approved 2026-02-09 | `SettingsPanel.tsx` in toolbar project — preview at `popup.html`. Scrollable in 380x300, smart API key detection |
+| Default adapter | ManagedWebSocketAdapter | Runs C++ WebSocket server as subprocess inside bridge container. Model stays in GPU memory, switching by restart. Eliminates need for separate mvp-asr container |
+| 1.1b model removal | Removed | `parakeet-tdt-1.1b-v2-int8` doesn't exist as a sherpa-onnx conversion on HuggingFace. Removed from all configs, UI, and model lists. 2 GPU models remain (English 0.6b-v2, Multilingual 0.6b-v3) |
+| mvp-asr container | Behind legacy profile | `profiles: ["legacy"]` in docker-compose.yml. Only starts with `--profile legacy`. Saves 426MB VRAM |
+| Local CPU: ship only Fast | Pre-bake Fast (110m) model | Tested all 3: Fast wins on speed (1.35s), quality (punctuation, caps, names), and size (126 MB). Balanced is 2.5x slower with worse output. Accurate is broken (ONNX runtime error). No download UI needed — just works |
+| Local CPU: audio format | WebM→WAV conversion required | sherpa-onnx only accepts WAV (RIFF). Toolbar records WebM. Must convert before passing to sherpa-onnx. Options: bundle ffmpeg (~40 MB) or use AudioContext in renderer to decode + write WAV header in main process |
+| Local CPU: build config | Use package.json "build" section | `electron-builder.yml` is ignored when `package.json` has a `"build"` key. All extraResources go in `package.json`. NSIS portable fails >2 GB — keep build lean |
 
 ### Test Strategy
 
@@ -121,7 +287,7 @@ docker compose up -d --build
 | 4 | bridge.py starts with SubprocessAdapter, transcription works end-to-end. Switch to WebSocketAdapter, same test passes against 3-container setup |
 | 5 | `curl POST /v1/models/switch` changes model, subsequent transcriptions use new model |
 | 6 | After 60min idle, ASR process stopped (check with `ps`). Next request triggers reload, returns result |
-| 7 | All 3 models present in volume after first start. `GET /v1/models` lists all |
+| 7 | Both models present in volume after first start. `GET /v1/models` lists both (English + Multilingual) |
 | 8 | Pick model in toolbar → status shows "Switching..." → status shows "Ready" with new model name |
 | 9 | Settings shows "Parakeet 0.6B English (loaded, idle 5m)" or "sleeping" accurately |
 | 10 | Toolbar transcribes audio with no network connection using local sherpa-onnx sidecar |
@@ -162,10 +328,14 @@ Toolbar (Windows)                          Server (Docker, 192.168.1.10)
 │  │   HTTP to server │ ←─────────────    │       get_status()               │
 │  │                  │                   │       list_available()            │
 │  └─ LocalSidecar    │                   │                                  │
-│      sherpa-onnx    │                   │       ├─ SubprocessAdapter       │
-│      CLI binary     │                   │       │   (sherpa-onnx child)    │
-│      (offline)      │                   │       └─ WebSocketAdapter        │
-│                     │                   │           (fallback to mvp-asr)  │
+│      sherpa-onnx    │                   │  ├─ ManagedWebSocketAdapter     │
+│      CLI binary     │                   │  │   (default: C++ WS server    │
+│      (offline)      │                   │  │    as subprocess, GPU,        │
+│                     │                   │  │    model switching)           │
+│                     │                   │  ├─ SubprocessAdapter            │
+│                     │                   │  │   (sherpa-onnx CLI per file)  │
+│                     │                   │  └─ WebSocketAdapter (legacy)    │
+│                     │                   │      (separate mvp-asr container)│
 └─────────────────────┘                   └──────────────────────────────────┘
 ```
 Clean port/adapter on both sides. API contract in the middle is the only coupling point.
@@ -180,20 +350,25 @@ User-facing labels are brand-free. Backend model IDs are internal only.
 
 | ID (internal) | Label in UI | Detail | Backend Model | Languages | Download | VRAM |
 |---------------|-------------|--------|---------------|-----------|----------|------|
-| `gpu-english` | English | Recommended | `parakeet-tdt-0.6b-v2-int8` | English | 460MB | ~500MB |
-| `gpu-english-hd` | English HD | Highest accuracy | `parakeet-tdt-1.1b-v2-int8` | English | ~800MB | ~1GB |
-| `gpu-multilingual` | Multilingual | 25 languages | `parakeet-tdt-0.6b-v3-int8` | 25 languages | ~465MB | ~500MB |
+| `gpu-english` | English | Recommended | `parakeet-tdt-0.6b-v2-int8` | English | 631MB | ~426MB |
+| `gpu-multilingual` | Multilingual | 25 languages | `parakeet-tdt-0.6b-v3-int8` | 25 languages | 641MB | ~426MB |
 
 ### Local CPU — Industry's Best, No Internet Required
 
-| ID (internal) | Label in UI | Size | Speed (est.) | Quality |
-|---------------|-------------|------|-------------|---------|
-| `local-fast` | Fast | 75MB | ~1-2s | Basic — fastest, minimal accuracy |
-| `local-balanced` | Balanced | 150MB | ~2-4s | Balanced speed and accuracy |
-| `local-accurate` | Accurate | 480MB | ~4-8s | Best accuracy, slower |
+| ID (internal) | Label in UI | Size | Speed (tested) | Quality | Status |
+|---------------|-------------|------|---------------|---------|--------|
+| `local-fast` | Fast | 126 MB | **1.35s / 51s audio** (RTF 0.026) | Good — punctuation, capitalization, proper nouns | **Pre-baked in installer** |
+| `local-balanced` | Balanced | 624 MB | 3.38s / 51s audio (RTF 0.066) | Decent — no punctuation/caps, worse on names | Available but not shipped |
+| `local-accurate` | Accurate | 1.1 GB | BROKEN | ONNX runtime incompatibility with sherpa-onnx v1.12.23 | **Removed** |
 
-No models ship with installer. All downloaded on demand to userData directory.
+**Strategy change (Session 4)**: Fast model ships pre-baked in installer (~126 MB). No download step needed. Balanced available as future option. Accurate removed entirely.
 No brand names (Parakeet, Whisper, etc.) shown in UI — hexagonal adapter means we always show the best the industry has.
+
+**CLI invocation** (same for all models):
+```
+sherpa-onnx-offline.exe --nemo-ctc-model=model.int8.onnx --tokens=tokens.txt --num-threads=4 audio.wav
+```
+**Requires WAV input** (16kHz mono 16-bit PCM). Toolbar records WebM — conversion needed in pipeline.
 
 ---
 
@@ -206,19 +381,17 @@ Engine & Model
 ─────────────────────────────────────────
 GPU SERVER — INDUSTRY'S BEST, FASTEST
   ⚡ English            [recommended]  ● loaded
-  ⚡ English HD                        ○ available
   ⚡ Multilingual                      ○ available
 ─────────────────────────────────────────
 LOCAL CPU — INDUSTRY'S BEST, NO INTERNET
-  💻 Fast (75MB)                       ↓ download
-  💻 Balanced (150MB)                  ↓ download
-  💻 Accurate (480MB)                  ↓ download
+  💻 Fast (126 MB)                     ○ available
 
-States:  ● loaded  |  ○ available  |  ↓ download  |  ⏳ switching
+States:  ● loaded  |  ○ available  |  ⏳ switching
 ```
 
 Selecting a GPU model that's "available" → "Switching model (~10s)..." → done.
-Selecting a Local model that's "download" → "Download first?" → progress → ready.
+Selecting Local CPU Fast → switches to local adapter, instant (pre-baked, no download).
+When local model active: endpoint URL, API key, and connection status are hidden (not needed).
 API key: auto-detected as optional for local (192.168.x.x), required for remote/HTTPS.
 
 ---
@@ -249,7 +422,7 @@ Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5
 │                                                      │
 │  What's New:                                         │
 │  • Industry-leading GPU transcription — under 1s     │
-│  • Switch between English, HD, and Multilingual      │
+│  • Switch between English and Multilingual            │
 │  • Offline CPU mode — no internet required           │
 │                                                      │
 │  ☐ Don't show this again          [ Get Started ]    │
@@ -281,15 +454,20 @@ Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5
 | `app/stt/adapters/local-sidecar-adapter.js` | NEW: sherpa-onnx CLI subprocess | #14: implements Engine port for local CPU |
 
 ### Docker Server (mvp-stt-docker/)
-| File | Purpose | Changes Needed |
-|------|---------|----------------|
-| `docker-compose.yml` | Service definitions | #4: merge bridge+ASR services |
-| `docker-compose.v2.2.1.yml` | NEW: Archived working config | #4: copy before merge for easy comparison |
-| `bridge.py` | HTTP API + ModelEngine port | #4: port/adapter refactor, #5: switch API, #6: idle timer |
-| `adapters/subprocess_adapter.py` | NEW: manages sherpa-onnx child process | #4: default adapter |
-| `adapters/websocket_adapter.py` | NEW: connects to separate ASR container | #4: fallback adapter (preserves current behavior) |
-| `entrypoint-asr.sh` | Model download + start | #7: download all models |
-| `auth-proxy.py` | Auth middleware | No changes needed |
+| File | Purpose | Status |
+|------|---------|--------|
+| `docker-compose.yml` | Service definitions (managed-websocket default, mvp-asr behind legacy profile) | Current |
+| `docker-compose.v2.2.1.yml` | Archived v2.2.1 compose (pre-hexagonal). Remove before release to main | Archive |
+| `bridge.py` | HTTP API + ModelEngine port + adapter factory | Current |
+| `ports.py` | ModelEngine ABC (5 methods) | Current |
+| `adapters/managed_ws_adapter.py` | Default: manages C++ WS server subprocess, model switching | Current |
+| `adapters/subprocess_adapter.py` | sherpa-onnx CLI per file (has CLI incompatibility) | Fallback |
+| `adapters/websocket_adapter.py` | Relays to separate mvp-asr container (legacy, no switching) | Legacy |
+| `entrypoint.sh` | Bridge entrypoint: downloads 2 models from HuggingFace | Current |
+| `entrypoint-asr.sh` | Legacy ASR container entrypoint | Legacy |
+| `auth-proxy.py` | Auth middleware | Current |
+| `README.md` | Stack documentation | Current |
+| `SHERPA-ONNX-GPU-GUIDE.md` | Guide for running sherpa-onnx on GPU in Docker | Reference |
 
 ### MVP-Echo Studio (mvp-echo-studio/) — Separate Effort
 | Status | Detail |
@@ -320,7 +498,7 @@ curl -s -X POST -F "audio=@test.wav" http://localhost:8000/v1/transcribe | jq .
 echo "4. Switch model"
 curl -s -X POST http://localhost:8000/v1/models/switch \
   -H "Content-Type: application/json" \
-  -d '{"model_id":"parakeet-1.1b-en"}' | jq .
+  -d '{"model_id":"parakeet-tdt-0.6b-v3-int8"}' | jq .
 ```
 
 ### Toolbar (manual checklist, once per build)
@@ -374,7 +552,7 @@ mvp-echo-toolbar/                  ← git repo root
 
 ## Server Details
 - **IP**: 192.168.1.10
-- **Toolbar port**: 20300 (mvp-auth → mvp-bridge → mvp-asr)
+- **Toolbar port**: 20300 (mvp-auth → mvp-bridge w/ managed WS subprocess)
 - **Studio port**: 20301 (mvp-scribe, NeMo container)
 - **GPU**: NVIDIA RTX 3090 Ti, 24GB VRAM (Tower) / 3080 Ti, 12GB (original)
 - **sherpa-onnx**: v1.12.23 C++ binaries

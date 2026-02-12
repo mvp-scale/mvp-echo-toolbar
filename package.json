@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo",
-  "version": "1.1.0",
+  "version": "3.0.1",
   "description": "MVP-Echo - Windows 11 Voice-to-Text Transcription App",
   "main": "app/main/main-simple.js",
   "scripts": {
@@ -60,16 +60,32 @@
       "app/**/*",
       "dist/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!sherpa_onnx_models",
+      "!sherpa-onnx-bin"
     ],
     "extraFiles": [
       {
         "from": "app/stt",
         "to": "resources/stt"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "sherpa-onnx-bin",
+        "to": "sherpa-onnx-bin"
       },
       {
-        "from": "whisper-bin/whisper-standalone.exe",
-        "to": "resources/bin/whisper-standalone.exe"
+        "from": "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8",
+        "to": "local-models/parakeet-tdt_ctc-110m-en-int8"
+      },
+      {
+        "from": "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-ctc-0.6b-en-int8",
+        "to": "local-models/parakeet-ctc-0.6b-en-int8"
+      },
+      {
+        "from": "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-1.1b-en-int8",
+        "to": "local-models/parakeet-tdt_ctc-1.1b-en-int8"
       }
     ],
     "win": {

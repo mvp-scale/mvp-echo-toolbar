@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo-toolbar",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "MVP-Echo Toolbar - System Tray Voice-to-Text Transcription",
   "main": "app/main/main-simple.js",
   "scripts": {
@@ -64,6 +64,16 @@
       {
         "from": "app/stt",
         "to": "resources/stt"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "sherpa-onnx-bin",
+        "to": "sherpa-onnx-bin"
+      },
+      {
+        "from": "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8",
+        "to": "sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8"
       }
     ],
     "win": {

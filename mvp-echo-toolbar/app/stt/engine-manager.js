@@ -15,11 +15,13 @@
  *   processAudio           - main transcription entry point
  */
 
-const { ipcMain } = require('electron');
+const { ipcMain, app } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
+const { log } = require('../main/logger');
 
 const RemoteAdapter = require('./adapters/remote-adapter');
 const LocalSidecarAdapter = require('./adapters/local-sidecar-adapter');
@@ -40,6 +42,9 @@ class EngineManager {
 
     /** Human-readable name of the active adapter. */
     this.activeAdapterName = 'remote';
+
+    /** Currently selected model ID (tracks across adapter switches). */
+    this.selectedModelId = 'local-fast';
 
     /** Reference to the main BrowserWindow (for popup notifications). */
     this.mainWindow = null;
@@ -65,14 +70,17 @@ class EngineManager {
    *   3. Remote adapter (even if not configured -- so Settings UI can configure it)
    */
   async initialize() {
-    console.log('EngineManager: Initializing...');
+    log('EngineManager: Initializing...');
+
+    // Clean up orphaned temp files from previous sessions / crashes
+    this._cleanupOrphanedTempFiles();
 
     // Check remote adapter
     const remoteResult = await this.remoteAdapter.isAvailable();
     if (remoteResult.available) {
       this.activeAdapter = this.remoteAdapter;
       this.activeAdapterName = 'remote';
-      console.log('EngineManager: Remote adapter is available and selected');
+      log('EngineManager: Remote adapter is available and selected');
       return { adapter: 'remote', available: true };
     }
 
@@ -81,14 +89,14 @@ class EngineManager {
     if (localResult.available || localResult === true) {
       this.activeAdapter = this.localSidecarAdapter;
       this.activeAdapterName = 'local-sidecar';
-      console.log('EngineManager: Local sidecar adapter selected');
+      log('EngineManager: Local sidecar adapter selected');
       return { adapter: 'local-sidecar', available: true };
     }
 
     // Fallback: keep remote as active so user can configure it via Settings
     this.activeAdapter = this.remoteAdapter;
     this.activeAdapterName = 'remote';
-    console.log('EngineManager: No adapter available yet; remote selected for configuration');
+    log('EngineManager: No adapter available yet; remote selected for configuration');
     return { adapter: 'remote', available: false };
   }
 
@@ -107,18 +115,34 @@ class EngineManager {
    * @returns {Promise<{success: boolean, text: string, processingTime: number, engine: string, language: string, model: string, error?: string}>}
    */
   async processAudio(audioData, options = {}) {
-    const tempPath = path.join(
+    const webmPath = path.join(
       os.tmpdir(),
       `mvp-echo-audio-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.webm`
     );
 
+    let transcribePath = webmPath;
+    let wavPath = null;
+
     try {
-      // Write audio to temp file
+      // Write WebM audio to temp file
       const audioBuffer = Buffer.from(audioData);
-      fs.writeFileSync(tempPath, audioBuffer);
+      fs.writeFileSync(webmPath, audioBuffer);
+      log(`EngineManager: Wrote WebM to ${webmPath} (${audioBuffer.byteLength} bytes)`);
+
+      // If local adapter is active, convert WebM→WAV using ffmpeg
+      if (this.activeAdapterName === 'local-sidecar') {
+        wavPath = path.join(
+          os.tmpdir(),
+          `mvp-echo-audio-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.wav`
+        );
+        log('EngineManager: Converting WebM→WAV via ffmpeg...');
+        await this._convertWebmToWav(webmPath, wavPath);
+        transcribePath = wavPath;
+        log(`EngineManager: WAV ready at ${wavPath}`);
+      }
 
       // Delegate to active adapter
-      const result = await this.activeAdapter.transcribe(tempPath, {
+      const result = await this.activeAdapter.transcribe(transcribePath, {
         model: options.model,
         language: options.language,
       });
@@ -145,7 +169,7 @@ class EngineManager {
       };
 
     } catch (error) {
-      console.error('EngineManager: processAudio failed:', error);
+      log('EngineManager: processAudio failed:', error);
       return {
         success: false,
         text: '',
@@ -154,8 +178,9 @@ class EngineManager {
         error: error.message,
       };
     } finally {
-      // Always clean up temp file
-      this._cleanupTempFile(tempPath);
+      // Always clean up temp files
+      this._cleanupTempFile(webmPath);
+      if (wavPath) this._cleanupTempFile(wavPath);
     }
   }
 
@@ -180,13 +205,31 @@ class EngineManager {
   }
 
   /**
-   * Delegate model switch to the active adapter.
+   * Switch model, crossing adapter boundaries if needed.
+   *
+   * - local-* models → activate LocalSidecarAdapter
+   * - gpu-* models   → activate RemoteAdapter, delegate model switch to server
+   *
    * @param {string} modelId
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   async switchModel(modelId) {
     try {
-      await this.activeAdapter.switchModel(modelId);
+      if (modelId.startsWith('local-')) {
+        // Switch to local adapter
+        await this.localSidecarAdapter.switchModel(modelId);
+        this.activeAdapter = this.localSidecarAdapter;
+        this.activeAdapterName = 'local-sidecar';
+        this.selectedModelId = modelId;
+        log('EngineManager: Switched to local-sidecar adapter, model:', modelId);
+      } else {
+        // Switch to remote adapter + delegate model switch to server
+        this.activeAdapter = this.remoteAdapter;
+        this.activeAdapterName = 'remote';
+        await this.remoteAdapter.switchModel(modelId);
+        this.selectedModelId = modelId;
+        log('EngineManager: Switched to remote adapter, model:', modelId);
+      }
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -209,11 +252,27 @@ class EngineManager {
   }
 
   /**
-   * Delegate model listing to the active adapter.
+   * List models from both adapters so the UI always shows the full picture.
+   * Only the active adapter's model can show "loaded"; the other is "available".
    * @returns {Promise<Array>}
    */
   async listModels() {
-    return await this.activeAdapter.listModels();
+    const [remoteModels, localModels] = await Promise.all([
+      this.remoteAdapter.listModels().catch(() => []),
+      this.localSidecarAdapter.listModels().catch(() => []),
+    ]);
+
+    const isRemoteActive = this.activeAdapterName === 'remote';
+    const adjustState = (models, isActive) =>
+      models.map(m => ({
+        ...m,
+        state: (!isActive && m.state === 'loaded') ? 'available' : m.state,
+      }));
+
+    return [
+      ...adjustState(remoteModels, isRemoteActive),
+      ...adjustState(localModels, !isRemoteActive),
+    ];
   }
 
   /**
@@ -245,20 +304,26 @@ class EngineManager {
     // ── Cloud config (used by SettingsPanel) ──
 
     ipcMain.handle('cloud:get-config', () => {
-      return this.activeAdapter.getConfig();
+      const adapterConfig = this.activeAdapter.getConfig();
+      // Always return the engine-manager's selected model so CaptureApp
+      // knows whether it's in local or remote mode
+      return {
+        ...adapterConfig,
+        selectedModel: this.selectedModelId,
+      };
     });
 
     ipcMain.handle('cloud:configure', async (_event, config) => {
-      console.log('EngineManager: Configuring adapter:', config.endpointUrl || '(no URL)');
+      log('EngineManager: Configuring adapter:', config.endpointUrl || '(no URL)');
       this.activeAdapter.configure(config);
       return { success: true };
     });
 
     ipcMain.handle('cloud:test-connection', async () => {
-      console.log('EngineManager: Testing connection...');
+      log('EngineManager: Testing connection...');
       const result = await this.activeAdapter.isAvailable();
       if (!result.available) {
-        console.log('EngineManager: Connection test failed:', result.error);
+        log('EngineManager: Connection test failed:', result.error);
         return { success: false, error: result.error || 'Server not reachable' };
       }
 
@@ -288,7 +353,7 @@ class EngineManager {
     // ── Audio processing (used by CaptureApp via preload) ──
 
     ipcMain.handle('processAudio', async (_event, audioArray, options = {}) => {
-      console.log('EngineManager: Processing audio array of length:', audioArray.length);
+      log('EngineManager: Processing audio array of length:', audioArray.length);
       return await this.processAudio(audioArray, options);
     });
 
@@ -297,6 +362,7 @@ class EngineManager {
     ipcMain.handle('get-last-transcription', async () => {
       return this.getLastTranscription();
     });
+
   }
 
   // ── Private helpers ──
@@ -319,6 +385,35 @@ class EngineManager {
   }
 
   /**
+   * Remove orphaned mvp-echo-audio-* temp files from previous sessions.
+   * Only deletes files older than 5 minutes to avoid racing with an
+   * in-flight transcription.
+   */
+  _cleanupOrphanedTempFiles() {
+    try {
+      const tmpDir = os.tmpdir();
+      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith('mvp-echo-audio-'));
+      if (files.length === 0) return;
+
+      const cutoff = Date.now() - 5 * 60 * 1000; // 5 min ago
+      let cleaned = 0;
+      for (const file of files) {
+        try {
+          const fullPath = path.join(tmpDir, file);
+          const stat = fs.statSync(fullPath);
+          if (stat.mtimeMs < cutoff) {
+            fs.unlinkSync(fullPath);
+            cleaned++;
+          }
+        } catch (_e) { /* skip individual file errors */ }
+      }
+      if (cleaned > 0) log(`EngineManager: Cleaned up ${cleaned} orphaned temp file(s)`);
+    } catch (error) {
+      log('EngineManager: Orphan cleanup failed:', error.message);
+    }
+  }
+
+  /**
    * Delete a temp file, logging but not throwing on failure.
    * @param {string} filePath
    */
@@ -328,8 +423,76 @@ class EngineManager {
         fs.unlinkSync(filePath);
       }
     } catch (error) {
-      console.error('EngineManager: Failed to clean up temp file:', error.message);
+      log('EngineManager: Failed to clean up temp file:', error.message);
     }
+  }
+
+  /**
+   * Find ffmpeg.exe in the bundle.
+   * @returns {string|null} Absolute path to ffmpeg.exe or null if not found.
+   */
+  _getFfmpegPath() {
+    const candidates = [
+      path.join(process.resourcesPath || '', 'sherpa-onnx-bin', 'ffmpeg.exe'),
+      path.join(__dirname, '../../sherpa-onnx-bin', 'ffmpeg.exe'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
+  }
+
+  /**
+   * Convert WebM to 16kHz mono WAV using ffmpeg.
+   * @param {string} webmPath - Input WebM file path
+   * @param {string} wavPath - Output WAV file path
+   * @returns {Promise<void>}
+   */
+  async _convertWebmToWav(webmPath, wavPath) {
+    const ffmpegPath = this._getFfmpegPath();
+    if (!ffmpegPath) {
+      throw new Error('ffmpeg.exe not found in bundle');
+    }
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-i', webmPath,
+        '-ar', '16000',      // 16 kHz sample rate
+        '-ac', '1',          // mono
+        '-f', 'wav',         // WAV format
+        '-y',                // overwrite output
+        wavPath
+      ];
+
+      log('EngineManager: Spawning ffmpeg:', ffmpegPath, args.join(' '));
+
+      const child = spawn(ffmpegPath, args, {
+        windowsHide: true,
+        timeout: 30000,
+      });
+
+      let stderr = '';
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+      child.on('error', (err) => {
+        reject(new Error(`ffmpeg spawn failed: ${err.message}`));
+      });
+
+      child.on('close', (code) => {
+        if (code !== 0) {
+          log('EngineManager: ffmpeg stderr:', stderr);
+          reject(new Error(`ffmpeg exited with code ${code}`));
+          return;
+        }
+        if (!fs.existsSync(wavPath)) {
+          reject(new Error('ffmpeg completed but WAV file not found'));
+          return;
+        }
+        const wavSize = fs.statSync(wavPath).size;
+        log(`EngineManager: ffmpeg conversion complete, WAV size: ${wavSize} bytes`);
+        resolve();
+      });
+    });
   }
 }
 
