@@ -4,7 +4,7 @@
 
 MVP-Echo sits in your system tray and turns speech into text with a single keyboard shortcut. GPU transcription hits 99% accuracy in under 300ms. Local CPU mode works offline with zero setup. Your audio never leaves your machine.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg)]()
 [![Latest Release](https://img.shields.io/github/v/release/mvp-scale/mvp-echo-toolbar)](../../releases/latest)
 
@@ -29,7 +29,7 @@ That's it. The app is invisible during normal use. It lives in your notification
 - **Accurate** — Powered by NVIDIA Parakeet TDT models. 99% accuracy on English speech.
 - **Private** — Audio stays on your machine or your LAN. No telemetry. No cloud. No data collection.
 - **Simple** — One keyboard shortcut. One portable exe. No Python, no dependencies, no configuration.
-- **Free and open source** — MIT licensed. Use it, modify it, share it.
+- **Free and open source** — Apache 2.0 licensed. Use it, modify it, share it — just give credit.
 
 ## Features
 
@@ -137,6 +137,10 @@ Contributions are welcome. Fork the repo, make your changes on a branch, and ope
 
 If you find a bug or have a feature request, [open an issue](../../issues).
 
+If you build something on top of MVP-Echo, we'd genuinely love to hear about it. We're building more tools in this space and your use case might shape what comes next. Start a thread in [Discussions](../../discussions) or reach out at [mvp-scale.com](https://mvp-scale.com).
+
 ## License
 
-[MIT](LICENSE) -- Copyright (c) 2026 MVP-Scale.com
+[Apache License 2.0](LICENSE) -- Copyright 2026 MVP-Scale.com
+
+Use it, modify it, distribute it. Just keep the attribution and let people know what you changed. See [NOTICE](NOTICE) for details.
