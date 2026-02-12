@@ -404,19 +404,29 @@ ipcMain.handle('copy-to-clipboard', async (_event, text) => {
   return { success: true };
 });
 
-// Tray state update with safety timeout
+// Tray state update with safety timeouts
 let processingTimer = null;
+let recordingTimer = null;
 ipcMain.handle('tray:update-state', async (_event, state) => {
   trayManager.setState(state);
-  // Clear any existing timeout
+  // Clear any existing timeouts
   if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
-  // If entering processing/recording, set a 30s safety reset
-  if (state === 'processing' || state === 'recording') {
+  if (recordingTimer) { clearTimeout(recordingTimer); recordingTimer = null; }
+  // Processing (transcription): 30s safety reset for stuck states
+  if (state === 'processing') {
     processingTimer = setTimeout(() => {
       log(`WARN: Tray stuck on "${state}" for 30s — resetting to ready`);
       trayManager.setState('ready');
       processingTimer = null;
     }, 30000);
+  }
+  // Recording: 10-minute safety net for abandoned recordings
+  if (state === 'recording') {
+    recordingTimer = setTimeout(() => {
+      log(`WARN: Recording abandoned (10 min) — resetting to ready`);
+      trayManager.setState('ready');
+      recordingTimer = null;
+    }, 600000);
   }
   return { success: true };
 });
