@@ -1,56 +1,63 @@
 # MVP-Echo Toolbar
 
-Voice-to-text for Windows 11 that lives in your system tray. Record, transcribe, clipboard — in under a second.
+**Industry-grade voice-to-text for Windows 11.** Record, transcribe, clipboard — in under a second. No accounts, no cloud, no subscriptions.
 
-![MVP-Echo Toolbar in the Windows 11 system tray](mvp-echo-toolbar/assets/toolbar-screenshot.png)
+MVP-Echo sits in your system tray and turns speech into text with a single keyboard shortcut. GPU transcription hits 99% accuracy in under 300ms. Local CPU mode works offline with zero setup. Your audio never leaves your machine.
 
-## Usage
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg)]()
+[![Latest Release](https://img.shields.io/github/v/release/mvp-scale/mvp-echo-toolbar)](../../releases/latest)
 
-The global keybind is **Ctrl+Alt+Z**. Hold down **Ctrl+Alt**, then:
+---
 
-1. **Tap Z** to start recording
-2. **Talk** — say what you want transcribed
-3. **Tap Z** again when you're done talking
-4. **Wait for the ding** — the text is already in your clipboard
-5. **Ctrl+V** to paste and you're done
+## Quick Start
 
-The app is invisible during normal use. It sits in your notification area — the icon changes color as it records and processes. Click it to see your last transcription or adjust settings.
+**Download and run.** No installer, no setup, no account required.
+
+1. Grab `MVP-Echo Toolbar 3.0.3.exe` from [Releases](../../releases/latest)
+2. Run it — it's a portable executable
+3. Press **Ctrl+Alt+Z** to start recording
+4. Talk, then press **Ctrl+Alt+Z** again to stop
+5. Wait for the ding — your text is already in the clipboard
+6. **Ctrl+V** to paste anywhere
+
+That's it. The app is invisible during normal use. It lives in your notification area — the icon changes color as it records and processes. Click it to see your last transcription or adjust settings.
+
+## Why MVP-Echo
+
+- **Fast** — GPU transcription returns in under 300ms. Local CPU under 2 seconds.
+- **Accurate** — Powered by NVIDIA Parakeet TDT models. 99% accuracy on English speech.
+- **Private** — Audio stays on your machine or your LAN. No telemetry. No cloud. No data collection.
+- **Simple** — One keyboard shortcut. One portable exe. No Python, no dependencies, no configuration.
+- **Free and open source** — MIT licensed. Use it, modify it, share it.
 
 ## Features
 
-![MVP-Echo Toolbar Setup Guide](mvp-echo-toolbar/assets/setup-guide.png)
+- **GPU Transcription** — 99% accuracy, under 300ms via a hosted GPU server on your LAN
+- **Local CPU Mode** — Works offline with no internet and no setup required
+- **Model Switching** — Choose between English (GPU), Multilingual (GPU), or English CPU
+- **Auto-Clipboard** — Transcriptions are copied automatically with an audio confirmation
+- **Privacy Mode** — One-click toggle to disable the microphone entirely
+- **System Tray** — Minimal footprint, always accessible, never in the way
 
-- **GPU Transcription** — 99% accuracy, under 300ms via hosted GPU server
-- **Local CPU Mode** — Works offline with no internet, no setup required
-- **Switch Models** — English (GPU), Multilingual (GPU), or English CPU
-- **Privacy First** — Audio never leaves your machine or your LAN
+## Tray Icon States
 
-## Getting Started
+| Color | Meaning |
+|-------|---------|
+| Blue | Ready |
+| Red | Recording |
+| Yellow | Processing |
+| Green | Copied to clipboard |
 
-### Option 1: Local CPU (no setup)
+## Models
 
-1. Download `MVP-Echo Toolbar 3.0.2.exe` from [Releases](../../releases)
-2. Run it (portable, no install needed)
-3. Press **Ctrl+Alt+Z** to record — it works immediately
+| Model | Engine | Accuracy | Speed | Internet Required |
+|-------|--------|----------|-------|-------------------|
+| English | GPU (Parakeet TDT) | 99% | <300ms | LAN only |
+| Multilingual | GPU (Whisper) | 97% | <500ms | LAN only |
+| English CPU | Local (sherpa-onnx) | 80% | <2s | No |
 
-### Option 2: Hosted GPU (best quality)
-
-1. Deploy the STT server on your LAN (GPU required):
-   ```bash
-   cd mvp-stt-docker
-   docker compose up -d
-   ```
-   See [`mvp-stt-docker/`](mvp-stt-docker/) for full setup instructions.
-
-2. Run `MVP-Echo Toolbar 3.0.2.exe` on Windows
-
-3. Click the tray icon > **Settings** > set your endpoint:
-   ```
-   http://<server-ip>:20300/v1/audio/transcriptions
-   ```
-4. Enter your API key and click **Test Connection**
-
-## How It Works
+## Architecture
 
 ```
 Windows 11                             LAN Server (Docker)
@@ -66,38 +73,70 @@ Windows 11                             LAN Server (Docker)
 +---------------------------+
 ```
 
-## Tray Icon States
+MVP-Echo works in two modes:
 
-| Color | Meaning |
-|-------|---------|
-| Blue | Ready |
-| Red | Recording |
-| Yellow | Processing |
-| Green | Copied to clipboard |
+- **Local CPU** — Uses [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) bundled directly in the app. No server, no internet, no setup. Good for quick notes and offline use.
+- **Hosted GPU** — Connects to a GPU transcription server running on your local network. Deploy the included Docker stack on any machine with an NVIDIA GPU for the best accuracy and speed available.
 
-## Models
+## Setting Up GPU Transcription
 
-| Model | Engine | Accuracy | Speed | Internet |
-|-------|--------|----------|-------|----------|
-| English | GPU | 99% | <300ms | Required (LAN) |
-| Multilingual | GPU | 97% | <500ms | Required (LAN) |
-| English CPU | Local | 80% | <2s | Not required |
+The portable exe works immediately with local CPU. For GPU quality:
+
+1. Deploy the STT server on any machine with an NVIDIA GPU:
+   ```bash
+   cd mvp-stt-docker
+   docker compose up -d
+   ```
+   See [`mvp-stt-docker/`](mvp-stt-docker/) for full setup instructions.
+
+2. Run MVP-Echo Toolbar on your Windows machine
+
+3. Click the tray icon > **Settings** > set your server endpoint:
+   ```
+   http://<server-ip>:20300/v1/audio/transcriptions
+   ```
+
+4. Enter your API key and click **Test Connection**
+
+5. Select the **English** GPU model — it persists across restarts
 
 ## Build From Source
 
 ```bash
 cd mvp-echo-toolbar
 npm install
-npm run dist
+npm run dev          # Development mode (Vite + Electron)
+npm run dist         # Build portable exe
 ```
 
-Output: `dist/MVP-Echo Toolbar 3.0.2.exe` (portable executable).
+Output: `dist/MVP-Echo Toolbar 3.0.3.exe`
 
-Note: Building requires `sherpa-onnx-bin/`, `sherpa_onnx_models/`, and `ffmpeg.exe` in the `mvp-echo-toolbar/` directory. These binary assets are not stored in git — see [Releases](../../releases) for the pre-built executable.
+**Note:** Building requires binary assets (`sherpa-onnx-bin/`, `sherpa_onnx_models/`, `ffmpeg.exe`) that are too large for git. See [Releases](../../releases/latest) for the pre-built executable, or contact us for build asset instructions.
+
+### Tech Stack
+
+- **Desktop:** Electron 28 + React 18 + TypeScript + Vite
+- **STT Engines:** NVIDIA Parakeet TDT (GPU), sherpa-onnx (CPU)
+- **Styling:** Tailwind CSS
+- **Packaging:** electron-builder (portable exe)
 
 ## Project Structure
 
 ```
 mvp-echo-toolbar/       # Electron app (React + Vite + TypeScript)
+  app/main/             # Electron main process
+  app/renderer/         # React UI
+  app/stt/              # Speech-to-text engine adapters
+  app/audio/            # Audio capture utilities
 mvp-stt-docker/         # GPU server deployment (Docker Compose)
 ```
+
+## Contributing
+
+Contributions are welcome. Fork the repo, make your changes on a branch, and open a pull request.
+
+If you find a bug or have a feature request, [open an issue](../../issues).
+
+## License
+
+[MIT](LICENSE) -- Copyright (c) 2026 MVP-Scale.com
