@@ -76,10 +76,40 @@ git push
 
 ### Release to Production
 
-1. Go to GitHub → Actions → "Release to Main"
-2. Click "Run workflow"
-3. Enter version tag (e.g., `v1.1.0`)
-4. Click "Run workflow"
+Binary assets (sherpa-onnx binaries, model files, ffmpeg) are too large for GitHub (>100 MB each) and are excluded from git via `.gitignore`. Builds run locally where these files exist on disk.
+
+1. Build locally: `cd mvp-echo-toolbar && npm run dist`
+2. Go to GitHub → Actions → "Release to Main"
+3. Click "Run workflow", enter version tag (e.g., `v3.0.2`)
+4. After workflow completes, go to Releases → edit the new tag
+5. Upload the portable exe from `mvp-echo-toolbar/dist/` as a release asset
+
+Or via CLI:
+```bash
+# Push code to dev
+git push origin dev
+
+# Trigger release (cleans dev → main, strips .dev-only files)
+gh workflow run "Release to Main" -f version=v3.0.2
+
+# Delete old release if re-releasing same version
+gh release delete v3.0.2 --yes
+git push origin --delete v3.0.2
+
+# Re-run workflow, then upload exe
+gh workflow run "Release to Main" -f version=v3.0.2
+gh release create v3.0.2 "mvp-echo-toolbar/dist/MVP-Echo Toolbar 3.0.2.exe" \
+  --title "MVP-Echo Toolbar v3.0.2" --notes "Release notes here"
+```
+
+### Build-Time Binary Assets (not in git)
+
+These must exist on disk in `mvp-echo-toolbar/` for `npm run dist` to succeed:
+
+| Directory | Contents | Size |
+|-----------|----------|------|
+| `sherpa-onnx-bin/` | `MVP-Echo CPU Engine (sherpa-onnx).exe`, DLLs, `ffmpeg.exe` | ~182 MB |
+| `sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8/` | `model.int8.onnx`, `tokens.txt` | ~126 MB |
 
 ### Versioning Convention
 
