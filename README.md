@@ -148,3 +148,5 @@ If you build something on top of MVP-Echo, we'd genuinely love to hear about it.
 [Apache License 2.0](LICENSE) -- Copyright 2026 MVP-Scale.com
 
 Use it, modify it, distribute it. Just keep the attribution and let people know what you changed. See [NOTICE](NOTICE) for details.
+
+MVP-Echo is built on the shoulders of great open-source projects. See [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for full attribution.

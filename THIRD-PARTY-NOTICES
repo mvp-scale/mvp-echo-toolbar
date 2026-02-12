@@ -1,0 +1,192 @@
+MVP-Echo Toolbar - Third-Party Notices
+
+This project stands on the shoulders of an incredible open-source
+community. Every tool, library, and model listed here made MVP-Echo
+possible. We're grateful to the maintainers, contributors, and
+communities behind each one.
+
+========================================================================
+SPEECH-TO-TEXT & AI
+========================================================================
+
+sherpa-onnx — K2-FSA Project
+  License: Apache 2.0
+  https://github.com/k2-fsa/sherpa-onnx
+  The backbone of our local CPU engine. A fast, portable speech-to-text
+  runtime that made offline transcription possible without Python or
+  heavyweight dependencies. Special thanks to the K2-FSA team for making
+  production-grade ASR accessible to everyone.
+
+NVIDIA Parakeet TDT Models — NVIDIA Corporation
+  License: CC-BY-4.0
+  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2 (English)
+  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3 (Multilingual)
+  https://huggingface.co/nvidia/parakeet-tdt_ctc-110m (CPU)
+  The models that deliver 99% accuracy. NVIDIA's decision to release
+  these under CC-BY-4.0 made it possible to build a world-class
+  transcription tool that anyone can run for free.
+
+ONNX Runtime — Microsoft Corporation
+  License: MIT
+  https://github.com/microsoft/onnxruntime
+  The inference engine behind our model execution. Fast, reliable,
+  and cross-platform. Powers both GPU and CPU transcription paths.
+
+========================================================================
+DESKTOP APPLICATION
+========================================================================
+
+Electron — Electron Contributors & GitHub
+  License: MIT
+  https://github.com/electron/electron
+  Made it possible to build a native Windows app with web technologies.
+  The foundation that lets MVP-Echo live in your system tray.
+
+Chromium — The Chromium Authors
+  License: BSD and others
+  https://www.chromium.org
+  The rendering engine inside Electron. Decades of open-source work
+  that we all benefit from every day.
+
+React — Meta Platforms
+  License: MIT
+  https://github.com/facebook/react
+  The UI framework that makes building responsive interfaces feel
+  natural. Our entire renderer is built on React.
+
+Vite — Evan You & Vite Contributors
+  License: MIT
+  https://github.com/vitejs/vite
+  Lightning-fast build tool that made our development cycle instant.
+  Hot module replacement that just works.
+
+TypeScript — Microsoft Corporation
+  License: Apache 2.0
+  https://github.com/microsoft/TypeScript
+  Type safety that caught bugs before they shipped. Made refactoring
+  fearless.
+
+Tailwind CSS — Tailwind Labs
+  License: MIT
+  https://github.com/tailwindlabs/tailwindcss
+  Utility-first CSS that let us build a polished UI without fighting
+  stylesheets. Every pixel in MVP-Echo was placed with Tailwind.
+
+PostCSS — Andrey Sitnik & PostCSS Contributors
+  License: MIT
+  https://github.com/postcss/postcss
+  The CSS transformation engine behind Tailwind and Autoprefixer.
+
+Autoprefixer — Andrey Sitnik
+  License: MIT
+  https://github.com/postcss/autoprefixer
+  Cross-browser CSS without thinking about it.
+
+electron-builder — electron-userland
+  License: MIT
+  https://github.com/electron-userland/electron-builder
+  Packages our app into the portable exe that just runs. No installer,
+  no registry entries, no mess.
+
+========================================================================
+AUDIO & MEDIA
+========================================================================
+
+FFmpeg — FFmpeg Project
+  License: LGPL v2.1+
+  https://github.com/FFmpeg/FFmpeg
+  https://www.ffmpeg.org/legal.html
+  Handles our WebM-to-WAV audio conversion. An absolute workhorse
+  that's been powering media processing for over two decades.
+
+  Source code for the bundled version is available at the URL above
+  or upon request, per LGPL requirements.
+
+========================================================================
+GPU SERVER (mvp-stt-docker)
+========================================================================
+
+FastAPI — Sebastian Ramirez
+  License: MIT
+  https://github.com/tiangolo/fastapi
+  The API framework behind our GPU transcription server. Fast to build,
+  fast to run, beautifully documented.
+
+Uvicorn — Encode
+  License: BSD 3-Clause
+  https://github.com/encode/uvicorn
+  The ASGI server that keeps our transcription endpoint responsive.
+
+Docker — Docker, Inc.
+  License: Apache 2.0
+  https://www.docker.com
+  Makes deploying the GPU server a single command. Containerization
+  that actually simplifies things.
+
+NVIDIA CUDA — NVIDIA Corporation
+  https://developer.nvidia.com/cuda-toolkit
+  The GPU computing platform that makes sub-300ms transcription possible.
+
+Python — Python Software Foundation
+  License: PSF License
+  https://www.python.org
+  Powers the GPU server side. The language that made AI accessible.
+
+NumPy — NumPy Contributors
+  License: BSD 3-Clause
+  https://github.com/numpy/numpy
+  The numerical computing backbone behind our audio processing.
+
+SoundFile — Bastian Bechtold
+  License: BSD 3-Clause
+  https://github.com/bastibe/python-soundfile
+  Clean audio file I/O for the GPU server.
+
+websockets — Aymeric Augustin
+  License: BSD 3-Clause
+  https://github.com/python-websockets/websockets
+  Real-time communication between the bridge and sherpa-onnx server.
+
+Hugging Face Hub — Hugging Face
+  License: Apache 2.0
+  https://github.com/huggingface/huggingface_hub
+  Model distribution that just works. Download, cache, done.
+
+========================================================================
+DEVELOPMENT TOOLS
+========================================================================
+
+Node.js — OpenJS Foundation
+  License: MIT
+  https://nodejs.org
+  The runtime that powers our entire build pipeline and Electron backend.
+
+npm — GitHub / npm, Inc.
+  License: Artistic License 2.0
+  https://www.npmjs.com
+  Package management that holds the JavaScript ecosystem together.
+
+Git — Linus Torvalds & Git Contributors
+  License: GPL v2
+  https://git-scm.com
+  Version control that tracked every iteration of this project from
+  day one.
+
+GitHub — GitHub, Inc.
+  https://github.com
+  Where this project lives, where releases ship, and where the
+  community gathers.
+
+concurrently — Kimmo Brunfeldt
+  License: MIT
+  https://github.com/open-cli-tools/concurrently
+  Runs our dev server and Electron process in parallel. Small tool,
+  big quality-of-life improvement.
+
+========================================================================
+
+To every maintainer, contributor, and community member behind these
+projects: thank you. You made it possible for a small team to build
+something that would have taken an army a decade ago.
+
+This is the way.
