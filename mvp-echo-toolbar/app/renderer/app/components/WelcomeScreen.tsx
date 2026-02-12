@@ -105,7 +105,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             </li>
             <li className="flex items-center gap-2 text-sm text-foreground">
               <span className="w-1 h-1 rounded-full bg-primary flex-shrink-0" />
-              Switch between English, HD, and Multilingual models
+              Switch between English and Multilingual models
             </li>
             <li className="flex items-center gap-2 text-sm text-foreground">
               <span className="w-1 h-1 rounded-full bg-primary flex-shrink-0" />

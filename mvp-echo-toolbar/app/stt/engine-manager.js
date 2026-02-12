@@ -43,7 +43,7 @@ class EngineManager {
     /** Human-readable name of the active adapter. */
     this.activeAdapterName = 'remote';
 
-    /** Currently selected model ID (tracks across adapter switches). */
+    /** Currently selected model ID (tracks across adapter switches). Restored in initialize(). */
     this.selectedModelId = 'local-fast';
 
     /** Reference to the main BrowserWindow (for popup notifications). */
@@ -81,6 +81,7 @@ class EngineManager {
       this.activeAdapter = this.remoteAdapter;
       this.activeAdapterName = 'remote';
       log('EngineManager: Remote adapter is available and selected');
+      this._restoreModelSelection();
       return { adapter: 'remote', available: true };
     }
 
@@ -90,6 +91,7 @@ class EngineManager {
       this.activeAdapter = this.localSidecarAdapter;
       this.activeAdapterName = 'local-sidecar';
       log('EngineManager: Local sidecar adapter selected');
+      this._restoreModelSelection();
       return { adapter: 'local-sidecar', available: true };
     }
 
@@ -97,7 +99,47 @@ class EngineManager {
     this.activeAdapter = this.remoteAdapter;
     this.activeAdapterName = 'remote';
     log('EngineManager: No adapter available yet; remote selected for configuration');
+    this._restoreModelSelection();
     return { adapter: 'remote', available: false };
+  }
+
+  /**
+   * Restore the persisted model selection from adapter configs.
+   * Called once at the end of initialize() after adapter probing.
+   *
+   * Priority:
+   *   1. Remote adapter's saved selectedModel (from toolbar-endpoint-config.json)
+   *   2. Local sidecar adapter's saved activeModelId (from local-sidecar-config.json)
+   *   3. Keep the default 'local-fast'
+   */
+  _restoreModelSelection() {
+    try {
+      const remoteConfig = this.remoteAdapter.getConfig();
+      if (remoteConfig.selectedModel && remoteConfig.isConfigured) {
+        this.selectedModelId = remoteConfig.selectedModel;
+        // Ensure the correct adapter is active for the restored model
+        if (this.selectedModelId.startsWith('local-')) {
+          this.activeAdapter = this.localSidecarAdapter;
+          this.activeAdapterName = 'local-sidecar';
+        } else {
+          this.activeAdapter = this.remoteAdapter;
+          this.activeAdapterName = 'remote';
+        }
+        log('EngineManager: Restored model selection:', this.selectedModelId);
+        return;
+      }
+
+      const localConfig = this.localSidecarAdapter.getConfig();
+      if (localConfig.activeModelId) {
+        this.selectedModelId = localConfig.activeModelId;
+        this.activeAdapter = this.localSidecarAdapter;
+        this.activeAdapterName = 'local-sidecar';
+        log('EngineManager: Restored local model selection:', this.selectedModelId);
+        return;
+      }
+    } catch (error) {
+      log('EngineManager: Could not restore model selection:', error.message);
+    }
   }
 
   // ── Core operations ──
