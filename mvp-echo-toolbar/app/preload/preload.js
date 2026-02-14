@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeAllListeners('global-shortcut-toggle');
   },
 
+  // Countdown: hidden window sends updates to main, which forwards to popup
+  sendCountdownUpdate: (data) => ipcRenderer.invoke('countdown:update', data),
+
+  // Countdown: popup listens for countdown updates from main
+  onCountdownUpdate: (callback) => {
+    ipcRenderer.removeAllListeners('countdown-update');
+    ipcRenderer.on('countdown-update', (_event, data) => callback(data));
+    return () => ipcRenderer.removeAllListeners('countdown-update');
+  },
+
   // Popup: get last transcription
   getLastTranscription: () => ipcRenderer.invoke('get-last-transcription'),
 

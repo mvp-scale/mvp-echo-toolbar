@@ -11,9 +11,66 @@ interface TranscriptionData {
   model?: string;
 }
 
+interface CountdownData {
+  active: boolean;
+  remaining: number;
+  total: number;
+}
+
+/** Detect if running inside Electron */
+const isElectron = typeof (window as any).electronAPI !== 'undefined' &&
+  navigator.userAgent.toLowerCase().includes('electron');
+
+/**
+ * CountdownDisplay - Large countdown timer shown when recording approaches the limit
+ */
+function CountdownDisplay({ remaining }: { remaining: number }) {
+  const seconds = remaining % 60;
+  const timeStr = `0:${seconds.toString().padStart(2, '0')}`;
+
+  // Intensity ramps from 0.5 → 1.0 as remaining goes 60 → 0
+  const intensity = Math.max(0, Math.min(1, 1 - remaining / 60));
+  // Opacity for the text: starts at 60% red, ends at 100%
+  const textOpacity = 0.6 + intensity * 0.4;
+  // Glow gets stronger as time runs out
+  const glowSize = Math.round(4 + intensity * 16);
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full px-6 gap-3">
+      {/* Countdown timer — red, brightening */}
+      <div
+        className="text-6xl font-mono font-bold tabular-nums transition-all duration-1000"
+        style={{
+          color: `rgba(239, 68, 68, ${textOpacity})`,
+          textShadow: `0 0 ${glowSize}px rgba(239, 68, 68, ${intensity * 0.5})`,
+        }}
+      >
+        {timeStr}
+      </div>
+
+      {/* Label */}
+      <div
+        className="text-sm font-medium transition-all duration-1000"
+        style={{ color: `rgba(239, 68, 68, ${textOpacity * 0.8})` }}
+      >
+        {remaining <= 10 ? 'Recording will auto-stop!' : 'Recording time remaining'}
+      </div>
+
+      {/* Progress bar — red, filling up */}
+      <div className="w-full h-2 bg-muted rounded-full overflow-hidden mt-2">
+        <div
+          className="h-full rounded-full bg-red-500 transition-all duration-1000 ease-linear"
+          style={{ width: `${intensity * 100}%`, opacity: 0.6 + intensity * 0.4 }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function PopupApp() {
   const [transcription, setTranscription] = useState<TranscriptionData>({ text: '' });
   const [showSettings, setShowSettings] = useState(false);
+  const [countdown, setCountdown] = useState<CountdownData | null>(null);
 
   // Load last transcription on mount
   useEffect(() => {
@@ -36,6 +93,44 @@ export default function PopupApp() {
         unsubscribe();
       }
     };
+  }, []);
+
+  // Listen for countdown updates (Electron only)
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api || !api.onCountdownUpdate) return;
+
+    const unsubscribe = api.onCountdownUpdate((data: CountdownData) => {
+      if (data.active) {
+        setCountdown(data);
+      } else {
+        setCountdown(null);
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  // Browser auto-simulation: cycle through countdown for styling preview
+  useEffect(() => {
+    if (isElectron) return;
+
+    let remaining = 60;
+    setCountdown({ active: true, remaining, total: 600 });
+
+    const timer = setInterval(() => {
+      remaining -= 1;
+      if (remaining < 0) {
+        remaining = 60;
+      }
+      setCountdown({ active: true, remaining, total: 600 });
+    }, 1000);
+
+    return () => clearInterval(timer);
   }, []);
 
   const handleCopy = useCallback(async () => {
@@ -83,16 +178,22 @@ export default function PopupApp() {
         </button>
       </div>
 
-      {/* Scrollable content area — transcription + settings share this space */}
+      {/* Scrollable content area — countdown replaces transcription when active */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        <TranscriptionDisplay
-          text={transcription.text}
-          processingTime={transcription.processingTime}
-          onCopy={handleCopy}
-        />
+        {countdown?.active ? (
+          <CountdownDisplay remaining={countdown.remaining} />
+        ) : (
+          <>
+            <TranscriptionDisplay
+              text={transcription.text}
+              processingTime={transcription.processingTime}
+              onCopy={handleCopy}
+            />
 
-        {/* Collapsible settings */}
-        {showSettings && <SettingsPanel />}
+            {/* Collapsible settings */}
+            {showSettings && <SettingsPanel />}
+          </>
+        )}
       </div>
 
       {/* Status bar — always pinned to bottom */}

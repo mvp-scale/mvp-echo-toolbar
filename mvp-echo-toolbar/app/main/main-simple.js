@@ -82,6 +82,7 @@ app.on('second-instance', () => {
 let hiddenWindow = null;
 let popupWindow = null;
 let shortcutActive = false;
+let countdownActive = false;
 
 function getPreloadPath() {
   return path.resolve(__dirname, '../preload/preload.js');
@@ -170,8 +171,9 @@ function createPopupWindow() {
     popupWindow.loadFile(htmlPath);
   }
 
-  // Hide on blur (click outside)
+  // Hide on blur (click outside) — but not during countdown
   popupWindow.on('blur', () => {
+    if (countdownActive) return;
     if (popupWindow && !popupWindow.isDestroyed()) {
       popupWindow.hide();
     }
@@ -448,6 +450,33 @@ ipcMain.handle('popup:hide', async () => {
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.hide();
   }
+  return { success: true };
+});
+
+// Countdown: hidden window sends timing data, main forwards to popup
+ipcMain.handle('countdown:update', async (_event, data) => {
+  countdownActive = !!data.active;
+
+  // Ensure popup exists
+  if (!popupWindow || popupWindow.isDestroyed()) {
+    createPopupWindow();
+    await new Promise((resolve) => popupWindow.once('ready-to-show', resolve));
+  }
+
+  // Force-show popup during countdown
+  if (data.active && popupWindow && !popupWindow.isDestroyed()) {
+    if (!popupWindow.isVisible()) {
+      positionPopup();
+      popupWindow.show();
+      popupWindow.focus();
+    }
+  }
+
+  // Forward countdown data to popup renderer
+  if (popupWindow && !popupWindow.isDestroyed()) {
+    popupWindow.webContents.send('countdown-update', data);
+  }
+
   return { success: true };
 });
 

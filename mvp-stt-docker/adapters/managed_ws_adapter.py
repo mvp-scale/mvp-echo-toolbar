@@ -154,6 +154,7 @@ class ManagedWebSocketAdapter(ModelEngine):
             f"--joiner={model_files['joiner']}",
             f"--tokens={model_files['tokens']}",
             f"--num-threads={self._num_threads}",
+            "--max-utterance-length=600",
         ]
 
         print(f"[managed-ws] Starting subprocess: {' '.join(cmd)}")

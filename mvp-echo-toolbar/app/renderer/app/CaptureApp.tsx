@@ -1,6 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
+import { playWarningSound } from './audio/warning-sound';
+
+// ── Countdown timing constants ──
+const MAX_RECORDING_S = 600;    // Server limit (10 min)
+const COUNTDOWN_START_S = 540;  // Show countdown at 9 min (1 min warning)
+const AUTO_STOP_S = 590;        // Auto-stop at 9:50 (10s buffer)
 
 /**
  * CaptureApp - Hidden window component for audio capture
@@ -12,6 +18,8 @@ export default function CaptureApp() {
   const isRecordingRef = useRef(false);
   const selectedModelRef = useRef('gpu-english');
   const selectedLanguageRef = useRef('');
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedRef = useRef(0);
 
   // Load saved config on mount to get model/language
   useEffect(() => {
@@ -59,61 +67,117 @@ export default function CaptureApp() {
 
     console.log('CaptureApp: Setting up global shortcut listener');
 
+    /** Clear countdown interval and notify popup */
+    const clearCountdown = () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+      elapsedRef.current = 0;
+      // Tell popup to dismiss countdown
+      api.sendCountdownUpdate({ active: false, remaining: 0, total: MAX_RECORDING_S });
+    };
+
+    /** Start the 1-second countdown interval */
+    const startCountdownInterval = () => {
+      elapsedRef.current = 0;
+      countdownIntervalRef.current = setInterval(() => {
+        if (!isRecordingRef.current) {
+          clearCountdown();
+          return;
+        }
+
+        elapsedRef.current += 1;
+        const elapsed = elapsedRef.current;
+
+        // At COUNTDOWN_START_S: play warning sound and begin sending countdown updates
+        if (elapsed === COUNTDOWN_START_S) {
+          playWarningSound();
+          console.log(`CaptureApp: Countdown started at ${elapsed}s`);
+        }
+
+        // Send countdown updates from COUNTDOWN_START_S onward
+        if (elapsed >= COUNTDOWN_START_S) {
+          const remaining = MAX_RECORDING_S - elapsed;
+          api.sendCountdownUpdate({
+            active: true,
+            remaining,
+            total: MAX_RECORDING_S,
+          });
+        }
+
+        // At AUTO_STOP_S: auto-stop recording
+        if (elapsed >= AUTO_STOP_S) {
+          console.log(`CaptureApp: Auto-stopping at ${elapsed}s (limit: ${AUTO_STOP_S}s)`);
+          performStop(api);
+        }
+      }, 1000);
+    };
+
+    /** Shared stop logic — used by both manual stop and auto-stop */
+    const performStop = async (electronAPI: any) => {
+      if (!isRecordingRef.current) return;
+
+      console.log('CaptureApp: Stopping recording');
+      isRecordingRef.current = false;
+      clearCountdown();
+      electronAPI.updateTrayState('processing');
+      electronAPI.stopRecording('global-shortcut');
+
+      try {
+        const audioBuffer: ArrayBuffer = await audioCapture.current.stopRecording();
+        console.log(`CaptureApp: Audio buffer received, ${audioBuffer.byteLength} bytes`);
+
+        if (audioBuffer.byteLength > 0) {
+          // Re-read latest config before processing
+          try {
+            const ipc = (window as any).electron?.ipcRenderer;
+            if (ipc) {
+              const config = await ipc.invoke('cloud:get-config');
+              if (config) {
+                if (config.selectedModel) selectedModelRef.current = config.selectedModel;
+                if (config.language) selectedLanguageRef.current = config.language;
+              }
+            }
+          } catch (_e) { /* use cached values */ }
+
+          console.log(`CaptureApp: Sending to engine (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
+          const audioArray = Array.from(new Uint8Array(audioBuffer));
+          const result = await electronAPI.processAudio(audioArray, {
+            model: selectedModelRef.current,
+            language: selectedLanguageRef.current,
+          });
+
+          console.log('CaptureApp: Transcription result:', JSON.stringify(result));
+
+          if (result.text?.trim()) {
+            await electronAPI.copyToClipboard(result.text);
+            console.log(`CaptureApp: Copied to clipboard: "${result.text}"`);
+            playCompletionSound();
+            electronAPI.updateTrayState('done');
+          } else {
+            console.log('CaptureApp: Empty transcription, no copy');
+            electronAPI.updateTrayState('ready');
+          }
+        } else {
+          console.warn('CaptureApp: Empty audio buffer, skipping transcription');
+          electronAPI.updateTrayState('ready');
+        }
+      } catch (error: any) {
+        console.error('CaptureApp: Stop recording failed:', error);
+        electronAPI.updateTrayState('error');
+        setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+      }
+    };
+
     const unsubscribe = api.onGlobalShortcutToggle(() => {
       console.log('CaptureApp: Global shortcut toggle received');
 
       const currentlyRecording = isRecordingRef.current;
 
       if (currentlyRecording) {
-        // ── Stop Recording ──
-        console.log('CaptureApp: Stopping recording');
-        isRecordingRef.current = false;
-        api.updateTrayState('processing');
-        api.stopRecording('global-shortcut');
-
-        audioCapture.current.stopRecording().then(async (audioBuffer: ArrayBuffer) => {
-          console.log(`CaptureApp: Audio buffer received, ${audioBuffer.byteLength} bytes`);
-
-          if (audioBuffer.byteLength > 0) {
-            // Re-read latest config before processing
-            try {
-              const ipc = (window as any).electron?.ipcRenderer;
-              if (ipc) {
-                const config = await ipc.invoke('cloud:get-config');
-                if (config) {
-                  if (config.selectedModel) selectedModelRef.current = config.selectedModel;
-                  if (config.language) selectedLanguageRef.current = config.language;
-                }
-              }
-            } catch (_e) { /* use cached values */ }
-
-            console.log(`CaptureApp: Sending to engine (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
-            const audioArray = Array.from(new Uint8Array(audioBuffer));
-            const result = await api.processAudio(audioArray, {
-              model: selectedModelRef.current,
-              language: selectedLanguageRef.current,
-            });
-
-            console.log('CaptureApp: Transcription result:', JSON.stringify(result));
-
-            if (result.text?.trim()) {
-              await api.copyToClipboard(result.text);
-              console.log(`CaptureApp: Copied to clipboard: "${result.text}"`);
-              playCompletionSound();
-              api.updateTrayState('done');
-            } else {
-              console.log('CaptureApp: Empty transcription, no copy');
-              api.updateTrayState('ready');
-            }
-          } else {
-            console.warn('CaptureApp: Empty audio buffer, skipping transcription');
-            api.updateTrayState('ready');
-          }
-        }).catch((error: Error) => {
-          console.error('CaptureApp: Stop recording failed:', error);
-          api.updateTrayState('error');
-          setTimeout(() => api.updateTrayState('ready'), 3000);
-        });
+        // ── Stop Recording (manual) ──
+        performStop(api);
       } else {
         // ── Start Recording ──
         console.log('CaptureApp: Starting recording');
@@ -121,9 +185,13 @@ export default function CaptureApp() {
         api.updateTrayState('recording');
         api.startRecording('global-shortcut');
 
+        // Start countdown interval
+        startCountdownInterval();
+
         audioCapture.current.startRecording().catch((error: Error) => {
           console.error('CaptureApp: Start recording failed:', error);
           isRecordingRef.current = false;
+          clearCountdown();
           api.updateTrayState('error');
           setTimeout(() => api.updateTrayState('ready'), 3000);
         });
@@ -135,6 +203,9 @@ export default function CaptureApp() {
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
       audioCapture.current.cleanup();
     };
   }, []);
@@ -142,6 +213,9 @@ export default function CaptureApp() {
   // Cleanup on window unload
   useEffect(() => {
     const handleBeforeUnload = () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
       audioCapture.current.cleanup();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
