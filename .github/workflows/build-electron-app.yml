@@ -17,6 +17,22 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Download build dependencies
+      shell: bash
+      working-directory: .
+      run: |
+        echo "=== Downloading build dependencies from release ==="
+        gh release download build-deps-v0.0.0 \
+          --pattern "mvp-echo-build-deps.zip" \
+          --dir /tmp
+        echo "=== Extracting to mvp-echo-toolbar/ ==="
+        unzip -o /tmp/mvp-echo-build-deps.zip -d mvp-echo-toolbar/
+        echo "=== Build dependencies ready ==="
+        ls -la mvp-echo-toolbar/sherpa-onnx-bin/
+        ls -la mvp-echo-toolbar/sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8/
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
