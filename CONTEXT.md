@@ -1,8 +1,75 @@
 # MVP-Echo Toolbar — Roadmap & Task Tracker
 
-**Version**: `v3.0.2` (in progress)
+**Version**: `v3.0.4`
 **Branch**: `dev`
-**Updated**: 2026-02-11 (Session 5)
+**Updated**: 2026-02-14 (Session 7)
+**License**: Apache 2.0
+
+---
+
+## Session 7: 2026-02-14 — Recording Countdown Timer + Transparent Build Process
+
+**Goal**: Prevent server rejection of long recordings (sherpa-onnx 300s default limit) by adding a visual countdown + auto-stop. Establish transparent CI build process for open-source compliance.
+
+**Recording Countdown Timer**:
+- 1-minute warning: popup appears at 9:00 (540s) with red countdown that brightens as time runs out
+- Warble alert sound (660 Hz sine + 8 Hz LFO vibrato, 1.2s) plays when countdown begins — distinct from completion ding
+- Auto-stop at 9:50 (590s) with 10s buffer before 10-min server limit
+- Auto-stopped recordings process normally: transcribed, copied to clipboard, completion ding plays
+- Popup stays visible during countdown (blur handler guarded with `countdownActive` flag)
+- Manual stop during countdown clears everything cleanly
+- Browser preview at `localhost:5173/popup.html` auto-simulates 60→0 countdown loop for styling
+
+**Transparent Build Process (Open-Source Compliance)**:
+- Large binaries (ffmpeg 163MB, ONNX Runtime 14MB, sherpa-onnx 2.3MB, Parakeet model 126MB) can't be committed to GitHub (100MB limit)
+- Solution: hosted as release asset at `build-deps-v0.0.0` (164MB zip, pre-release)
+- CI workflow downloads and extracts before `npm run dist` — fully reproducible, auditable build
+- This pattern is standard for open-source projects needing large binary deps in CI
+
+**Server Change**:
+- Added `--max-utterance-length=600` to sherpa-onnx WebSocket server launch command in `managed_ws_adapter.py`
+
+**Files Created** (Session 7):
+- `app/renderer/app/audio/warning-sound.ts` — 6 sound variants (V1-V6), warble (V6) selected as default
+
+**Files Modified** (Session 7):
+- `app/renderer/app/CaptureApp.tsx` — countdown interval, `performStop()` helper, timing constants
+- `app/renderer/app/PopupApp.tsx` — `CountdownDisplay` component (red with intensity ramp + glow), browser auto-simulation
+- `app/preload/preload.js` — `sendCountdownUpdate` + `onCountdownUpdate` IPC channels
+- `app/main/main-simple.js` — `countdownActive` flag, `countdown:update` IPC handler, popup blur guard
+- `mvp-stt-docker/adapters/managed_ws_adapter.py` — `--max-utterance-length=600`
+- `.github/workflows/build-electron-app.yml` — downloads build deps from `build-deps-v0.0.0` release
+- `package.json` — version bumped to 3.0.4
+
+**Releases Created**:
+- `build-deps-v0.0.0` (pre-release) — build dependency zip (164MB): sherpa-onnx-bin/ + parakeet model
+- `v3.0.4` (latest) — MVP-Echo Toolbar 3.0.4.exe (264MB portable)
+
+**Countdown Timing Constants** (in CaptureApp.tsx):
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `MAX_RECORDING_S` | 600s (10 min) | Server limit |
+| `COUNTDOWN_START_S` | 540s (9 min) | Show countdown + play warble |
+| `AUTO_STOP_S` | 590s (9:50) | Auto-stop recording |
+
+**Countdown IPC Flow**:
+```
+CaptureApp (hidden window) → sendCountdownUpdate() → ipcMain 'countdown:update'
+  → creates/shows popup → forwards 'countdown-update' → PopupApp CountdownDisplay
+```
+
+---
+
+## Session 6: 2026-02-12 — Open-Source Licensing + v3.0.3 Release
+
+**Goal**: Prepare repository for open-source community with proper licensing.
+
+**Changes**:
+- Switched from MIT to Apache 2.0 license
+- Added NOTICE file with project description and attribution
+- Added THIRD-PARTY-NOTICES with dependency attributions
+- Fixed `package.json` license field from `MIT` to `Apache-2.0`
+- Released v3.0.3
 
 ---
 
@@ -175,15 +242,18 @@ ssh root@192.168.1.10 "cd /mnt/user/appdata/mvp-stt-docker && docker compose dow
 - `SettingsPanel.tsx` — updated sizes, wired download, hid endpoint/apikey when local active
 - `package.json` — added `extraResources` for models + binary
 
-**Assets on disk** (not committed, needed for build):
-- `mvp-echo-toolbar/sherpa-onnx-bin/` — Windows binary + DLLs (18 MB): `sherpa-onnx-offline.exe`, `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `cargs.dll`
-- `mvp-echo-toolbar/sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8/` — Fast model (126 MB): `model.int8.onnx`, `tokens.txt`
-- `/tmp/sherpa-linux/sherpa-onnx-v1.12.23-linux-x64-shared-no-tts/` — Linux binary used for testing (not bundled)
+**Assets on disk** (not committed — hosted at GitHub release `build-deps-v0.0.0`):
+- `mvp-echo-toolbar/sherpa-onnx-bin/` — Windows binaries (181 MB): `MVP-Echo CPU Engine (sherpa-onnx).exe`, `ffmpeg.exe`, `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `cargs.dll`
+- `sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8/` — Fast model (126 MB): `model.int8.onnx`, `tokens.txt`
+- CI downloads these automatically from `build-deps-v0.0.0` release during build
 
 **Build Notes**:
 - electron-builder portable target uses NSIS internally — fails with `mmap` error on payloads >2 GB. Keep total under 2 GB or use zip of `win-unpacked/`
 - `package.json` `"build"` section overrides `electron-builder.yml` when both exist. Put all config in `package.json`
 - The root project `package.json` is NOT the toolbar — always edit `mvp-echo-toolbar/package.json`
+- **CI build deps**: Large binaries (ffmpeg, onnxruntime, sherpa-onnx, model) are hosted at GitHub release `build-deps-v0.0.0`. The build workflow downloads them before packaging. To update deps: create a new zip, upload to a new release tag (e.g., `build-deps-v0.0.1`), update workflow reference
+- **Build artifact**: v3.0.4 = 264 MB portable exe (Electron + sherpa-onnx-bin + Parakeet 110m model)
+- **Node version**: CI uses Node 18. Some deps warn about wanting Node 20+ (`@electron/rebuild`, `minimatch`) but build succeeds. Consider bumping to Node 20 when convenient
 
 ---
 
@@ -276,6 +346,12 @@ docker compose up -d --build
 | Local CPU: ship only Fast | Pre-bake Fast (110m) model | Tested all 3: Fast wins on speed (1.35s), quality (punctuation, caps, names), and size (126 MB). Balanced is 2.5x slower with worse output. Accurate is broken (ONNX runtime error). No download UI needed — just works |
 | Local CPU: audio format | WebM→WAV conversion required | sherpa-onnx only accepts WAV (RIFF). Toolbar records WebM. Must convert before passing to sherpa-onnx. Options: bundle ffmpeg (~40 MB) or use AudioContext in renderer to decode + write WAV header in main process |
 | Local CPU: build config | Use package.json "build" section | `electron-builder.yml` is ignored when `package.json` has a `"build"` key. All extraResources go in `package.json`. NSIS portable fails >2 GB — keep build lean |
+| Recording countdown | 1-minute red countdown at 9:00, auto-stop at 9:50 | Simple and urgent — no amber/orange phase, just red brightening. Popup force-shows and stays visible during countdown |
+| Warning sound | Warble (V6): 660 Hz sine + 8 Hz LFO vibrato | Tested 6 variants. Warble is distinct from completion ding (880 Hz sine), attention-getting without being annoying. 1.2s duration |
+| Server max utterance | 600s (10 min) | `--max-utterance-length=600` added to sherpa-onnx launch. Default was 300s which caused HTTP 500 on long recordings |
+| License | Apache 2.0 | Switched from MIT (Session 6). NOTICE file added for attribution |
+| Build deps hosting | GitHub release assets | Large binaries (>100MB) can't be committed. Hosted at `build-deps-v0.0.0` pre-release. CI downloads during build. Standard open-source pattern, transparent and auditable |
+| Build transparency | Release-hosted deps + public CI | Required for open-source certification. All deps are publicly downloadable, build workflow is in repo, no private artifacts |
 
 ### Test Strategy
 
@@ -445,8 +521,10 @@ Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5
 | `app/main/main-simple.js` | Main process, welcome window, IPC, keybinds | #1: welcome redesign |
 | `app/renderer/app/components/SettingsPanel.tsx` | Settings UI | #3, #8, #9, #13 |
 | `app/renderer/app/components/EngineSelector.tsx` | Engine selection UI | #2: remove Faster-Whisper refs, #3: new dropdown |
-| `app/renderer/app/PopupApp.tsx` | Popup layout | Minor: accommodate new settings |
-| `app/renderer/app/CaptureApp.tsx` | Hidden capture window | #2: remove default model ref |
+| `app/renderer/app/PopupApp.tsx` | Popup layout + countdown display | CountdownDisplay component, browser simulation |
+| `app/renderer/app/CaptureApp.tsx` | Hidden capture window + countdown timer | Countdown interval, auto-stop, warning sound |
+| `app/renderer/app/audio/warning-sound.ts` | Warning sound variants | Warble (V6) is default, 5 other variants available |
+| `app/renderer/app/audio/completion-sound.ts` | Completion ding (880 Hz sine) | Plays after transcription copied to clipboard |
 | `app/stt/engine-manager.js` | Engine orchestrator | #14: refactor to Engine port with adapter selection |
 | `app/stt/whisper-native.js` | Local subprocess engine | #14: replace with LocalSidecarAdapter |
 | `app/stt/whisper-engine.js` | Python subprocess engine | #14: remove (deprecated with Faster-Whisper) |
@@ -468,6 +546,21 @@ Preview: `npx vite --port 5174` from `mvp-echo-toolbar/` → `http://localhost:5
 | `auth-proxy.py` | Auth middleware | Current |
 | `README.md` | Stack documentation | Current |
 | `SHERPA-ONNX-GPU-GUIDE.md` | Guide for running sherpa-onnx on GPU in Docker | Reference |
+
+### CI/CD (.github/workflows/)
+| File | Purpose | Status |
+|------|---------|--------|
+| `build-electron-app.yml` | Build Windows portable exe (manual trigger) | Current — downloads deps from `build-deps-v0.0.0` release |
+| `clean-release.yml` | Release to Main: merges dev→main, strips `.dev-only` files, tags version | Current |
+| `build-windows.yml` | Build standalone-whisper exe (legacy, triggers on main push to standalone-whisper/) | Legacy |
+
+### GitHub Releases
+| Tag | Type | Purpose |
+|-----|------|---------|
+| `v3.0.4` | Latest | Current production release (264MB portable exe) |
+| `build-deps-v0.0.0` | Pre-release | Build dependencies: sherpa-onnx-bin/ + Parakeet model (164MB zip) |
+| `v3.0.3` | Release | Open-source licensing (Apache 2.0) |
+| `v3.0.2` | Release | Local CPU integration + UI finalization |
 
 ### MVP-Echo Studio (mvp-echo-studio/) — Separate Effort
 | Status | Detail |
