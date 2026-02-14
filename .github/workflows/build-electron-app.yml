@@ -25,6 +25,9 @@ jobs:
         gh release download build-deps-v0.0.0 \
           --pattern "mvp-echo-build-deps.zip" \
           --dir /tmp
+        echo "=== Creating target directories ==="
+        mkdir -p mvp-echo-toolbar/sherpa-onnx-bin
+        mkdir -p mvp-echo-toolbar/sherpa_onnx_models/sherpa-onnx-nemo-parakeet-tdt_ctc-110m-en-int8
         echo "=== Extracting to mvp-echo-toolbar/ ==="
         unzip -o /tmp/mvp-echo-build-deps.zip -d mvp-echo-toolbar/
         echo "=== Build dependencies ready ==="
