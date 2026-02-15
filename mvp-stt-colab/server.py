@@ -1,10 +1,10 @@
 """
-MVP-Echo STT Server — Colab Edition
+MVP-Echo STT Server -- Colab Edition
 
 Streamlined OpenAI-compatible speech-to-text server using sherpa-onnx
 with GPU acceleration. Designed to run on Google Colab's free T4 GPU.
 
-No auth, no model switching — just transcription.
+No auth, no model switching -- just transcription.
 
 Usage:
     python server.py
@@ -50,7 +50,7 @@ WS_PORT = int(os.environ.get("WS_PORT", "7100"))
 
 SHERPA_BIN = "sherpa-onnx-offline-websocket-server"
 
-# Community API key — the toolbar requires a key to connect.
+# Community API key -- the toolbar requires a key to connect.
 # This is a well-known public key; it provides no real security.
 # It exists solely so the toolbar's "Test Connection" flow succeeds.
 COMMUNITY_API_KEY = "SK-COLAB-COMMUNITY"
@@ -185,7 +185,7 @@ async def transcribe_samples(samples: np.ndarray, sample_rate: int) -> str:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     await start_sherpa()
-    print(f"[server] Ready — POST /v1/audio/transcriptions")
+    print(f"[server] Ready -- POST /v1/audio/transcriptions")
     yield
     await stop_sherpa()
     print("[server] Shut down")
@@ -222,7 +222,7 @@ async def health():
 
 @app.get("/v1/models")
 async def list_models(request: Request):
-    """List available models — toolbar calls this to test the connection."""
+    """List available models -- toolbar calls this to test the connection."""
     if not _check_auth(request):
         return JSONResponse(
             status_code=401,
