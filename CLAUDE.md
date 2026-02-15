@@ -45,6 +45,10 @@ npm run dist         # Package installer + portable exe
 
 **Dev-only files**: Edit `.dev-only` to control what's excluded from `main`.
 
+**NEVER cherry-pick commits to main** — always use the "Release to Main" workflow.
+The workflow handles the dev→main sync correctly by force-pushing a cleaned
+version of dev. Manual cherry-picking breaks this flow.
+
 ## Critical Rules
 
 - **NEVER commit or push without explicit user approval** - always show the user what changed and wait for them to say "commit" or "check it in". Do not auto-commit after writing code. The user must review changes before anything is committed.

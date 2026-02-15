@@ -31,6 +31,12 @@ mvp-echo/
 faster-whisper-docker/
 mvp-echo-studio/
 
+# Docker STT service (separate deployment, not part of toolbar)
+mvp-stt-docker/
+
+# Colab STT notebook (stays on main — user-facing community resource)
+# mvp-stt-colab/ — KEEP THIS ON MAIN
+
 # Legacy root-level app code (not used by toolbar)
 app/
 python/
