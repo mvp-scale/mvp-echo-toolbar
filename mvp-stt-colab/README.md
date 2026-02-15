@@ -27,12 +27,22 @@ a local NVIDIA GPU.
 4. Copy the public URL printed at the end
 5. Use it with curl, the MVP-Echo toolbar, or any OpenAI-compatible client
 
-## No API key required
+## Connecting from MVP-Echo toolbar
 
-The Colab server has **no authentication**. It accepts all requests directly.
-When connecting from the MVP-Echo toolbar, leave the API key field empty.
+The toolbar requires an API key to complete its connection test. Use the
+community key:
 
-This is intentional — it's a community testing resource, not a production service.
+```
+SK-COLAB-COMMUNITY
+```
+
+1. Open toolbar **Settings**
+2. Set **Server URL** to your Colab public URL
+3. Set **API Key** to `SK-COLAB-COMMUNITY`
+4. Click **Test Connection**
+
+Any non-empty key will work — this isn't real security, it just satisfies
+the toolbar's connection flow. This is a community testing resource.
 
 ## HuggingFace token (optional)
 
@@ -68,8 +78,9 @@ The notebook will pick it up automatically.
 # Health check
 curl https://YOUR-URL.trycloudflare.com/health
 
-# Transcribe
+# Transcribe (include the API key)
 curl -X POST https://YOUR-URL.trycloudflare.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer SK-COLAB-COMMUNITY" \
   -F "file=@recording.wav" \
   -F "response_format=verbose_json"
 ```

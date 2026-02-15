@@ -31,7 +31,7 @@ import soundfile as sf
 import uvicorn
 import websockets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -49,6 +49,11 @@ PORT = int(os.environ.get("PORT", "8000"))
 WS_PORT = int(os.environ.get("WS_PORT", "7100"))
 
 SHERPA_BIN = "sherpa-onnx-offline-websocket-server"
+
+# Community API key — the toolbar requires a key to connect.
+# This is a well-known public key; it provides no real security.
+# It exists solely so the toolbar's "Test Connection" flow succeeds.
+COMMUNITY_API_KEY = "SK-COLAB-COMMUNITY"
 
 # ---------------------------------------------------------------------------
 # Sherpa-onnx process management
@@ -196,6 +201,15 @@ app.add_middleware(
 )
 
 
+def _check_auth(request: Request) -> bool:
+    """Validate the Bearer token. Accepts the community key or any non-empty key."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    token = auth[7:].strip()
+    return len(token) > 0
+
+
 @app.get("/health")
 async def health():
     return {
@@ -204,6 +218,34 @@ async def health():
         "provider": PROVIDER,
         "gpu": PROVIDER == "cuda",
     }
+
+
+@app.get("/v1/models")
+async def list_models(request: Request):
+    """List available models — toolbar calls this to test the connection."""
+    if not _check_auth(request):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid or missing API key. Use: SK-COLAB-COMMUNITY"},
+        )
+    model_id = os.path.basename(MODEL_DIR)
+    # Strip common prefix for a clean ID
+    for prefix in ("sherpa-onnx-nemo-", "sherpa-onnx-"):
+        if model_id.startswith(prefix):
+            model_id = model_id[len(prefix):]
+            break
+    return JSONResponse({
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "owned_by": "colab",
+                "label": "English",
+                "group": "gpu",
+                "active": True,
+            }
+        ]
+    })
 
 
 @app.post("/v1/audio/transcriptions")
