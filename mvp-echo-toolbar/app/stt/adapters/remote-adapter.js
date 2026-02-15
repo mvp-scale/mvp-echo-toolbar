@@ -365,8 +365,8 @@ class RemoteAdapter {
    * @param {string} [config.language]
    */
   configure(config) {
-    if (config.endpointUrl !== undefined) this.endpointUrl = config.endpointUrl || null;
-    if (config.apiKey !== undefined) this.apiKey = config.apiKey || null;
+    if (config.endpointUrl !== undefined) this.endpointUrl = (config.endpointUrl || '').trim() || null;
+    if (config.apiKey !== undefined) this.apiKey = (config.apiKey || '').trim() || null;
     if (config.selectedModel !== undefined) this.selectedModel = config.selectedModel;
     if (config.model !== undefined) this.selectedModel = config.model;
     if (config.language !== undefined) this.language = config.language || null;
@@ -448,8 +448,8 @@ class RemoteAdapter {
     try {
       if (fs.existsSync(this.configPath)) {
         const config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-        this.endpointUrl = config.endpointUrl || null;
-        this.apiKey = config.apiKey || null;
+        this.endpointUrl = (config.endpointUrl || '').trim() || null;
+        this.apiKey = (config.apiKey || '').trim() || null;
         this.selectedModel = config.selectedModel || 'gpu-english';
         this.language = config.language || null;
         this.isConfigured = !!this.endpointUrl;
