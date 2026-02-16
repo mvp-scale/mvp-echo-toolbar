@@ -41,13 +41,28 @@ npm run dist         # Package installer + portable exe
 
 **Daily work**: Commit/push to `dev` normally. No CI runs on dev.
 
-**Release**: Actions → "Release to Main" → enter version (e.g., `v1.1.0`)
-
 **Dev-only files**: Edit `.dev-only` to control what's excluded from `main`.
 
 **NEVER cherry-pick commits to main** — always use the "Release to Main" workflow.
 The workflow handles the dev→main sync correctly by force-pushing a cleaned
 version of dev. Manual cherry-picking breaks this flow.
+
+### Release Process
+
+The "Release to Main" workflow (Actions → Run workflow) is fully automatic:
+1. Reads the version from `mvp-echo-toolbar/package.json`
+2. Checks that the `v{version}` tag doesn't already exist (fails early if it does)
+3. Cleans dev-only files, force-pushes to main, creates the tag
+
+**Before releasing**: Bump the version in `mvp-echo-toolbar/package.json`.
+Keep the root `package.json` version in sync. If you forget, the workflow
+will fail because the tag already exists.
+
+**Version lives in**: `mvp-echo-toolbar/package.json` (canonical).
+The workflow reads from this file. The root `package.json` should match.
+
+**No rebuild needed** for notebook-only or docs-only changes. The build
+workflow (`build-electron-app.yml`) is a separate manual trigger.
 
 ## Critical Rules
 

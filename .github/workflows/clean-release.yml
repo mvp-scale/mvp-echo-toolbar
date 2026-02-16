@@ -1,13 +1,8 @@
 name: Release to Main
 
-# Manually triggered - you choose when to release
+# Manually triggered - version is read from package.json automatically
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., v1.0.0, v1.0.1, v1.1.0)'
-        required: true
-        type: string
 
 # Grant write permissions to push to main
 permissions:
@@ -24,6 +19,21 @@ jobs:
           ref: dev
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version from package.json
+        id: version
+        run: |
+          VERSION="v$(node -p "require('./mvp-echo-toolbar/package.json').version")"
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Check tag does not already exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "ERROR: Tag ${{ steps.version.outputs.tag }} already exists."
+            echo "Bump the version in package.json on dev before releasing."
+            exit 1
+          fi
 
       - name: Configure git identity
         run: |
@@ -57,7 +67,7 @@ jobs:
           # Create/reset main branch to current cleaned state
           git checkout -B main
           git add -A
-          git commit -m "Release ${{ inputs.version }}"
+          git commit -m "Release ${{ steps.version.outputs.tag }}"
 
           # Force push - replaces main entirely
           git push origin main --force
@@ -66,17 +76,17 @@ jobs:
 
       - name: Create version tag
         run: |
-          git tag ${{ inputs.version }}
-          git push origin ${{ inputs.version }}
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
 
-          echo "=== Tagged as ${{ inputs.version }} ==="
+          echo "=== Tagged as ${{ steps.version.outputs.tag }} ==="
 
       - name: Summary
         run: |
           echo ""
           echo "========================================"
-          echo "  Released ${{ inputs.version }} to main"
+          echo "  Released ${{ steps.version.outputs.tag }} to main"
           echo "========================================"
           echo ""
           echo "View release: https://github.com/${{ github.repository }}/tree/main"
-          echo "View tag: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.version }}"
+          echo "View tag: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
