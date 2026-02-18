@@ -50,6 +50,7 @@ class ManagedWebSocketAdapter(ModelEngine):
         SHERPA_NUM_THREADS: Number of threads for inference (default: "4")
         DEFAULT_MODEL: Model to load on startup (default: "parakeet-tdt-0.6b-v2-int8")
         WS_LOCAL_PORT: Local port for the managed WebSocket server (default: "7100")
+        SHERPA_MAX_UTTERANCE: Max utterance length in seconds (default: "600")
     """
 
     def __init__(self) -> None:
@@ -60,7 +61,9 @@ class ManagedWebSocketAdapter(ModelEngine):
             "DEFAULT_MODEL", "parakeet-tdt-0.6b-v2-int8"
         )
         self._port = int(os.environ.get("WS_LOCAL_PORT", "7100"))
+        self._max_utterance = os.environ.get("SHERPA_MAX_UTTERANCE", "600")
 
+        self._lock = asyncio.Lock()
         self._model_id: str | None = None
         self._model_dir: Path | None = None
         self._model_files: dict[str, str] | None = None
@@ -73,39 +76,40 @@ class ManagedWebSocketAdapter(ModelEngine):
 
     async def transcribe(self, samples: np.ndarray, sample_rate: int) -> str:
         """Send audio to the managed WebSocket server and return transcription text."""
-        if self._state != "loaded" or self._process is None:
-            raise RuntimeError(
-                f"Engine not ready (state={self._state}). "
-                "Call load_model() first."
-            )
+        async with self._lock:
+            if self._state != "loaded" or self._process is None:
+                raise RuntimeError(
+                    f"Engine not ready (state={self._state}). "
+                    "Call load_model() first."
+                )
 
-        async with websockets.connect(self.uri) as ws:
-            # Header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
-            header = struct.pack("<ii", sample_rate, samples.size * 4)
-            buf = header + samples.tobytes()
+            async with websockets.connect(self.uri) as ws:
+                # Header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
+                header = struct.pack("<ii", sample_rate, samples.size * 4)
+                buf = header + samples.tobytes()
 
-            # Send in chunks to avoid overwhelming the connection
-            chunk_size = 10240
-            for start in range(0, len(buf), chunk_size):
-                await ws.send(buf[start : start + chunk_size])
+                # Send in chunks to avoid overwhelming the connection
+                chunk_size = 10240
+                for start in range(0, len(buf), chunk_size):
+                    await ws.send(buf[start : start + chunk_size])
 
-            # Receive transcription result
-            result = await ws.recv()
+                # Receive transcription result
+                result = await ws.recv()
 
-            # Signal end of session
-            await ws.send("Done")
+                # Signal end of session
+                await ws.send("Done")
 
-        # The C++ server returns JSON; handle both JSON and plain text
-        try:
-            parsed = json.loads(result)
-            return parsed.get("text", "").strip()
-        except (json.JSONDecodeError, TypeError):
-            text = (
-                result.strip()
-                if isinstance(result, str)
-                else result.decode().strip()
-            )
-            return "" if text == "<EMPTY>" else text
+            # The C++ server returns JSON; handle both JSON and plain text
+            try:
+                parsed = json.loads(result)
+                return parsed.get("text", "").strip()
+            except (json.JSONDecodeError, TypeError):
+                text = (
+                    result.strip()
+                    if isinstance(result, str)
+                    else result.decode().strip()
+                )
+                return "" if text == "<EMPTY>" else text
 
     async def load_model(self, model_id: str) -> None:
         """
@@ -114,73 +118,74 @@ class ManagedWebSocketAdapter(ModelEngine):
         If a different model is already loaded, the current subprocess is
         killed and a new one is started with the new model's paths.
         """
-        if self._model_id == model_id and self._state == "loaded":
-            print(f"[managed-ws] Model {model_id} already loaded")
-            return
+        async with self._lock:
+            if self._model_id == model_id and self._state == "loaded":
+                print(f"[managed-ws] Model {model_id} already loaded")
+                return
 
-        # Unload current model if switching
-        if self._model_id and self._model_id != model_id:
-            await self.unload_model()
+            # Unload current model if switching
+            if self._model_id and self._model_id != model_id:
+                await self.unload_model()
 
-        self._state = "loading"
-        print(f"[managed-ws] Loading model: {model_id}")
+            self._state = "loading"
+            print(f"[managed-ws] Loading model: {model_id}")
 
-        # Find and validate model files on disk
-        model_dir = _find_model_dir(self._base_dir, model_id)
-        if model_dir is None:
-            self._state = "error"
-            raise FileNotFoundError(
-                f"Model '{model_id}' not found in {self._base_dir}. "
-                f"Searched: {model_id}/, sherpa-onnx-nemo-{model_id}/"
+            # Find and validate model files on disk
+            model_dir = _find_model_dir(self._base_dir, model_id)
+            if model_dir is None:
+                self._state = "error"
+                raise FileNotFoundError(
+                    f"Model '{model_id}' not found in {self._base_dir}. "
+                    f"Searched: {model_id}/, sherpa-onnx-nemo-{model_id}/"
+                )
+
+            try:
+                model_files = _detect_model_files(model_dir)
+            except FileNotFoundError as e:
+                self._state = "error"
+                raise RuntimeError(f"Model '{model_id}' is incomplete: {e}") from e
+
+            self._model_id = model_id
+            self._model_dir = model_dir
+            self._model_files = model_files
+
+            # Start the WebSocket server subprocess
+            cmd = [
+                SHERPA_WS_BIN,
+                f"--port={self._port}",
+                f"--provider={self._provider}",
+                f"--encoder={model_files['encoder']}",
+                f"--decoder={model_files['decoder']}",
+                f"--joiner={model_files['joiner']}",
+                f"--tokens={model_files['tokens']}",
+                f"--num-threads={self._num_threads}",
+                f"--max-utterance-length={self._max_utterance}",
+            ]
+
+            print(f"[managed-ws] Starting subprocess: {' '.join(cmd)}")
+
+            self._process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
 
-        try:
-            model_files = _detect_model_files(model_dir)
-        except FileNotFoundError as e:
-            self._state = "error"
-            raise RuntimeError(f"Model '{model_id}' is incomplete: {e}") from e
+            # Wait for the WebSocket server to become ready
+            ready = await self._wait_for_ready(timeout=30.0)
+            if not ready:
+                await self._kill_process()
+                self._state = "error"
+                raise RuntimeError(
+                    f"WebSocket server failed to start within 30s "
+                    f"(PID={self._process.pid if self._process else '?'})"
+                )
 
-        self._model_id = model_id
-        self._model_dir = model_dir
-        self._model_files = model_files
-
-        # Start the WebSocket server subprocess
-        cmd = [
-            SHERPA_WS_BIN,
-            f"--port={self._port}",
-            f"--provider={self._provider}",
-            f"--encoder={model_files['encoder']}",
-            f"--decoder={model_files['decoder']}",
-            f"--joiner={model_files['joiner']}",
-            f"--tokens={model_files['tokens']}",
-            f"--num-threads={self._num_threads}",
-            "--max-utterance-length=600",
-        ]
-
-        print(f"[managed-ws] Starting subprocess: {' '.join(cmd)}")
-
-        self._process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        # Wait for the WebSocket server to become ready
-        ready = await self._wait_for_ready(timeout=30.0)
-        if not ready:
-            await self._kill_process()
-            self._state = "error"
-            raise RuntimeError(
-                f"WebSocket server failed to start within 30s "
-                f"(PID={self._process.pid if self._process else '?'})"
+            self._state = "loaded"
+            print(
+                f"[managed-ws] Model loaded: {model_id} "
+                f"(PID={self._process.pid}, port={self._port}, "
+                f"provider={self._provider})"
             )
-
-        self._state = "loaded"
-        print(
-            f"[managed-ws] Model loaded: {model_id} "
-            f"(PID={self._process.pid}, port={self._port}, "
-            f"provider={self._provider})"
-        )
 
     async def _wait_for_ready(self, timeout: float = 30.0) -> bool:
         """

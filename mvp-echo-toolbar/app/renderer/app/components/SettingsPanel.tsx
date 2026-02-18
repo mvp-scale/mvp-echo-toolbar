@@ -193,12 +193,9 @@ export default function SettingsPanel() {
       return;
     }
 
-    if (model.state === 'loaded') {
-      setSelectedModelId(model.id);
-      return;
-    }
-
-    // state === 'available': optimistic UI — show switching state immediately
+    // Treat both 'loaded' and 'available' the same — always make the IPC call.
+    // For 'loaded', this validates connectivity; the server short-circuits if
+    // the same model is already loaded.
     const previousSelectedId = selectedModelId;
 
     setModels(prev => prev.map(m => ({

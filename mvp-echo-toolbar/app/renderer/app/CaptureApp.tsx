@@ -16,6 +16,7 @@ const AUTO_STOP_S = 590;        // Auto-stop at 9:50 (10s buffer)
 export default function CaptureApp() {
   const audioCapture = useRef(new AudioCapture());
   const isRecordingRef = useRef(false);
+  const isProcessingRef = useRef(false);
   const selectedModelRef = useRef('gpu-english');
   const selectedLanguageRef = useRef('');
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -120,6 +121,7 @@ export default function CaptureApp() {
 
       console.log('CaptureApp: Stopping recording');
       isRecordingRef.current = false;
+      isProcessingRef.current = true;
       clearCountdown();
       electronAPI.updateTrayState('processing');
       electronAPI.stopRecording('global-shortcut');
@@ -150,7 +152,11 @@ export default function CaptureApp() {
 
           console.log('CaptureApp: Transcription result:', JSON.stringify(result));
 
-          if (result.text?.trim()) {
+          if (result.success === false) {
+            console.error('CaptureApp: Transcription failed:', result.error || 'unknown error');
+            electronAPI.updateTrayState('error');
+            setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+          } else if (result.text?.trim()) {
             await electronAPI.copyToClipboard(result.text);
             console.log(`CaptureApp: Copied to clipboard: "${result.text}"`);
             playCompletionSound();
@@ -167,11 +173,18 @@ export default function CaptureApp() {
         console.error('CaptureApp: Stop recording failed:', error);
         electronAPI.updateTrayState('error');
         setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+      } finally {
+        isProcessingRef.current = false;
       }
     };
 
     const unsubscribe = api.onGlobalShortcutToggle(() => {
       console.log('CaptureApp: Global shortcut toggle received');
+
+      if (isProcessingRef.current) {
+        console.log('CaptureApp: Ignoring shortcut — transcription in progress');
+        return;
+      }
 
       const currentlyRecording = isRecordingRef.current;
 

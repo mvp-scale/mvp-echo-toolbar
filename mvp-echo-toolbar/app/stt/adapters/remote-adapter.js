@@ -399,7 +399,7 @@ class RemoteAdapter {
   }
 
   /**
-   * Fetch with automatic retry on transient errors (502-504, network issues).
+   * Fetch with automatic retry on transient errors (500-504, network issues).
    * Uses exponential backoff: 1s, 2s.
    *
    * @param {string} url
@@ -413,7 +413,7 @@ class RemoteAdapter {
         const response = await fetch(url, options);
 
         // Retry on transient server errors
-        if (response.status >= 502 && response.status <= 504 && attempt < retries) {
+        if (response.status >= 500 && response.status <= 504 && attempt < retries) {
           const delay = Math.pow(2, attempt) * 1000;
           log(
             `RemoteAdapter: HTTP ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`
