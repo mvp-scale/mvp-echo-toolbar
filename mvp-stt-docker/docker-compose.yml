@@ -10,42 +10,6 @@
 #   curl http://localhost:20300/health
 
 services:
-  # -- ASR Engine (legacy standalone C++ WebSocket server) --
-  # Only needed when using ADAPTER_TYPE=websocket (single-model, no switching).
-  # Not started by default. To use: docker compose --profile legacy up -d
-  mvp-asr:
-    profiles: ["legacy"]
-    build:
-      context: .
-      dockerfile: Dockerfile.asr
-    container_name: mvp-asr
-    expose:
-      - "6006"
-    volumes:
-      - mvp-models:/models
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - MODEL_DIR=/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
-      - HF_REPO=csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
-      - WS_PORT=6006
-      - NUM_THREADS=4
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    mem_limit: 8g
-    memswap_limit: 8g
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   # -- HTTP Bridge (hexagonal architecture with pluggable adapters) --
   mvp-bridge:
     build:
