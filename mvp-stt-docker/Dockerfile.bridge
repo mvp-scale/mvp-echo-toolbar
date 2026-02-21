@@ -38,6 +38,7 @@ RUN curl -fSL -o /tmp/sherpa.tar.bz2 \
 
 ENV PATH="/opt/sherpa-onnx/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/sherpa-onnx/lib:${LD_LIBRARY_PATH}"
+ENV PYTHONUNBUFFERED=1
 
 # Copy application code
 COPY ports.py /app/ports.py

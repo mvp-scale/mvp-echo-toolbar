@@ -7,6 +7,10 @@
 MODEL_DIR="${MODEL_DIR:-/models}"
 DEFAULT_MODEL="${DEFAULT_MODEL:-parakeet-tdt-0.6b-v2-int8}"
 
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [mvp-bridge] INFO  $*"; }
+log_warn() { echo "$(date '+%Y-%m-%d %H:%M:%S') [mvp-bridge] WARNING  $*"; }
+log_error() { echo "$(date '+%Y-%m-%d %H:%M:%S') [mvp-bridge] ERROR  $*"; }
+
 # All supported models: id -> HuggingFace repo
 declare -A MODELS
 MODELS=(
@@ -20,11 +24,11 @@ download_model() {
     local model_subdir="$MODEL_DIR/sherpa-onnx-nemo-$model_id"
 
     if [ -f "$model_subdir/tokens.txt" ]; then
-        echo "[mvp-bridge] Model found: $model_id"
+        log "Model found: $model_id"
         return 0
     fi
 
-    echo "[mvp-bridge] Downloading $model_id from HuggingFace ($hf_repo)..."
+    log "Downloading $model_id from HuggingFace ($hf_repo)..."
     mkdir -p "$model_subdir"
 
     python3 -c "
@@ -35,11 +39,11 @@ snapshot_download(
     local_dir='${model_subdir}',
     token=os.environ.get('HF_TOKEN') or None,
 )
-print('[mvp-bridge] Download complete: ${model_id}')
+print('Download complete: ${model_id}')
 "
 
     if [ $? -ne 0 ]; then
-        echo "[mvp-bridge] WARNING: Failed to download $model_id (non-fatal, continuing)"
+        log_warn "Failed to download $model_id (non-fatal, continuing)"
         return 1
     fi
     return 0
@@ -50,7 +54,7 @@ default_repo="${MODELS[$DEFAULT_MODEL]}"
 if [ -n "$default_repo" ]; then
     download_model "$DEFAULT_MODEL" "$default_repo"
     if [ $? -ne 0 ]; then
-        echo "[mvp-bridge] ERROR: Default model download failed"
+        log_error "Default model download failed"
         exit 1
     fi
 fi

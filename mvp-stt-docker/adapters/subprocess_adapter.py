@@ -17,6 +17,7 @@ Model directory layout (each model is a subdirectory of MODEL_DIR):
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -25,6 +26,8 @@ import numpy as np
 import soundfile as sf
 
 from ports import ModelEngine
+
+log = logging.getLogger("subprocess-adapter")
 
 
 # Known Parakeet TDT models and their HuggingFace repos.
@@ -175,7 +178,7 @@ class SubprocessAdapter(ModelEngine):
 
             if proc.returncode != 0:
                 error_msg = stderr.decode().strip() if stderr else "Unknown error"
-                print(f"[subprocess-adapter] sherpa-onnx-offline failed: {error_msg}")
+                log.error("sherpa-onnx-offline failed: %s", error_msg)
                 raise RuntimeError(
                     f"sherpa-onnx-offline exited with code {proc.returncode}: {error_msg}"
                 )
@@ -222,7 +225,7 @@ class SubprocessAdapter(ModelEngine):
         If a different model is already loaded, it is unloaded first.
         """
         if self._model_id == model_id and self._state == "loaded":
-            print(f"[subprocess-adapter] Model {model_id} already loaded")
+            log.info("Model %s already loaded", model_id)
             return
 
         # Unload current model if switching
@@ -230,7 +233,7 @@ class SubprocessAdapter(ModelEngine):
             await self.unload_model()
 
         self._state = "loading"
-        print(f"[subprocess-adapter] Loading model: {model_id}")
+        log.info("Loading model: %s", model_id)
 
         model_dir = _find_model_dir(self._base_dir, model_id)
         if model_dir is None:
@@ -251,15 +254,17 @@ class SubprocessAdapter(ModelEngine):
         self._model_files = model_files
         self._state = "loaded"
 
-        print(
-            f"[subprocess-adapter] Model loaded: {model_id} "
-            f"(dir={model_dir}, provider={self._provider})"
+        log.info(
+            "Model loaded: %s (dir=%s, provider=%s)",
+            model_id,
+            model_dir,
+            self._provider,
         )
 
     async def unload_model(self) -> None:
         """Unload the current model (clear references)."""
         if self._model_id:
-            print(f"[subprocess-adapter] Unloading model: {self._model_id}")
+            log.info("Unloading model: %s", self._model_id)
         self._model_id = None
         self._model_dir = None
         self._model_files = None

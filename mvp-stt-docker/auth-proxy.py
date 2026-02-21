@@ -6,12 +6,21 @@ Local/private IPs bypass auth. Handles CORS.
 
 import http.server
 import json
+import logging
 import os
 import threading
 import time
 import urllib.request
 import urllib.error
 from ipaddress import ip_address, ip_network
+
+# -- Logging --
+
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(format=LOG_FORMAT, datefmt=LOG_DATEFMT, level=logging.INFO)
+log = logging.getLogger("mvp-auth")
 
 ASR_BACKEND = os.environ.get("ASR_BACKEND", "http://mvp-asr:8000")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8080"))
@@ -37,7 +46,7 @@ def load_keys():
             data = json.load(f)
         return {k["key"]: k for k in data.get("keys", []) if k.get("active", True)}
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[mvp-auth] Warning: Could not load keys file: {e}")
+        log.warning("Could not load keys file: %s", e)
         return {}
 
 
@@ -56,7 +65,7 @@ def save_usage(usage):
         with open(USAGE_FILE, "w") as f:
             json.dump(usage, f, indent=2)
     except OSError as e:
-        print(f"[mvp-auth] Warning: Could not save usage: {e}")
+        log.warning("Could not save usage: %s", e)
 
 
 def format_duration(total_seconds):
@@ -99,7 +108,7 @@ def record_usage(api_key, name, duration_seconds):
 
         used_str = format_duration(duration_seconds)
         total_str = format_duration(usage[api_key]["total_seconds"])
-        print(f"[mvp-auth] {name} +{used_str}  >>>  cumulative: {total_str}")
+        log.info("%s +%s  >>>  cumulative: %s", name, used_str, total_str)
 
 
 def is_private_ip(addr):
@@ -115,8 +124,8 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
     """HTTP handler that validates API keys and proxies to ASR backend."""
 
     def log_message(self, format, *args):
-        """Override to prefix log messages."""
-        print(f"[mvp-auth] {args[0]}")
+        """Override to route HTTP server logs through the logging module."""
+        log.info("%s", args[0])
 
     def send_cors_headers(self):
         """Add CORS headers to response."""
@@ -162,7 +171,7 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
             auth_result = self.authenticate()
             if auth_result is None:
                 client_ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
-                print(f"[mvp-auth] DENIED {method} {self.path} from {client_ip} (invalid or missing key)")
+                log.warning("DENIED %s %s from %s (invalid or missing key)", method, self.path, client_ip)
                 self.send_response(401)
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json")
@@ -182,9 +191,9 @@ class AuthProxyHandler(http.server.BaseHTTPRequestHandler):
         if "/audio/transcriptions" in self.path:
             content_length = int(self.headers.get("Content-Length", 0))
             size_kb = content_length / 1024
-            print(f"[mvp-auth] {auth_result[1]} [{app_version}] transcribing ({size_kb:.0f} KB audio)")
+            log.info("%s [%s] transcribing (%.0f KB audio)", auth_result[1], app_version, size_kb)
         elif self.path not in ("/health",):
-            print(f"[mvp-auth] {auth_result[1]} [{app_version}] {method} {self.path}")
+            log.info("%s [%s] %s %s", auth_result[1], app_version, method, self.path)
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
@@ -255,18 +264,18 @@ class ThreadedHTTPServer(http.server.ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
-    print(f"[mvp-auth] Starting on port {LISTEN_PORT}")
-    print(f"[mvp-auth] Backend: {ASR_BACKEND}")
-    print(f"[mvp-auth] Keys file: {KEYS_FILE}")
-    print(f"[mvp-auth] Usage file: {USAGE_FILE}")
-    print(f"[mvp-auth] API key required for all requests (except /health)")
+    log.info("Starting on port %d", LISTEN_PORT)
+    log.info("Backend: %s", ASR_BACKEND)
+    log.info("Keys file: %s", KEYS_FILE)
+    log.info("Usage file: %s", USAGE_FILE)
+    log.info("API key required for all requests (except /health)")
 
     keys = load_keys()
-    print(f"[mvp-auth] Loaded {len(keys)} active API key(s)")
+    log.info("Loaded %d active API key(s)", len(keys))
 
     server = ThreadedHTTPServer(("0.0.0.0", LISTEN_PORT), AuthProxyHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[mvp-auth] Shutting down")
+        log.info("Shutting down")
         server.shutdown()

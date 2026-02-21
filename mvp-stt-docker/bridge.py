@@ -11,6 +11,7 @@ Adapter selection (via ADAPTER_TYPE env var):
     "managed-websocket"       -- manages a sherpa-onnx WebSocket server subprocess
 """
 
+import logging
 import os
 import subprocess
 import tempfile
@@ -26,6 +27,14 @@ from pydantic import BaseModel
 
 from ports import ModelEngine
 from adapters import SubprocessAdapter, WebSocketAdapter, ManagedWebSocketAdapter
+
+# -- Logging --
+
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(format=LOG_FORMAT, datefmt=LOG_DATEFMT, level=logging.INFO)
+log = logging.getLogger("mvp-bridge")
 
 # -- Model Metadata --
 
@@ -105,8 +114,8 @@ engine: ModelEngine = create_engine(ADAPTER_TYPE)
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Application startup and shutdown lifecycle."""
-    print(f"[mvp-bridge] Starting on port {LISTEN_PORT}")
-    print(f"[mvp-bridge] Adapter: {ADAPTER_TYPE}")
+    log.info("Starting on port %d", LISTEN_PORT)
+    log.info("Adapter: %s", ADAPTER_TYPE)
 
     # Auto-load default model for adapters that manage their own model lifecycle
     if ADAPTER_TYPE in ("subprocess", "managed-websocket"):
@@ -115,18 +124,18 @@ async def lifespan(application: FastAPI):
         )
         try:
             await engine.load_model(default_model)
-            print(f"[mvp-bridge] Default model loaded: {default_model}")
+            log.info("Default model loaded: %s", default_model)
         except Exception as e:
-            print(f"[mvp-bridge] WARNING: Failed to load default model: {e}")
-            print("[mvp-bridge] Server will start but transcription will fail until a model is loaded.")
+            log.warning("Failed to load default model: %s", e)
+            log.warning("Server will start but transcription will fail until a model is loaded.")
     elif ADAPTER_TYPE == "websocket":
         ws_host = os.environ.get("WS_HOST", "mvp-asr")
         ws_port = os.environ.get("WS_PORT", "6006")
-        print(f"[mvp-bridge] WebSocket backend: ws://{ws_host}:{ws_port}")
+        log.info("WebSocket backend: ws://%s:%s", ws_host, ws_port)
 
-    print("[mvp-bridge] Ready to accept requests")
+    log.info("Ready to accept requests")
     yield
-    print("[mvp-bridge] Shutting down")
+    log.info("Shutting down")
     await engine.unload_model()
 
 
@@ -248,10 +257,12 @@ async def transcribe(
         processing_time = time.time() - start_time
 
         rtf = processing_time / audio_duration if audio_duration > 0 else 0
-        print(
-            f"[mvp-bridge] Transcribed {audio_duration:.1f}s audio "
-            f"in {processing_time:.2f}s (RTF={rtf:.2f}): "
-            f'"{text[:80]}{"..." if len(text) > 80 else ""}"'
+        log.info(
+            'Transcribed %.1fs audio in %.2fs (RTF=%.2f): "%s"',
+            audio_duration,
+            processing_time,
+            rtf,
+            text[:80] + ("..." if len(text) > 80 else ""),
         )
 
         # Build response matching OpenAI verbose_json format
@@ -276,7 +287,7 @@ async def transcribe(
             return text
 
     except Exception as e:
-        print(f"[mvp-bridge] Error: {e}")
+        log.error("%s: %s", type(e).__name__, e)
         return JSONResponse(
             status_code=500,
             content={"error": str(e)},
