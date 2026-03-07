@@ -250,9 +250,42 @@ async def transcribe(
             samples = samples[:, 0]
 
         audio_duration = len(samples) / sample_rate
+        float32_samples = samples.astype(np.float32)
 
-        # Transcribe via the active engine adapter
-        text = await engine.transcribe(samples.astype(np.float32), sample_rate)
+        # Transcribe via the active engine adapter.
+        # The samples are in memory and the HTTP connection is open --
+        # we can retry without losing anything.
+        text = None
+        last_error = None
+        for attempt in range(1, 3):
+            try:
+                text = await engine.transcribe(float32_samples, sample_rate)
+
+                # Empty text on substantial audio is suspicious -- retry once
+                if not text and audio_duration >= 2.0 and attempt < 2:
+                    log.warning(
+                        "Attempt %d returned empty text on %.1fs audio, retrying",
+                        attempt,
+                        audio_duration,
+                    )
+                    continue
+
+                break  # Got a result (even if empty on short audio)
+
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    log.warning(
+                        "Attempt %d failed (%s: %s), retrying at bridge level",
+                        attempt,
+                        type(e).__name__,
+                        e,
+                    )
+                    continue
+                raise  # Final attempt, let the outer except handle it
+
+        if text is None and last_error:
+            raise last_error
 
         processing_time = time.time() - start_time
 
@@ -262,7 +295,7 @@ async def transcribe(
             audio_duration,
             processing_time,
             rtf,
-            text[:80] + ("..." if len(text) > 80 else ""),
+            (text or "")[:80] + ("..." if text and len(text) > 80 else ""),
         )
 
         # Build response matching OpenAI verbose_json format

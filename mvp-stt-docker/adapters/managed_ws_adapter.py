@@ -7,9 +7,10 @@ subprocess inside the bridge container, enabling model switching by restarting
 the subprocess with different model paths.
 
 Resilience features:
-    - Persistent WebSocket connection (reused across requests)
+    - Fresh WebSocket connection per request (no stale state)
+    - Warm-up inference after every subprocess start/restart
+    - Graduated retry: reconnect first, restart subprocess only as last resort
     - Timeouts on all blocking operations (recv, connect, lock)
-    - Auto-retry with subprocess restart on failure
     - In-memory health metrics (request count, errors, restarts)
     - Proactive periodic restart (configurable, default 12h)
 
@@ -105,9 +106,10 @@ class ManagedWebSocketAdapter(ModelEngine):
     restarting it with the new model's file paths. Transcription uses the
     same binary WebSocket protocol as the external WebSocket adapter.
 
-    A single persistent WebSocket connection is maintained and reused across
-    requests. On any failure, the subprocess is restarted and the request
-    is retried once before returning an error.
+    Each transcription opens a fresh WebSocket connection, sends audio,
+    receives the result, and closes. No persistent connection state means
+    nothing can go stale. The subprocess (and its loaded model) is the
+    only long-lived resource.
 
     Configuration via environment variables:
         MODEL_DIR: Base directory containing model subdirectories (default: "/models")
@@ -118,6 +120,12 @@ class ManagedWebSocketAdapter(ModelEngine):
         SHERPA_MAX_UTTERANCE: Max utterance length in seconds (default: "600")
         PROACTIVE_RESTART_HOURS: Hours before proactive subprocess restart (default: "12")
     """
+
+    # How often the watchdog checks if the subprocess is alive
+    _WATCHDOG_INTERVAL = 5.0  # seconds
+
+    # Minimum idle time before allowing a proactive restart
+    _PROACTIVE_IDLE_MIN = 30.0  # seconds
 
     def __init__(self) -> None:
         self._base_dir = os.environ.get("MODEL_DIR", "/models")
@@ -135,43 +143,55 @@ class ManagedWebSocketAdapter(ModelEngine):
         self._model_files: dict[str, str] | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._state: str = "unloaded"
-        self._ws: websockets.WebSocketClientProtocol | None = None
         self._subprocess_started_at: float = 0.0
+        self._last_request_at: float = 0.0
         self._metrics = HealthMetrics()
+        self._watchdog_task: asyncio.Task | None = None
 
     @property
     def uri(self) -> str:
         return f"ws://localhost:{self._port}"
 
-    # -- Persistent connection management --
+    # -- Subprocess watchdog --
 
-    async def _ensure_connection(self) -> websockets.WebSocketClientProtocol:
-        """Return the existing persistent connection, or open a new one."""
-        if self._ws is not None:
+    async def _watchdog_loop(self) -> None:
+        """
+        Background task that checks if the subprocess is still alive.
+
+        If it finds the process has died, it restarts it immediately so
+        the next real request hits a warm, ready server instead of
+        discovering a dead process and making the user wait.
+        """
+        while True:
+            await asyncio.sleep(self._WATCHDOG_INTERVAL)
             try:
-                # Quick liveness check -- pong timeout is fast
-                await asyncio.wait_for(self._ws.ping(), timeout=5.0)
-                return self._ws
-            except Exception:
-                # Connection is dead, close and reopen
-                await self._close_connection()
+                if self._state != "loaded":
+                    continue
+                if self._process is None or self._process.returncode is not None:
+                    log.warning("Watchdog: subprocess died, auto-restarting")
+                    async with self._lock:
+                        # Re-check under lock -- someone else may have restarted
+                        if self._process is None or self._process.returncode is not None:
+                            await self._restart_subprocess()
+            except Exception as e:
+                log.error("Watchdog: restart failed: %s", e)
 
-        ws = await asyncio.wait_for(
-            websockets.connect(self.uri),
-            timeout=CONNECT_TIMEOUT,
-        )
-        self._ws = ws
-        log.info("WebSocket connection established")
-        return ws
+    def _start_watchdog(self) -> None:
+        """Start the background watchdog task if not already running."""
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.ensure_future(self._watchdog_loop())
 
-    async def _close_connection(self) -> None:
-        """Safely close the persistent WebSocket connection."""
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
-            self._ws = None
+    def _stop_watchdog(self) -> None:
+        """Cancel the background watchdog task."""
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
+
+    # -- Subprocess liveness --
+
+    def _is_subprocess_alive(self) -> bool:
+        """Quick non-blocking check: is the subprocess still running?"""
+        return self._process is not None and self._process.returncode is None
 
     # -- Wire protocol --
 
@@ -181,26 +201,28 @@ class ManagedWebSocketAdapter(ModelEngine):
         """
         Execute the WebSocket wire protocol for one transcription request.
 
-        Opens/reuses the persistent connection, sends header + audio chunks,
-        receives the result with a timeout, then sends "Done" to reset
-        server state for the next request.
+        Opens a fresh connection, sends header + audio chunks, receives the
+        result, sends "Done", and closes. No state carried between calls.
         """
-        ws = await self._ensure_connection()
+        async with websockets.connect(
+            self.uri,
+            open_timeout=CONNECT_TIMEOUT,
+            close_timeout=5,
+        ) as ws:
+            # Header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
+            header = struct.pack("<ii", sample_rate, samples.size * 4)
+            buf = header + samples.tobytes()
 
-        # Header: sample_rate (4 bytes LE) + audio_byte_count (4 bytes LE)
-        header = struct.pack("<ii", sample_rate, samples.size * 4)
-        buf = header + samples.tobytes()
+            # Send in chunks to avoid overwhelming the connection
+            chunk_size = 10240
+            for start in range(0, len(buf), chunk_size):
+                await ws.send(buf[start : start + chunk_size])
 
-        # Send in chunks to avoid overwhelming the connection
-        chunk_size = 10240
-        for start in range(0, len(buf), chunk_size):
-            await ws.send(buf[start : start + chunk_size])
+            # Receive transcription result with timeout
+            result = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT)
 
-        # Receive transcription result with timeout
-        result = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT)
-
-        # Signal end of session so server resets state for next request
-        await ws.send("Done")
+            # Signal end of session so server resets state for next request
+            await ws.send("Done")
 
         # Parse result -- the C++ server returns JSON; handle both formats
         try:
@@ -214,10 +236,28 @@ class ManagedWebSocketAdapter(ModelEngine):
             )
             return "" if text == "<EMPTY>" else text
 
+    # -- Warm-up --
+
+    async def _warm_up(self) -> None:
+        """
+        Run a short silent inference to warm up the model.
+
+        After a subprocess start/restart, the first real inference can be
+        slow or flaky while CUDA kernels compile and memory allocates.
+        Sending 1 second of silence through the full pipeline ensures
+        the model is truly ready before we serve live traffic.
+        """
+        silence = np.zeros(16000, dtype=np.float32)  # 1s of silence at 16kHz
+        try:
+            await self._do_transcribe(silence, 16000)
+            log.info("Warm-up inference complete")
+        except Exception as e:
+            log.warning("Warm-up inference failed (non-fatal): %s", e)
+
     # -- Subprocess restart --
 
     async def _restart_subprocess(self) -> None:
-        """Kill the current subprocess, close the connection, and restart."""
+        """Kill the current subprocess and restart with the same model."""
         model_id = self._model_id
         log.warning(
             "Restarting subprocess for model %s (PID=%s)",
@@ -225,7 +265,6 @@ class ManagedWebSocketAdapter(ModelEngine):
             self._process.pid if self._process else "?",
         )
 
-        await self._close_connection()
         await self._kill_process()
 
         # Restart with the same model config
@@ -245,6 +284,9 @@ class ManagedWebSocketAdapter(ModelEngine):
                 f"(model={model_id})"
             )
 
+        # Warm up the model so first real request doesn't fail
+        await self._warm_up()
+
         self._subprocess_started_at = time.time()
         self._metrics.record_restart()
         self._state = "loaded"
@@ -257,20 +299,28 @@ class ManagedWebSocketAdapter(ModelEngine):
     # -- Proactive restart --
 
     async def _maybe_proactive_restart(self) -> None:
-        """Restart the subprocess if it has been running too long."""
+        """Restart the subprocess if it has been running too long AND is idle."""
         if PROACTIVE_RESTART_HOURS <= 0:
             return
         if self._subprocess_started_at == 0:
             return
 
         elapsed_hours = (time.time() - self._subprocess_started_at) / 3600.0
-        if elapsed_hours >= PROACTIVE_RESTART_HOURS:
-            log.info(
-                "Proactive restart: subprocess running for %.1fh (threshold=%.1fh)",
-                elapsed_hours,
-                PROACTIVE_RESTART_HOURS,
-            )
-            await self._restart_subprocess()
+        if elapsed_hours < PROACTIVE_RESTART_HOURS:
+            return
+
+        # Don't restart during active conversation -- wait for an idle gap
+        idle_seconds = time.time() - self._last_request_at if self._last_request_at else float("inf")
+        if idle_seconds < self._PROACTIVE_IDLE_MIN:
+            return
+
+        log.info(
+            "Proactive restart: subprocess running for %.1fh (threshold=%.1fh), idle %.0fs",
+            elapsed_hours,
+            PROACTIVE_RESTART_HOURS,
+            idle_seconds,
+        )
+        await self._restart_subprocess()
 
     # -- Public interface --
 
@@ -287,44 +337,60 @@ class ManagedWebSocketAdapter(ModelEngine):
             )
 
         try:
-            if self._state != "loaded" or self._process is None:
+            self._last_request_at = time.time()
+
+            if self._state != "loaded":
                 raise RuntimeError(
                     f"Engine not ready (state={self._state}). "
                     "Call load_model() first."
                 )
 
-            # Proactive restart if subprocess has been running too long
+            # If subprocess died between requests, restart before wasting time
+            if not self._is_subprocess_alive():
+                log.warning("Subprocess found dead at request time, restarting")
+                await self._restart_subprocess()
+
+            # Proactive restart only when idle (don't interrupt active conversation)
             await self._maybe_proactive_restart()
 
-            # Attempt 1
+            # Attempt 1: just try (fresh connection, no ping needed)
             try:
                 text = await self._do_transcribe(samples, sample_rate)
                 self._metrics.record_success()
                 return text
             except Exception as e:
-                self._metrics.record_error()
                 log.warning(
-                    "Attempt 1 failed (%s: %s), restarting subprocess",
+                    "Attempt 1 failed (%s: %s), retrying with fresh connection",
                     type(e).__name__,
                     e,
                 )
-                await self._close_connection()
 
-                # Restart subprocess and retry
-                await self._restart_subprocess()
+            # Attempt 2: try again -- connection issue may have been transient
+            try:
+                text = await self._do_transcribe(samples, sample_rate)
+                self._metrics.record_success()
+                return text
+            except Exception as e:
+                log.warning(
+                    "Attempt 2 failed (%s: %s), restarting subprocess",
+                    type(e).__name__,
+                    e,
+                )
 
-                # Attempt 2
-                try:
-                    text = await self._do_transcribe(samples, sample_rate)
-                    self._metrics.record_success()
-                    return text
-                except Exception as e2:
-                    self._metrics.record_error()
-                    await self._close_connection()
-                    raise RuntimeError(
-                        f"Transcription failed after retry: "
-                        f"{type(e2).__name__}: {e2}"
-                    ) from e2
+            # Attempt 3: subprocess may be unhealthy -- restart and try once more
+            self._metrics.record_error()
+            await self._restart_subprocess()
+
+            try:
+                text = await self._do_transcribe(samples, sample_rate)
+                self._metrics.record_success()
+                return text
+            except Exception as e3:
+                self._metrics.record_error()
+                raise RuntimeError(
+                    f"Transcription failed after subprocess restart: "
+                    f"{type(e3).__name__}: {e3}"
+                ) from e3
         finally:
             self._lock.release()
 
@@ -387,8 +453,12 @@ class ManagedWebSocketAdapter(ModelEngine):
                     f"(PID={self._process.pid if self._process else '?'})"
                 )
 
+            # Warm up the model with a silent inference
+            await self._warm_up()
+
             self._subprocess_started_at = time.time()
             self._state = "loaded"
+            self._start_watchdog()
             log.info(
                 "Model loaded: %s (PID=%s, port=%d, provider=%s)",
                 model_id,
@@ -459,9 +529,9 @@ class ManagedWebSocketAdapter(ModelEngine):
 
     async def _do_unload(self) -> None:
         """Inner unload without acquiring the lock (caller must hold it)."""
+        self._stop_watchdog()
         if self._model_id:
             log.info("Unloading model: %s", self._model_id)
-        await self._close_connection()
         await self._kill_process()
         self._model_id = None
         self._model_dir = None
@@ -501,7 +571,7 @@ class ManagedWebSocketAdapter(ModelEngine):
         self._process = None
 
     async def get_status(self) -> dict:
-        """Return current engine status using in-memory state (no probe connection)."""
+        """Return current engine status using in-memory state."""
         status: dict = {
             "model_id": self._model_id,
             "state": self._state,
@@ -519,10 +589,6 @@ class ManagedWebSocketAdapter(ModelEngine):
             status["error"] = "Subprocess exited unexpectedly"
         if self._model_dir:
             status["model_path"] = str(self._model_dir)
-        if self._ws is not None:
-            status["persistent_connection"] = "open"
-        else:
-            status["persistent_connection"] = "closed"
         if self._subprocess_started_at > 0:
             status["subprocess_uptime_hours"] = round(
                 (time.time() - self._subprocess_started_at) / 3600.0, 2
