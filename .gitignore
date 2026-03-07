@@ -92,3 +92,8 @@ mvp-echo-toolbar/mvp-sherpa-demo/
 # Test audio files
 *.wav
 *.m4a
+.claude/
+.claude/hooks/aoa-gateway.py
+.claude/hooks/aoa-status-line.sh
+.claude/skills/aoa-rebalance/SKILL.md
+.claude/skills/aoa-start/SKILL.md
