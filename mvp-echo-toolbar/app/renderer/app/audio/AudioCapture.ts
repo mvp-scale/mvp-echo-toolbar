@@ -2,6 +2,8 @@
  * Audio recording functionality (renderer process)
  * Extracted from App.tsx for use in hidden capture window
  */
+const RAW_PCM_SAMPLE_RATE = 16000;
+
 export class AudioCapture {
   private mediaRecorder?: MediaRecorder;
   private audioChunks: Blob[] = [];
@@ -12,6 +14,7 @@ export class AudioCapture {
   private onAudioLevel?: (level: number) => void;
   private animationId?: number;
   private sourceNode?: MediaStreamAudioSourceNode;
+
 
   getStream(): MediaStream | undefined {
     return this.stream;
@@ -108,6 +111,53 @@ export class AudioCapture {
 
       this.mediaRecorder.stop();
     });
+  }
+
+  /**
+   * Start recording for WebGPU path.
+   * Uses the same proven MediaRecorder as the standard path — no ScriptProcessorNode
+   * or AudioWorklet, which crash in Electron's hidden window on Windows.
+   * The WebM is decoded to PCM in stopRawRecording() via decodeAudioData.
+   */
+  async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
+    console.log('[AudioCapture] Starting recording (WebGPU mode — will decode to PCM)');
+    return this.startRecording(onAudioLevel);
+  }
+
+  /**
+   * Stop WebGPU recording: get WebM from MediaRecorder, send to main process
+   * for ffmpeg conversion to 16kHz PCM, return Float32Array.
+   *
+   * CRITICAL: Audio decoding (decodeAudioData, ScriptProcessorNode, AudioWorklet)
+   * ALL crash in Electron's hidden window on Windows with access violation 0xC0000005.
+   * The only safe path is ffmpeg in the main process, which is already proven for
+   * the local CPU adapter.
+   */
+  async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number }> {
+    // Get WebM from MediaRecorder via standard stop
+    const webmBuffer = await this.stopRecording();
+    console.log(`[AudioCapture] WebM buffer: ${webmBuffer.byteLength} bytes, sending to main for PCM conversion...`);
+
+    if (webmBuffer.byteLength === 0) {
+      return { pcm: new Float32Array(0), sampleRate: RAW_PCM_SAMPLE_RATE };
+    }
+
+    // Send to main process for ffmpeg WebM → 16kHz mono WAV → Float32Array
+    const ipc = (window as any).electronAPI;
+    if (!ipc?.convertToPcm) {
+      throw new Error('convertToPcm IPC not available');
+    }
+
+    const audioArray = Array.from(new Uint8Array(webmBuffer));
+    const result = await ipc.convertToPcm(audioArray);
+
+    if (!result.success) {
+      throw new Error(`PCM conversion failed: ${result.error}`);
+    }
+
+    const pcm = new Float32Array(result.pcm);
+    console.log(`[AudioCapture] Got PCM from main: ${pcm.length} samples at ${RAW_PCM_SAMPLE_RATE}Hz (${(pcm.length / RAW_PCM_SAMPLE_RATE).toFixed(1)}s)`);
+    return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE };
   }
 
   cleanup(): void {

@@ -2,6 +2,16 @@ import { useEffect, useRef } from 'react';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
+import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
+
+// ── Silence trimming (Parakeet is VAD-sensitive) ──
+function trimSilence(audio: Float32Array, threshold = 0.01): Float32Array {
+  let start = 0, end = audio.length - 1;
+  while (start < end && Math.abs(audio[start]) < threshold) start++;
+  while (end > start && Math.abs(audio[end]) < threshold) end--;
+  const pad = 1600; // 100ms at 16kHz
+  return audio.slice(Math.max(0, start - pad), Math.min(audio.length, end + pad + 1));
+}
 
 // ── Countdown timing constants ──
 const MAX_RECORDING_S = 600;    // Server limit (10 min)
@@ -17,15 +27,18 @@ export default function CaptureApp() {
   const audioCapture = useRef(new AudioCapture());
   const isRecordingRef = useRef(false);
   const isProcessingRef = useRef(false);
-  const selectedModelRef = useRef('gpu-english');
+  const selectedModelRef = useRef('');
   const selectedLanguageRef = useRef('');
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef(0);
+  const orchestratorRef = useRef<InferenceOrchestrator>(new InferenceOrchestrator());
+  const rawPcmActiveRef = useRef(false); // tracks which recording mode was used
 
-  // Load saved config on mount to get model/language
+  // Load saved config on mount — do NOT auto-init WebGPU orchestrator
+  // (download only happens when user explicitly clicks download in settings)
   useEffect(() => {
     const ipc = (window as any).electron?.ipcRenderer;
-    if (!ipc) return; // Not in Electron (e.g., browser viewing Vite dev server)
+    if (!ipc) return;
 
     const loadConfig = async () => {
       try {
@@ -34,15 +47,52 @@ export default function CaptureApp() {
           if (config.selectedModel) selectedModelRef.current = config.selectedModel;
           if (config.language) selectedLanguageRef.current = config.language;
         }
+        console.log(`CaptureApp: Config loaded, model=${selectedModelRef.current}`);
       } catch (e) {
-        console.warn('Failed to load cloud config:', e);
+        console.warn('CaptureApp: Failed to load config:', e);
       }
     };
+
     loadConfig();
+
+    return () => {
+      orchestratorRef.current.dispose();
+    };
   }, []);
 
-  // Listen for config changes from popup (re-check periodically or on events)
-  // The popup saves config via cloud:configure IPC, so we re-read before each transcription
+  // Listen for WebGPU init request from main (triggered when user selects WebGPU model in settings)
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.onWebgpuInitOrchestrator) return;
+
+    const initWebGpuOrchestrator = async () => {
+      if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
+      try {
+        let backend: 'webgpu-hybrid' | 'wasm' = 'wasm';
+        if ((navigator as any).gpu) {
+          try {
+            const adapter = await (navigator as any).gpu.requestAdapter();
+            if (adapter) backend = 'webgpu-hybrid';
+          } catch { /* wasm fallback */ }
+        }
+        console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend})...`);
+        await orchestratorRef.current.initialize(backend);
+        console.log('CaptureApp: WebGPU orchestrator ready');
+
+        const ipc = (window as any).electron?.ipcRenderer;
+        if (ipc) ipc.invoke('webgpu:model-ready', true);
+      } catch (e) {
+        console.warn('CaptureApp: WebGPU orchestrator init failed:', e);
+      }
+    };
+
+    const unsub = api.onWebgpuInitOrchestrator(() => {
+      console.log('CaptureApp: Received webgpu:init-orchestrator from main');
+      initWebGpuOrchestrator();
+    });
+
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, []);
 
   useEffect(() => {
     const api = (window as any).electronAPI;
@@ -115,66 +165,118 @@ export default function CaptureApp() {
       }, 1000);
     };
 
+    /** Reset all state to known good — safety valve */
+    const resetState = (electronAPI: any) => {
+      console.log('CaptureApp: RESET — clearing all state');
+      isRecordingRef.current = false;
+      isProcessingRef.current = false;
+      rawPcmActiveRef.current = false;
+      clearCountdown();
+      audioCapture.current.cleanup();
+      electronAPI.updateTrayState('ready');
+    };
+
     /** Shared stop logic — used by both manual stop and auto-stop */
     const performStop = async (electronAPI: any) => {
-      if (!isRecordingRef.current) return;
+      if (!isRecordingRef.current) {
+        console.log('CaptureApp: performStop called but not recording, resetting');
+        resetState(electronAPI);
+        return;
+      }
 
-      console.log('CaptureApp: Stopping recording');
+      const wasRawPcm = rawPcmActiveRef.current;
+      console.log(`CaptureApp: Stopping recording (mode=${wasRawPcm ? 'raw-pcm' : 'webm'})`);
       isRecordingRef.current = false;
       isProcessingRef.current = true;
       clearCountdown();
       electronAPI.updateTrayState('processing');
       electronAPI.stopRecording('global-shortcut');
 
+      // Safety timeout: if processing takes >60s, force reset
+      const safetyTimeout = setTimeout(() => {
+        console.error('CaptureApp: SAFETY TIMEOUT — processing exceeded 60s, resetting');
+        resetState(electronAPI);
+      }, 60000);
+
       try {
-        const audioBuffer: ArrayBuffer = await audioCapture.current.stopRecording();
-        console.log(`CaptureApp: Audio buffer received, ${audioBuffer.byteLength} bytes`);
+        if (wasRawPcm && orchestratorRef.current.isReady()) {
+          // ── WebGPU LOCAL PATH ──
+          console.log('CaptureApp: Stopping raw PCM capture...');
+          const { pcm, sampleRate } = await audioCapture.current.stopRawRecording();
+          console.log(`CaptureApp: Got ${pcm.length} samples (${(pcm.length / sampleRate).toFixed(1)}s)`);
 
-        if (audioBuffer.byteLength > 0) {
-          // Re-read latest config before processing
-          try {
-            const ipc = (window as any).electron?.ipcRenderer;
-            if (ipc) {
-              const config = await ipc.invoke('cloud:get-config');
-              if (config) {
-                if (config.selectedModel) selectedModelRef.current = config.selectedModel;
-                if (config.language) selectedLanguageRef.current = config.language;
-              }
+          if (pcm.length > 0) {
+            const trimmed = trimSilence(pcm);
+            console.log(`CaptureApp: Trimmed to ${trimmed.length} samples, sending to parakeet.js`);
+            const result = await orchestratorRef.current.transcribe(trimmed, sampleRate);
+            console.log(`CaptureApp: Result: "${result.text}" (${result.processingTime.toFixed(0)}ms)`);
+
+            if (result.text?.trim()) {
+              await electronAPI.copyToClipboard(result.text);
+              playCompletionSound();
+              electronAPI.updateTrayState('done');
+              electronAPI.webgpuStoreTranscription({
+                text: result.text,
+                processingTime: result.processingTime,
+                engine: `webgpu (${selectedModelRef.current})`,
+                model: selectedModelRef.current,
+                language: 'en',
+              });
+            } else {
+              electronAPI.updateTrayState('ready');
             }
-          } catch (_e) { /* use cached values */ }
-
-          console.log(`CaptureApp: Sending to engine (model: ${selectedModelRef.current}, language: ${selectedLanguageRef.current || 'auto'})`);
-          const audioArray = Array.from(new Uint8Array(audioBuffer));
-          const result = await electronAPI.processAudio(audioArray, {
-            model: selectedModelRef.current,
-            language: selectedLanguageRef.current,
-          });
-
-          console.log('CaptureApp: Transcription result:', JSON.stringify(result));
-
-          if (result.success === false) {
-            console.error('CaptureApp: Transcription failed:', result.error || 'unknown error');
-            electronAPI.updateTrayState('error');
-            setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
-          } else if (result.text?.trim()) {
-            await electronAPI.copyToClipboard(result.text);
-            console.log(`CaptureApp: Copied to clipboard: "${result.text}"`);
-            playCompletionSound();
-            electronAPI.updateTrayState('done');
           } else {
-            console.log('CaptureApp: Empty transcription, no copy');
+            console.warn('CaptureApp: Empty audio');
             electronAPI.updateTrayState('ready');
           }
         } else {
-          console.warn('CaptureApp: Empty audio buffer, skipping transcription');
-          electronAPI.updateTrayState('ready');
+          // ── STANDARD PATH ──
+          console.log('CaptureApp: Stopping MediaRecorder...');
+          const audioBuffer: ArrayBuffer = await audioCapture.current.stopRecording();
+          console.log(`CaptureApp: Got ${audioBuffer.byteLength} bytes`);
+
+          if (audioBuffer.byteLength > 0) {
+            // Re-read config for model/language
+            try {
+              const ipc = (window as any).electron?.ipcRenderer;
+              if (ipc) {
+                const config = await ipc.invoke('cloud:get-config');
+                if (config?.selectedModel) selectedModelRef.current = config.selectedModel;
+                if (config?.language) selectedLanguageRef.current = config.language;
+              }
+            } catch (_e) { /* use cached */ }
+
+            console.log(`CaptureApp: Sending to engine (model=${selectedModelRef.current})`);
+            const audioArray = Array.from(new Uint8Array(audioBuffer));
+            const result = await electronAPI.processAudio(audioArray, {
+              model: selectedModelRef.current,
+              language: selectedLanguageRef.current,
+            });
+
+            if (result.success === false) {
+              console.error('CaptureApp: Transcription failed:', result.error);
+              electronAPI.updateTrayState('error');
+              setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+            } else if (result.text?.trim()) {
+              await electronAPI.copyToClipboard(result.text);
+              playCompletionSound();
+              electronAPI.updateTrayState('done');
+            } else {
+              electronAPI.updateTrayState('ready');
+            }
+          } else {
+            electronAPI.updateTrayState('ready');
+          }
         }
       } catch (error: any) {
-        console.error('CaptureApp: Stop recording failed:', error);
+        console.error('CaptureApp: performStop error:', error);
         electronAPI.updateTrayState('error');
         setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
       } finally {
+        clearTimeout(safetyTimeout);
         isProcessingRef.current = false;
+        rawPcmActiveRef.current = false;
+        console.log('CaptureApp: performStop complete, state=ready');
       }
     };
 
@@ -201,7 +303,16 @@ export default function CaptureApp() {
         // Start countdown interval
         startCountdownInterval();
 
-        audioCapture.current.startRecording().catch((error: Error) => {
+        // If orchestrator is loaded → raw PCM + local inference. Otherwise → MediaRecorder + IPC.
+        // Don't check model name here — orchestrator only loads for WebGPU models, so isReady() is sufficient.
+        const useRawPcm = orchestratorRef.current.isReady();
+        rawPcmActiveRef.current = useRawPcm;
+        console.log(`CaptureApp: Recording mode=${useRawPcm ? 'raw-pcm' : 'webm'}, orchestratorReady=${orchestratorRef.current.isReady()}, model=${selectedModelRef.current}`);
+        const startFn = useRawPcm
+          ? audioCapture.current.startRawRecording()
+          : audioCapture.current.startRecording();
+
+        startFn.catch((error: Error) => {
           console.error('CaptureApp: Start recording failed:', error);
           isRecordingRef.current = false;
           clearCountdown();

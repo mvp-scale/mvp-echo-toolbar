@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; connect-src *; media-src *;" />
+  <title>Audio Capture Test</title>
+  <style>
+    body { font-family: system-ui; background: #1a1a2e; color: #e0e0e0; padding: 2rem; }
+    pre { background: #0d1117; padding: 1rem; border-radius: 8px; font-size: 0.85rem; max-height: 400px; overflow-y: auto; }
+    button { padding: 0.5rem 1.5rem; margin: 0.25rem; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+    .pass { color: #4ade80; } .fail { color: #f87171; } .info { color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <h2>Audio Capture & Resample Tests</h2>
+  <button onclick="runAllTests()">Run All Tests</button>
+  <button onclick="testLiveMic()">Test Live Mic (3s)</button>
+  <button onclick="testMediaRecorderDecode()">Test MediaRecorder→PCM Decode (3s mic)</button>
+  <pre id="log"></pre>
+
+  <script type="module">
+    const logEl = document.getElementById('log');
+    function log(msg, cls = '') { logEl.innerHTML += `<span class="${cls}">${msg}</span>\n`; }
+    function pass(msg) { log(`✓ ${msg}`, 'pass'); }
+    function fail(msg) { log(`✗ ${msg}`, 'fail'); }
+    function info(msg) { log(`  ${msg}`, 'info'); }
+
+    // ── Test 1: AudioWorklet blob URL registration ──
+    async function testWorkletRegistration() {
+      log('\n--- Test 1: AudioWorklet blob URL registration ---');
+      try {
+        const ctx = new AudioContext();
+        const workletCode = `
+          class TestProcessor extends AudioWorkletProcessor {
+            process(inputs) {
+              const input = inputs[0];
+              if (input && input[0] && input[0].length > 0) {
+                this.port.postMessage({ samples: input[0].length });
+              }
+              return true;
+            }
+          }
+          registerProcessor('test-processor', TestProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        const node = new AudioWorkletNode(ctx, 'test-processor');
+        pass('AudioWorklet registered and node created');
+        info(`AudioContext sampleRate: ${ctx.sampleRate}Hz`);
+
+        node.disconnect();
+        await ctx.close();
+        return true;
+      } catch (e) {
+        fail(`AudioWorklet registration failed: ${e.message}`);
+        return false;
+      }
+    }
+
+    // ── Test 2: AudioWorklet captures PCM from oscillator ──
+    async function testWorkletCapture() {
+      log('\n--- Test 2: AudioWorklet captures PCM from oscillator ---');
+      try {
+        const ctx = new AudioContext();
+        const workletCode = `
+          class PcmCaptureProcessor extends AudioWorkletProcessor {
+            process(inputs) {
+              const input = inputs[0];
+              if (input && input[0] && input[0].length > 0) {
+                this.port.postMessage(new Float32Array(input[0]));
+              }
+              return true;
+            }
+          }
+          registerProcessor('pcm-capture-test', PcmCaptureProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        const osc = ctx.createOscillator();
+        osc.frequency.value = 440;
+        const node = new AudioWorkletNode(ctx, 'pcm-capture-test');
+
+        const chunks = [];
+        node.port.onmessage = (e) => { chunks.push(e.data); };
+
+        osc.connect(node);
+        osc.start();
+
+        // Capture for 500ms
+        await new Promise(r => setTimeout(r, 500));
+        osc.stop();
+        osc.disconnect();
+        node.disconnect();
+
+        const totalSamples = chunks.reduce((s, c) => s + c.length, 0);
+        const duration = totalSamples / ctx.sampleRate;
+
+        if (totalSamples > 0) {
+          pass(`Captured ${totalSamples} samples (${duration.toFixed(2)}s) in ${chunks.length} chunks`);
+
+          // Check signal isn't all zeros
+          const firstChunk = chunks[0];
+          const maxAbs = firstChunk.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+          if (maxAbs > 0.01) {
+            pass(`Signal has content (max amplitude: ${maxAbs.toFixed(4)})`);
+          } else {
+            fail(`Signal is silent (max amplitude: ${maxAbs.toFixed(6)})`);
+          }
+        } else {
+          fail('No samples captured');
+        }
+
+        await ctx.close();
+        return totalSamples > 0;
+      } catch (e) {
+        fail(`Capture failed: ${e.message}`);
+        return false;
+      }
+    }
+
+    // ── Test 3: OfflineAudioContext resample 48kHz → 16kHz ──
+    async function testResample() {
+      log('\n--- Test 3: Resample 48000Hz → 16000Hz ---');
+      try {
+        const sourceSampleRate = 48000;
+        const targetSampleRate = 16000;
+        const durationSec = 1.0;
+        const sourceLength = sourceSampleRate * durationSec;
+
+        // Generate 440Hz sine at 48kHz
+        const source = new Float32Array(sourceLength);
+        for (let i = 0; i < sourceLength; i++) {
+          source[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / sourceSampleRate);
+        }
+
+        const sourceBuffer = new AudioBuffer({
+          length: source.length,
+          numberOfChannels: 1,
+          sampleRate: sourceSampleRate,
+        });
+        sourceBuffer.getChannelData(0).set(source);
+
+        const outputLength = Math.ceil(durationSec * targetSampleRate);
+        const offlineCtx = new OfflineAudioContext(1, outputLength, targetSampleRate);
+        const bufferSource = offlineCtx.createBufferSource();
+        bufferSource.buffer = sourceBuffer;
+        bufferSource.connect(offlineCtx.destination);
+        bufferSource.start();
+
+        const rendered = await offlineCtx.startRendering();
+        const resampled = rendered.getChannelData(0);
+
+        info(`Source: ${source.length} samples at ${sourceSampleRate}Hz`);
+        info(`Output: ${resampled.length} samples at ${targetSampleRate}Hz`);
+
+        if (resampled.length === targetSampleRate) {
+          pass(`Correct output length: ${resampled.length}`);
+        } else {
+          fail(`Expected ${targetSampleRate} samples, got ${resampled.length}`);
+        }
+
+        // Check signal preserved
+        const maxAbs = resampled.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        if (maxAbs > 0.3) {
+          pass(`Signal preserved after resample (max: ${maxAbs.toFixed(4)})`);
+        } else {
+          fail(`Signal lost after resample (max: ${maxAbs.toFixed(6)})`);
+        }
+
+        return true;
+      } catch (e) {
+        fail(`Resample failed: ${e.message}`);
+        return false;
+      }
+    }
+
+    // ── Test 4: Full pipeline — worklet capture + resample ──
+    async function testFullPipeline() {
+      log('\n--- Test 4: Full pipeline (capture + resample) ---');
+      try {
+        const ctx = new AudioContext();
+        info(`Native sample rate: ${ctx.sampleRate}Hz`);
+
+        const workletCode = `
+          class PcmCaptureProcessor extends AudioWorkletProcessor {
+            process(inputs) {
+              const input = inputs[0];
+              if (input && input[0] && input[0].length > 0) {
+                this.port.postMessage(new Float32Array(input[0]));
+              }
+              return true;
+            }
+          }
+          registerProcessor('pcm-pipeline-test', PcmCaptureProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        // Generate test signal (oscillator)
+        const osc = ctx.createOscillator();
+        osc.frequency.value = 440;
+        const node = new AudioWorkletNode(ctx, 'pcm-pipeline-test');
+        const chunks = [];
+        node.port.onmessage = (e) => { chunks.push(e.data); };
+
+        osc.connect(node);
+        osc.start();
+        await new Promise(r => setTimeout(r, 1000));
+        osc.stop();
+        osc.disconnect();
+        node.disconnect();
+
+        // Concatenate
+        const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+        const pcm = new Float32Array(totalLen);
+        let off = 0;
+        for (const c of chunks) { pcm.set(c, off); off += c.length; }
+
+        info(`Captured: ${pcm.length} samples at ${ctx.sampleRate}Hz`);
+
+        // Resample to 16kHz
+        const targetRate = 16000;
+        if (ctx.sampleRate !== targetRate) {
+          const duration = pcm.length / ctx.sampleRate;
+          const outputLen = Math.ceil(duration * targetRate);
+          const srcBuf = new AudioBuffer({ length: pcm.length, numberOfChannels: 1, sampleRate: ctx.sampleRate });
+          srcBuf.getChannelData(0).set(pcm);
+          const offCtx = new OfflineAudioContext(1, outputLen, targetRate);
+          const src = offCtx.createBufferSource();
+          src.buffer = srcBuf;
+          src.connect(offCtx.destination);
+          src.start();
+          const rendered = await offCtx.startRendering();
+          const resampled = rendered.getChannelData(0);
+
+          info(`Resampled: ${resampled.length} samples at ${targetRate}Hz (${(resampled.length / targetRate).toFixed(2)}s)`);
+
+          const maxAbs = resampled.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+          if (resampled.length > 0 && maxAbs > 0.1) {
+            pass(`Full pipeline works: ${pcm.length} @ ${ctx.sampleRate}Hz → ${resampled.length} @ ${targetRate}Hz`);
+          } else {
+            fail(`Signal lost in pipeline (samples: ${resampled.length}, max: ${maxAbs})`);
+          }
+        } else {
+          pass(`Already at ${targetRate}Hz, no resample needed`);
+        }
+
+        await ctx.close();
+        return true;
+      } catch (e) {
+        fail(`Pipeline failed: ${e.message}`);
+        return false;
+      }
+    }
+
+    // ── Test 5: Live mic capture (optional, user-triggered) ──
+    window.testLiveMic = async function() {
+      log('\n--- Test 5: Live mic capture (3 seconds) ---');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+        const ctx = new AudioContext();
+        info(`Mic sample rate: ${ctx.sampleRate}Hz`);
+
+        const source = ctx.createMediaStreamSource(stream);
+
+        const workletCode = `
+          class PcmCaptureProcessor extends AudioWorkletProcessor {
+            process(inputs) {
+              const input = inputs[0];
+              if (input && input[0] && input[0].length > 0) {
+                this.port.postMessage(new Float32Array(input[0]));
+              }
+              return true;
+            }
+          }
+          registerProcessor('pcm-mic-test', PcmCaptureProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        const chunks = [];
+        const node = new AudioWorkletNode(ctx, 'pcm-mic-test');
+        node.port.onmessage = (e) => { chunks.push(e.data); };
+        source.connect(node);
+
+        info('Recording from mic for 3 seconds...');
+        await new Promise(r => setTimeout(r, 3000));
+
+        source.disconnect();
+        node.disconnect();
+        stream.getTracks().forEach(t => t.stop());
+
+        const total = chunks.reduce((s, c) => s + c.length, 0);
+        const pcm = new Float32Array(total);
+        let off = 0;
+        for (const c of chunks) { pcm.set(c, off); off += c.length; }
+
+        info(`Captured: ${pcm.length} samples (${(pcm.length / ctx.sampleRate).toFixed(2)}s)`);
+
+        const maxAbs = pcm.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        info(`Max amplitude: ${maxAbs.toFixed(6)}`);
+
+        if (pcm.length > 0 && maxAbs > 0.001) {
+          pass(`Mic capture works: ${pcm.length} samples, max=${maxAbs.toFixed(4)}`);
+        } else if (pcm.length > 0) {
+          fail(`Mic capture produced ${pcm.length} samples but all silent`);
+        } else {
+          fail('No samples captured from mic');
+        }
+
+        // Resample test
+        if (ctx.sampleRate !== 16000) {
+          const duration = pcm.length / ctx.sampleRate;
+          const outLen = Math.ceil(duration * 16000);
+          const srcBuf = new AudioBuffer({ length: pcm.length, numberOfChannels: 1, sampleRate: ctx.sampleRate });
+          srcBuf.getChannelData(0).set(pcm);
+          const offCtx = new OfflineAudioContext(1, outLen, 16000);
+          const src = offCtx.createBufferSource();
+          src.buffer = srcBuf;
+          src.connect(offCtx.destination);
+          src.start();
+          const rendered = await offCtx.startRendering();
+          pass(`Resampled: ${rendered.length} samples at 16000Hz`);
+        }
+
+        await ctx.close();
+      } catch (e) {
+        fail(`Mic test failed: ${e.message}`);
+      }
+    };
+
+    // ── Test 6: MediaRecorder → decode to PCM (the actual approach we'll use) ──
+    window.testMediaRecorderDecode = async function() {
+      log('\n--- Test 6: MediaRecorder capture → decode to PCM (3s mic) ---');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
+        recorder.ondataavailable = (e) => chunks.push(e.data);
+
+        info('Recording via MediaRecorder for 3 seconds... speak now');
+        recorder.start();
+        await new Promise(r => setTimeout(r, 3000));
+
+        const webmBlob = await new Promise((resolve) => {
+          recorder.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
+          recorder.stop();
+        });
+        stream.getTracks().forEach(t => t.stop());
+
+        const webmBuffer = await webmBlob.arrayBuffer();
+        info(`WebM blob: ${webmBuffer.byteLength} bytes`);
+
+        // Decode WebM → PCM
+        const ctx = new AudioContext();
+        const audioBuffer = await ctx.decodeAudioData(webmBuffer.slice(0));
+        const rawPcm = audioBuffer.getChannelData(0);
+        info(`Decoded: ${rawPcm.length} samples at ${audioBuffer.sampleRate}Hz (${audioBuffer.duration.toFixed(2)}s)`);
+
+        const maxAbs = rawPcm.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        if (maxAbs > 0.01) {
+          pass(`Audio has signal (max amplitude: ${maxAbs.toFixed(4)})`);
+        } else {
+          fail(`Audio is silent (max: ${maxAbs.toFixed(6)})`);
+        }
+
+        // Resample to 16kHz
+        const targetRate = 16000;
+        const outLen = Math.ceil(audioBuffer.duration * targetRate);
+        const offCtx = new OfflineAudioContext(1, outLen, targetRate);
+        const src = offCtx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.connect(offCtx.destination);
+        src.start();
+        const rendered = await offCtx.startRendering();
+        const pcm16k = rendered.getChannelData(0);
+
+        pass(`Resampled: ${pcm16k.length} samples at ${targetRate}Hz (${(pcm16k.length / targetRate).toFixed(2)}s)`);
+
+        const maxResampled = pcm16k.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        info(`Resampled max amplitude: ${maxResampled.toFixed(4)}`);
+
+        await ctx.close();
+        pass('MediaRecorder → PCM decode pipeline works end-to-end');
+      } catch (e) {
+        fail(`MediaRecorder decode failed: ${e.message}`);
+      }
+    };
+
+    // ── Run all non-mic tests ──
+    window.runAllTests = async function() {
+      logEl.innerHTML = '';
+      log('Running audio capture tests...\n');
+      await testWorkletRegistration();
+      await testWorkletCapture();
+      await testResample();
+      await testFullPipeline();
+      log('\n--- Done ---');
+    };
+  </script>
+</body>
+</html>

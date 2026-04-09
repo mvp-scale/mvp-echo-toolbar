@@ -29,6 +29,7 @@ try {
 
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
 
+
 // ── App Config (configurable keybind) ──
 
 function loadAppConfig() {

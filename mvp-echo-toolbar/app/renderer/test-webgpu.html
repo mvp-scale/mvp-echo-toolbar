@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebGPU Inference Test — parakeet.js</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 2rem; max-width: 700px; }
+      h1 { margin-bottom: 1rem; color: #fff; }
+      .status { padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 0.75rem; font-size: 0.9rem; }
+      .status.info { background: #1e3a5f; }
+      .status.error { background: #5f1e1e; }
+      .status.success { background: #1e5f2e; }
+      button { padding: 0.75rem 2rem; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; margin-right: 0.5rem; margin-bottom: 0.5rem; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      #recordBtn { background: #e63946; color: white; font-size: 1.2rem; padding: 1rem 3rem; }
+      #recordBtn.recording { background: #ff6b6b; animation: pulse 1s infinite; }
+      #loadBtn { background: #457b9d; color: white; }
+      #result { background: #16213e; padding: 1.5rem; border-radius: 8px; margin-top: 1rem; min-height: 80px; font-size: 1.3rem; line-height: 1.6; }
+      #metrics { background: #16213e; padding: 0.75rem 1rem; border-radius: 8px; margin-top: 0.5rem; font-family: monospace; font-size: 0.85rem; color: #8b949e; }
+      #log { background: #0d1117; padding: 1rem; border-radius: 8px; margin-top: 1rem; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; color: #8b949e; }
+      @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    </style>
+  </head>
+  <body>
+    <h1>MVP-Echo WebGPU Test</h1>
+    <div id="gpuStatus" class="status info">Checking GPU...</div>
+    <div id="modelStatus" class="status info">Model not loaded</div>
+
+    <button id="loadBtn" onclick="loadModel()">Load Model (0.6B v2)</button>
+    <button id="recordBtn" onclick="toggleRecord()" disabled>Record</button>
+
+    <div id="result">Transcription will appear here...</div>
+    <div id="metrics"></div>
+    <div id="log"></div>
+
+    <script type="module">
+      import { fromHub } from 'parakeet.js';
+
+      window._fromHub = fromHub;
+      window._model = null;
+
+      // ── Logging ──
+      const logEl = document.getElementById('log');
+      window._log = (msg) => {
+        const ts = new Date().toISOString().split('T')[1].split('.')[0];
+        logEl.textContent += `[${ts}] ${msg}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+        console.log(msg);
+      };
+
+      // ── GPU Detection ──
+      const gpuEl = document.getElementById('gpuStatus');
+      if (navigator.gpu) {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          if (adapter) {
+            gpuEl.textContent = `WebGPU available — will use webgpu-hybrid backend`;
+            gpuEl.className = 'status success';
+            window._backend = 'webgpu-hybrid';
+            _log('WebGPU adapter found');
+          } else {
+            gpuEl.textContent = 'No GPU adapter. Using WASM backend.';
+            gpuEl.className = 'status info';
+            window._backend = 'wasm';
+          }
+        } catch (e) {
+          gpuEl.textContent = `WebGPU error: ${e.message}. Using WASM.`;
+          gpuEl.className = 'status error';
+          window._backend = 'wasm';
+        }
+      } else {
+        gpuEl.textContent = 'WebGPU not supported. Using WASM backend.';
+        gpuEl.className = 'status info';
+        window._backend = 'wasm';
+      }
+      _log(`Backend: ${window._backend}`);
+    </script>
+
+    <script>
+      const SAMPLE_RATE = 16000;
+
+      // ══════════════════════════════════════════════════════
+      //  MODEL LOADING via parakeet.js
+      // ══════════════════════════════════════════════════════
+
+      async function loadModel() {
+        const btn = document.getElementById('loadBtn');
+        const statusEl = document.getElementById('modelStatus');
+        btn.disabled = true;
+        statusEl.textContent = 'Loading Parakeet TDT 0.6B v2... (downloads ~630MB on first load)';
+        statusEl.className = 'status info';
+
+        try {
+          _log('Loading model via fromHub...');
+          const t0 = performance.now();
+
+          window._model = await window._fromHub('parakeet-tdt-0.6b-v2', {
+            backend: window._backend,
+            verbose: true,
+          });
+
+          const loadTime = ((performance.now() - t0) / 1000).toFixed(1);
+          _log(`Model loaded in ${loadTime}s`);
+
+          // Warmup — first WebGPU inference compiles shaders
+          statusEl.textContent = 'Warming up WebGPU shaders...';
+          _log('Running warmup inference...');
+          const warmup = new Float32Array(SAMPLE_RATE); // 1s silence
+          await window._model.transcribe(warmup, SAMPLE_RATE);
+          _log('Warmup complete');
+
+          statusEl.textContent = `Model ready! (${window._backend}, loaded in ${loadTime}s)`;
+          statusEl.className = 'status success';
+          document.getElementById('recordBtn').disabled = false;
+
+        } catch (e) {
+          statusEl.textContent = 'Failed: ' + e.message;
+          statusEl.className = 'status error';
+          _log('ERROR: ' + e.message);
+          console.error(e);
+          btn.disabled = false;
+        }
+      }
+
+      // ══════════════════════════════════════════════════════
+      //  RAW PCM CAPTURE — AudioWorklet or ScriptProcessor
+      // ══════════════════════════════════════════════════════
+
+      let audioContext = null;
+      let micStream = null;
+      let pcmChunks = [];
+      let scriptNode = null;
+      let isRecording = false;
+
+      async function toggleRecord() {
+        if (isRecording) stopRecording();
+        else startRecording();
+      }
+
+      async function startRecording() {
+        const btn = document.getElementById('recordBtn');
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              sampleRate: SAMPLE_RATE,
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            }
+          });
+
+          audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+          const source = audioContext.createMediaStreamSource(micStream);
+
+          const bufferSize = 4096;
+          scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+          pcmChunks = [];
+
+          scriptNode.onaudioprocess = (e) => {
+            if (!isRecording) return;
+            pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+          };
+
+          source.connect(scriptNode);
+          scriptNode.connect(audioContext.destination);
+
+          isRecording = true;
+          btn.textContent = 'Stop';
+          btn.classList.add('recording');
+          _log(`Recording at ${audioContext.sampleRate}Hz...`);
+        } catch (e) {
+          _log('Mic error: ' + e.message);
+        }
+      }
+
+      function stopRecording() {
+        const btn = document.getElementById('recordBtn');
+        isRecording = false;
+        btn.textContent = 'Record';
+        btn.classList.remove('recording');
+
+        if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
+
+        const actualRate = audioContext ? audioContext.sampleRate : SAMPLE_RATE;
+        if (audioContext) { audioContext.close(); audioContext = null; }
+
+        // Concatenate chunks
+        const totalLen = pcmChunks.reduce((s, c) => s + c.length, 0);
+        const pcm = new Float32Array(totalLen);
+        let off = 0;
+        for (const chunk of pcmChunks) { pcm.set(chunk, off); off += chunk.length; }
+        pcmChunks = [];
+
+        _log(`Stopped: ${pcm.length} samples (${(pcm.length / actualRate).toFixed(1)}s)`);
+
+        // Trim silence (recommended by guidance doc)
+        const trimmed = trimSilence(pcm);
+        _log(`After trim: ${trimmed.length} samples (${(trimmed.length / actualRate).toFixed(1)}s)`);
+
+        processAudio(trimmed, actualRate);
+      }
+
+      // ══════════════════════════════════════════════════════
+      //  TRANSCRIPTION
+      // ══════════════════════════════════════════════════════
+
+      async function processAudio(pcm, sampleRate) {
+        const resultEl = document.getElementById('result');
+        const metricsEl = document.getElementById('metrics');
+        const btn = document.getElementById('recordBtn');
+        btn.disabled = true;
+        resultEl.textContent = 'Transcribing...';
+        metricsEl.textContent = '';
+
+        try {
+          const result = await window._model.transcribe(pcm, sampleRate, {
+            returnTimestamps: true,
+            returnConfidences: true,
+          });
+
+          const text = result.utterance_text || '';
+          resultEl.textContent = text || '(no speech detected)';
+
+          // Show metrics
+          const m = result.metrics || {};
+          const confidence = result.confidence_scores?.word_confidence_avg;
+          metricsEl.textContent = [
+            m.preprocess_ms ? `preprocess: ${m.preprocess_ms.toFixed(0)}ms` : null,
+            m.encode_ms ? `encode: ${m.encode_ms.toFixed(0)}ms` : null,
+            m.decode_ms ? `decode: ${m.decode_ms.toFixed(0)}ms` : null,
+            m.total_ms ? `total: ${m.total_ms.toFixed(0)}ms` : null,
+            m.rtf ? `RTF: ${m.rtf.toFixed(3)}` : null,
+            confidence != null ? `confidence: ${(confidence * 100).toFixed(1)}%` : null,
+          ].filter(Boolean).join(' | ');
+
+          _log(`"${text}" (${m.total_ms?.toFixed(0) || '?'}ms, conf: ${confidence ? (confidence * 100).toFixed(1) + '%' : '?'})`);
+
+        } catch (e) {
+          resultEl.textContent = 'Error: ' + e.message;
+          _log('ERROR: ' + e.message);
+          console.error(e);
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      // ══════════════════════════════════════════════════════
+      //  SILENCE TRIMMING (from guidance doc)
+      // ══════════════════════════════════════════════════════
+
+      function trimSilence(audio, threshold = 0.01) {
+        let start = 0, end = audio.length - 1;
+        while (start < end && Math.abs(audio[start]) < threshold) start++;
+        while (end > start && Math.abs(audio[end]) < threshold) end--;
+        const pad = 1600; // 100ms at 16kHz
+        return audio.slice(Math.max(0, start - pad), Math.min(audio.length, end + pad + 1));
+      }
+    </script>
+  </body>
+</html>

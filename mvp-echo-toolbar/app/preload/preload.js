@@ -55,6 +55,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+
+  // WebGPU: convert WebM audio to 16kHz mono PCM via ffmpeg in main
+  convertToPcm: (audioArray) => ipcRenderer.invoke('audio:convert-to-pcm', audioArray),
+
+  // WebGPU adapter -- transcription result from renderer-side inference
+  webgpuStoreTranscription: (result) => ipcRenderer.invoke('webgpu:store-transcription', result),
+
+  // WebGPU -- listen for orchestrator init request from main
+  onWebgpuInitOrchestrator: (callback) => {
+    ipcRenderer.removeAllListeners('webgpu:init-orchestrator');
+    ipcRenderer.on('webgpu:init-orchestrator', () => callback());
+    return () => ipcRenderer.removeAllListeners('webgpu:init-orchestrator');
+  },
 });
 
 // Cloud configuration IPC (used by popup settings panel)
@@ -65,6 +78,8 @@ contextBridge.exposeInMainWorld('electron', {
         'cloud:configure', 'cloud:test-connection', 'cloud:get-config',
         'engine:list-models', 'engine:switch-model', 'engine:status',
         'debug:open-devtools', 'debug:renderer-log',
+        'webgpu:check-availability', 'webgpu:model-status',
+        'webgpu:model-ready',
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);

@@ -25,6 +25,7 @@ const { log } = require('../main/logger');
 
 const RemoteAdapter = require('./adapters/remote-adapter');
 const LocalSidecarAdapter = require('./adapters/local-sidecar-adapter');
+const WebGpuBridgeAdapter = require('./adapters/webgpu-bridge-adapter');
 
 class EngineManager {
   constructor() {
@@ -34,9 +35,12 @@ class EngineManager {
     /** @type {LocalSidecarAdapter} */
     this.localSidecarAdapter = new LocalSidecarAdapter();
 
+    /** @type {WebGpuBridgeAdapter} */
+    this.webgpuAdapter = new WebGpuBridgeAdapter();
+
     /**
      * Currently active adapter.  Starts as remote; initialize() may change it.
-     * @type {RemoteAdapter|LocalSidecarAdapter}
+     * @type {RemoteAdapter|LocalSidecarAdapter|WebGpuBridgeAdapter}
      */
     this.activeAdapter = this.remoteAdapter;
 
@@ -74,6 +78,16 @@ class EngineManager {
 
     // Clean up orphaned temp files from previous sessions / crashes
     this._cleanupOrphanedTempFiles();
+
+    // Check WebGPU adapter first (best quality, local GPU)
+    const webgpuResult = await this.webgpuAdapter.isAvailable();
+    if (webgpuResult.available) {
+      this.activeAdapter = this.webgpuAdapter;
+      this.activeAdapterName = 'webgpu';
+      log('EngineManager: WebGPU adapter is available and selected');
+      this._restoreModelSelection();
+      return { adapter: 'webgpu', available: true };
+    }
 
     // Check remote adapter
     const remoteResult = await this.remoteAdapter.isAvailable();
@@ -115,12 +129,25 @@ class EngineManager {
   _restoreModelSelection() {
     try {
       const remoteConfig = this.remoteAdapter.getConfig();
+      // Check WebGPU adapter's saved model first (config only, no async probe)
+      const webgpuConfig = this.webgpuAdapter.getConfig();
+      if (webgpuConfig.activeModelId && webgpuConfig.isConfigured) {
+        this.selectedModelId = webgpuConfig.activeModelId;
+        this.activeAdapter = this.webgpuAdapter;
+        this.activeAdapterName = 'webgpu';
+        log('EngineManager: Restored WebGPU model selection:', this.selectedModelId);
+        return;
+      }
+
       if (remoteConfig.selectedModel && remoteConfig.isConfigured) {
         this.selectedModelId = remoteConfig.selectedModel;
         // Ensure the correct adapter is active for the restored model
         if (this.selectedModelId.startsWith('local-')) {
           this.activeAdapter = this.localSidecarAdapter;
           this.activeAdapterName = 'local-sidecar';
+        } else if (this.selectedModelId.startsWith('webgpu-')) {
+          this.activeAdapter = this.webgpuAdapter;
+          this.activeAdapterName = 'webgpu';
         } else {
           this.activeAdapter = this.remoteAdapter;
           this.activeAdapterName = 'remote';
@@ -241,6 +268,10 @@ class EngineManager {
         this.activeAdapter = this.localSidecarAdapter;
         this.activeAdapterName = 'local-sidecar';
         return { success: true, adapter: 'local-sidecar' };
+      case 'webgpu':
+        this.activeAdapter = this.webgpuAdapter;
+        this.activeAdapterName = 'webgpu';
+        return { success: true, adapter: 'webgpu' };
       default:
         return { success: false, adapter: this.activeAdapterName, error: `Unknown adapter: ${adapterName}` };
     }
@@ -257,7 +288,19 @@ class EngineManager {
    */
   async switchModel(modelId) {
     try {
-      if (modelId.startsWith('local-')) {
+      if (modelId.startsWith('webgpu-')) {
+        // Switch to WebGPU adapter (on-device GPU)
+        await this.webgpuAdapter.switchModel(modelId);
+        this.activeAdapter = this.webgpuAdapter;
+        this.activeAdapterName = 'webgpu';
+        this.selectedModelId = modelId;
+        log('EngineManager: Switched to WebGPU adapter, model:', modelId);
+
+        // Notify hidden window to initialize the parakeet.js orchestrator
+        if (this._hiddenWindow && !this._hiddenWindow.isDestroyed()) {
+          this._hiddenWindow.webContents.send('webgpu:init-orchestrator');
+        }
+      } else if (modelId.startsWith('local-')) {
         // Switch to local adapter
         await this.localSidecarAdapter.switchModel(modelId);
         this.activeAdapter = this.localSidecarAdapter;
@@ -299,21 +342,23 @@ class EngineManager {
    * @returns {Promise<Array>}
    */
   async listModels() {
-    const [remoteModels, localModels] = await Promise.all([
+    const [remoteModels, localModels, webgpuModels] = await Promise.all([
       this.remoteAdapter.listModels().catch(() => []),
       this.localSidecarAdapter.listModels().catch(() => []),
+      this.webgpuAdapter.listModels().catch(() => []),
     ]);
 
-    const isRemoteActive = this.activeAdapterName === 'remote';
-    const adjustState = (models, isActive) =>
+    const adjustState = (models, adapterName) =>
       models.map(m => ({
         ...m,
-        state: (!isActive && m.state === 'loaded') ? 'available' : m.state,
+        state: (this.activeAdapterName !== adapterName && m.state === 'loaded')
+          ? 'available' : m.state,
       }));
 
     return [
-      ...adjustState(remoteModels, isRemoteActive),
-      ...adjustState(localModels, !isRemoteActive),
+      ...adjustState(remoteModels, 'remote'),
+      ...adjustState(localModels, 'local-sidecar'),
+      ...adjustState(webgpuModels, 'webgpu'),
     ];
   }
 
@@ -342,6 +387,14 @@ class EngineManager {
    */
   setupIPC(windows = {}) {
     this._getPopupWindow = windows.getPopupWindow || (() => null);
+
+    // Store hidden window reference for WebGPU notifications
+    this._hiddenWindow = windows.hiddenWindow || null;
+
+    // Give the WebGPU adapter access to the hidden window for GPU probing
+    if (windows.hiddenWindow) {
+      this.webgpuAdapter.setHiddenWindow(windows.hiddenWindow);
+    }
 
     // ── Cloud config (used by SettingsPanel) ──
 
@@ -399,10 +452,84 @@ class EngineManager {
       return await this.processAudio(audioArray, options);
     });
 
+    // ── WebM → PCM conversion (used by WebGPU path to avoid hidden window audio crashes) ──
+
+    ipcMain.handle('audio:convert-to-pcm', async (_event, audioArray) => {
+      const webmPath = path.join(
+        os.tmpdir(),
+        `mvp-echo-audio-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.webm`
+      );
+      const wavPath = webmPath.replace('.webm', '.wav');
+
+      try {
+        // Write WebM
+        const audioBuffer = Buffer.from(audioArray);
+        fs.writeFileSync(webmPath, audioBuffer);
+        log(`EngineManager: convert-to-pcm: wrote ${audioBuffer.byteLength} bytes WebM`);
+
+        // Convert to 16kHz mono WAV via ffmpeg
+        await this._convertWebmToWav(webmPath, wavPath);
+
+        // Read WAV file and extract raw PCM samples (skip 44-byte WAV header)
+        const wavBuffer = fs.readFileSync(wavPath);
+        const pcmData = wavBuffer.slice(44); // Skip WAV header
+        const int16Samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
+
+        // Convert Int16 → Float32 (normalized to -1.0..1.0)
+        const float32Pcm = new Float32Array(int16Samples.length);
+        for (let i = 0; i < int16Samples.length; i++) {
+          float32Pcm[i] = int16Samples[i] / 32768;
+        }
+
+        log(`EngineManager: convert-to-pcm: ${float32Pcm.length} samples at 16kHz`);
+        return { success: true, pcm: Array.from(float32Pcm) };
+      } catch (error) {
+        log('EngineManager: convert-to-pcm failed:', error.message);
+        return { success: false, error: error.message };
+      } finally {
+        this._cleanupTempFile(webmPath);
+        this._cleanupTempFile(wavPath);
+      }
+    });
+
     // ── Popup transcription recall ──
 
     ipcMain.handle('get-last-transcription', async () => {
       return this.getLastTranscription();
+    });
+
+    // ── WebGPU adapter operations ──
+
+    ipcMain.handle('webgpu:check-availability', async () => {
+      return this.webgpuAdapter.refreshGpuCapability();
+    });
+
+    ipcMain.handle('webgpu:model-status', async () => {
+      const modelManager = this.webgpuAdapter.modelManager;
+      return {
+        downloaded: modelManager.isModelDownloaded(),
+        downloadState: modelManager.getDownloadState(),
+        gpu: this.webgpuAdapter.getGpuCapability(),
+      };
+    });
+
+    // Notify main that parakeet.js model is loaded in renderer
+    ipcMain.handle('webgpu:model-ready', async (_event, ready) => {
+      this.webgpuAdapter.modelManager.setReady(ready);
+      return { success: true };
+    });
+
+    // WebGPU transcription result from renderer (for popup recall)
+    ipcMain.handle('webgpu:store-transcription', async (_event, result) => {
+      this.lastTranscription = result.text || '';
+      this.lastTranscriptionMeta = {
+        processingTime: result.processingTime,
+        engine: result.engine,
+        language: result.language,
+        model: result.model,
+      };
+      this._notifyPopup();
+      return { success: true };
     });
 
   }
