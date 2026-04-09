@@ -15,6 +15,10 @@ export class AudioCapture {
   private animationId?: number;
   private sourceNode?: MediaStreamAudioSourceNode;
 
+  // AudioWorklet PCM capture (WebGPU path)
+  private pcmChunks: Float32Array[] = [];
+  private workletNode?: AudioWorkletNode;
+
 
   getStream(): MediaStream | undefined {
     return this.stream;
@@ -114,49 +118,115 @@ export class AudioCapture {
   }
 
   /**
-   * Start recording for WebGPU path.
-   * Uses the same proven MediaRecorder as the standard path — no ScriptProcessorNode
-   * or AudioWorklet, which crash in Electron's hidden window on Windows.
-   * The WebM is decoded to PCM in stopRawRecording() via decodeAudioData.
+   * Start recording raw PCM via AudioWorklet.
+   * Captures at the system's native sample rate (48kHz on Windows),
+   * resampled to 16kHz in stopRawRecording().
+   *
+   * AudioWorklet requires a secure context (file://, localhost, or HTTPS).
+   * Electron's hidden window qualifies. No ScriptProcessorNode (crashes on Windows),
+   * no MediaRecorder decode (crashes on Windows), no ffmpeg.
    */
   async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
-    console.log('[AudioCapture] Starting recording (WebGPU mode — will decode to PCM)');
-    return this.startRecording(onAudioLevel);
+    this.onAudioLevel = onAudioLevel;
+
+    console.log('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      }
+    });
+
+    this.audioContext = new AudioContext();
+    this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
+
+    // Audio level monitoring
+    this.analyser = this.audioContext.createAnalyser();
+    this.analyser.fftSize = 256;
+    this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    this.sourceNode.connect(this.analyser);
+    this.monitorAudioLevel();
+
+    // Register AudioWorklet processor via blob URL
+    const workletCode = `
+      class PcmCaptureProcessor extends AudioWorkletProcessor {
+        process(inputs) {
+          const input = inputs[0];
+          if (input && input[0] && input[0].length > 0) {
+            this.port.postMessage(new Float32Array(input[0]));
+          }
+          return true;
+        }
+      }
+      registerProcessor('pcm-capture', PcmCaptureProcessor);
+    `;
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const workletUrl = URL.createObjectURL(blob);
+    await this.audioContext.audioWorklet.addModule(workletUrl);
+    URL.revokeObjectURL(workletUrl);
+
+    this.pcmChunks = [];
+    this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture');
+    this.workletNode.port.onmessage = (e: MessageEvent) => {
+      this.pcmChunks.push(e.data as Float32Array);
+    };
+
+    this.sourceNode.connect(this.workletNode);
+
+    console.log(`[AudioCapture] Raw PCM recording at ${this.audioContext.sampleRate}Hz via AudioWorklet`);
   }
 
   /**
-   * Stop WebGPU recording: get WebM from MediaRecorder, send to main process
-   * for ffmpeg conversion to 16kHz PCM, return Float32Array.
-   *
-   * CRITICAL: Audio decoding (decodeAudioData, ScriptProcessorNode, AudioWorklet)
-   * ALL crash in Electron's hidden window on Windows with access violation 0xC0000005.
-   * The only safe path is ffmpeg in the main process, which is already proven for
-   * the local CPU adapter.
+   * Stop WebGPU recording: collect PCM chunks from AudioWorklet,
+   * resample to 16kHz, return Float32Array.
    */
   async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number }> {
-    // Get WebM from MediaRecorder via standard stop
-    const webmBuffer = await this.stopRecording();
-    console.log(`[AudioCapture] WebM buffer: ${webmBuffer.byteLength} bytes, sending to main for PCM conversion...`);
+    const nativeSampleRate = this.audioContext?.sampleRate || RAW_PCM_SAMPLE_RATE;
 
-    if (webmBuffer.byteLength === 0) {
-      return { pcm: new Float32Array(0), sampleRate: RAW_PCM_SAMPLE_RATE };
+    if (this.workletNode) {
+      this.workletNode.disconnect();
+      this.workletNode = undefined;
     }
 
-    // Send to main process for ffmpeg WebM → 16kHz mono WAV → Float32Array
-    const ipc = (window as any).electronAPI;
-    if (!ipc?.convertToPcm) {
-      throw new Error('convertToPcm IPC not available');
+    // Concatenate PCM chunks from worklet
+    const totalLength = this.pcmChunks.reduce((sum, c) => sum + c.length, 0);
+    const rawPcm = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of this.pcmChunks) {
+      rawPcm.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this.pcmChunks = [];
+
+    console.log(`[AudioCapture] Raw PCM: ${rawPcm.length} samples at ${nativeSampleRate}Hz (${(rawPcm.length / nativeSampleRate).toFixed(1)}s)`);
+
+    // Resample to 16kHz if needed
+    let pcm: Float32Array;
+    if (nativeSampleRate !== RAW_PCM_SAMPLE_RATE && rawPcm.length > 0) {
+      console.log(`[AudioCapture] Resampling ${nativeSampleRate}Hz → ${RAW_PCM_SAMPLE_RATE}Hz...`);
+      const duration = rawPcm.length / nativeSampleRate;
+      const outputLength = Math.ceil(duration * RAW_PCM_SAMPLE_RATE);
+      const sourceBuffer = new AudioBuffer({
+        length: rawPcm.length,
+        numberOfChannels: 1,
+        sampleRate: nativeSampleRate,
+      });
+      sourceBuffer.getChannelData(0).set(rawPcm);
+      const offlineCtx = new OfflineAudioContext(1, outputLength, RAW_PCM_SAMPLE_RATE);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = sourceBuffer;
+      source.connect(offlineCtx.destination);
+      source.start();
+      const rendered = await offlineCtx.startRendering();
+      pcm = rendered.getChannelData(0);
+      console.log(`[AudioCapture] Resampled: ${pcm.length} samples`);
+    } else {
+      pcm = rawPcm;
     }
 
-    const audioArray = Array.from(new Uint8Array(webmBuffer));
-    const result = await ipc.convertToPcm(audioArray);
-
-    if (!result.success) {
-      throw new Error(`PCM conversion failed: ${result.error}`);
-    }
-
-    const pcm = new Float32Array(result.pcm);
-    console.log(`[AudioCapture] Got PCM from main: ${pcm.length} samples at ${RAW_PCM_SAMPLE_RATE}Hz (${(pcm.length / RAW_PCM_SAMPLE_RATE).toFixed(1)}s)`);
+    this.cleanup();
     return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE };
   }
 

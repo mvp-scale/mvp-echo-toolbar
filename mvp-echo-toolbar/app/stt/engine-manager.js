@@ -452,46 +452,6 @@ class EngineManager {
       return await this.processAudio(audioArray, options);
     });
 
-    // ── WebM → PCM conversion (used by WebGPU path to avoid hidden window audio crashes) ──
-
-    ipcMain.handle('audio:convert-to-pcm', async (_event, audioArray) => {
-      const webmPath = path.join(
-        os.tmpdir(),
-        `mvp-echo-audio-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.webm`
-      );
-      const wavPath = webmPath.replace('.webm', '.wav');
-
-      try {
-        // Write WebM
-        const audioBuffer = Buffer.from(audioArray);
-        fs.writeFileSync(webmPath, audioBuffer);
-        log(`EngineManager: convert-to-pcm: wrote ${audioBuffer.byteLength} bytes WebM`);
-
-        // Convert to 16kHz mono WAV via ffmpeg
-        await this._convertWebmToWav(webmPath, wavPath);
-
-        // Read WAV file and extract raw PCM samples (skip 44-byte WAV header)
-        const wavBuffer = fs.readFileSync(wavPath);
-        const pcmData = wavBuffer.slice(44); // Skip WAV header
-        const int16Samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
-
-        // Convert Int16 → Float32 (normalized to -1.0..1.0)
-        const float32Pcm = new Float32Array(int16Samples.length);
-        for (let i = 0; i < int16Samples.length; i++) {
-          float32Pcm[i] = int16Samples[i] / 32768;
-        }
-
-        log(`EngineManager: convert-to-pcm: ${float32Pcm.length} samples at 16kHz`);
-        return { success: true, pcm: Array.from(float32Pcm) };
-      } catch (error) {
-        log('EngineManager: convert-to-pcm failed:', error.message);
-        return { success: false, error: error.message };
-      } finally {
-        this._cleanupTempFile(webmPath);
-        this._cleanupTempFile(wavPath);
-      }
-    });
-
     // ── Popup transcription recall ──
 
     ipcMain.handle('get-last-transcription', async () => {

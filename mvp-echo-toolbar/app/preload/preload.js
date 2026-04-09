@@ -56,8 +56,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App info
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 
-  // WebGPU: convert WebM audio to 16kHz mono PCM via ffmpeg in main
-  convertToPcm: (audioArray) => ipcRenderer.invoke('audio:convert-to-pcm', audioArray),
 
   // WebGPU adapter -- transcription result from renderer-side inference
   webgpuStoreTranscription: (result) => ipcRenderer.invoke('webgpu:store-transcription', result),
