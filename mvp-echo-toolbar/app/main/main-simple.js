@@ -332,18 +332,31 @@ app.whenReady().then(async () => {
     showWelcomeWindow();
   }
 
-  // Create hidden capture window
-  createHiddenWindow();
-
-  // Initialize engine manager (probes adapters, selects best one)
-  const engineStatus = await engineManager.initialize();
-  log('EngineManager initialized: ' + JSON.stringify(engineStatus));
-
-  // Register engine IPC handlers (processAudio, cloud:*, engine:*, get-last-transcription)
+  // Register engine IPC handlers FIRST so the renderer's startup
+  // cloud:get-config call doesn't race past unregistered handlers.
+  // Window references are passed as getters and resolved lazily.
   engineManager.setupIPC({
-    hiddenWindow,
+    getHiddenWindow: () => hiddenWindow,
     getPopupWindow: () => popupWindow,
   });
+
+  // Create hidden capture window (handlers exist; cloud:get-config will await
+  // engineManager._readyPromise which resolves at the end of initialize())
+  createHiddenWindow();
+
+  // Wait for the renderer to load before probing GPU via executeJavaScript.
+  await new Promise((resolve) => {
+    if (hiddenWindow.webContents.isLoading()) {
+      hiddenWindow.webContents.once('did-finish-load', resolve);
+    } else {
+      resolve();
+    }
+  });
+
+  // Initialize engine manager (probes adapters, selects best one).
+  // Resolves the engine-ready promise so awaiting IPC handlers proceed.
+  const engineStatus = await engineManager.initializeAndSignalReady();
+  log('EngineManager initialized: ' + JSON.stringify(engineStatus));
 
   log('MVP-Echo Toolbar: Engine ready');
 

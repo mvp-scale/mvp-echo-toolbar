@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
@@ -34,8 +34,36 @@ export default function CaptureApp() {
   const orchestratorRef = useRef<InferenceOrchestrator>(new InferenceOrchestrator());
   const rawPcmActiveRef = useRef(false); // tracks which recording mode was used
 
-  // Load saved config on mount — do NOT auto-init WebGPU orchestrator
-  // (download only happens when user explicitly clicks download in settings)
+  const initWebGpuOrchestrator = useCallback(async () => {
+    const api = (window as any).electronAPI;
+    if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
+    try {
+      let backend: 'webgpu-hybrid' | 'wasm' = 'wasm';
+      if ((navigator as any).gpu) {
+        try {
+          const adapter = await (navigator as any).gpu.requestAdapter();
+          if (adapter) backend = 'webgpu-hybrid';
+        } catch { /* wasm fallback */ }
+      }
+      let appVersion: string | undefined;
+      try {
+        appVersion = await api?.getAppVersion?.();
+      } catch { /* cache versioning is best-effort */ }
+      console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, v=${appVersion ?? 'unknown'})...`);
+      await orchestratorRef.current.initialize(backend, appVersion);
+      console.log('CaptureApp: WebGPU orchestrator ready');
+
+      const ipc = (window as any).electron?.ipcRenderer;
+      if (ipc) ipc.invoke('webgpu:model-ready', true);
+    } catch (e) {
+      console.warn('CaptureApp: WebGPU orchestrator init failed:', e);
+    }
+  }, []);
+
+  // Load saved config on mount.
+  // If a WebGPU model was previously selected, auto-init the orchestrator —
+  // the IndexedDB blob cache makes this near-instant and avoids the user
+  // having to re-select the model after every restart.
   useEffect(() => {
     const ipc = (window as any).electron?.ipcRenderer;
     if (!ipc) return;
@@ -48,6 +76,10 @@ export default function CaptureApp() {
           if (config.language) selectedLanguageRef.current = config.language;
         }
         console.log(`CaptureApp: Config loaded, model=${selectedModelRef.current}`);
+        if (selectedModelRef.current.startsWith('webgpu-')) {
+          console.log('CaptureApp: Restored WebGPU model — auto-initializing orchestrator');
+          initWebGpuOrchestrator();
+        }
       } catch (e) {
         console.warn('CaptureApp: Failed to load config:', e);
       }
@@ -58,33 +90,12 @@ export default function CaptureApp() {
     return () => {
       orchestratorRef.current.dispose();
     };
-  }, []);
+  }, [initWebGpuOrchestrator]);
 
   // Listen for WebGPU init request from main (triggered when user selects WebGPU model in settings)
   useEffect(() => {
     const api = (window as any).electronAPI;
     if (!api?.onWebgpuInitOrchestrator) return;
-
-    const initWebGpuOrchestrator = async () => {
-      if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
-      try {
-        let backend: 'webgpu-hybrid' | 'wasm' = 'wasm';
-        if ((navigator as any).gpu) {
-          try {
-            const adapter = await (navigator as any).gpu.requestAdapter();
-            if (adapter) backend = 'webgpu-hybrid';
-          } catch { /* wasm fallback */ }
-        }
-        console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend})...`);
-        await orchestratorRef.current.initialize(backend);
-        console.log('CaptureApp: WebGPU orchestrator ready');
-
-        const ipc = (window as any).electron?.ipcRenderer;
-        if (ipc) ipc.invoke('webgpu:model-ready', true);
-      } catch (e) {
-        console.warn('CaptureApp: WebGPU orchestrator init failed:', e);
-      }
-    };
 
     const unsub = api.onWebgpuInitOrchestrator(() => {
       console.log('CaptureApp: Received webgpu:init-orchestrator from main');
@@ -92,7 +103,7 @@ export default function CaptureApp() {
     });
 
     return () => { if (typeof unsub === 'function') unsub(); };
-  }, []);
+  }, [initWebGpuOrchestrator]);
 
   useEffect(() => {
     const api = (window as any).electronAPI;

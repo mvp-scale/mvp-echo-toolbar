@@ -61,6 +61,17 @@ class EngineManager {
 
     /** Most recent transcription metadata. */
     this.lastTranscriptionMeta = {};
+
+    /**
+     * Resolves once initialize() has finished restoring model selection.
+     * IPC handlers that depend on activeAdapter / selectedModelId await this
+     * so the renderer's startup config-load doesn't race past it.
+     */
+    this._readyPromise = new Promise((resolve) => { this._resolveReady = resolve; });
+
+    /** Lazy getters for windows; resolved at IPC-call time, not setupIPC time. */
+    this._getHiddenWindow = () => null;
+    this._getPopupWindow = () => null;
   }
 
   // ── Lifecycle ──
@@ -115,6 +126,18 @@ class EngineManager {
     log('EngineManager: No adapter available yet; remote selected for configuration');
     this._restoreModelSelection();
     return { adapter: 'remote', available: false };
+  }
+
+  /**
+   * Wrap initialize() so the ready promise resolves when it finishes,
+   * regardless of which return path was taken.
+   */
+  async initializeAndSignalReady() {
+    try {
+      return await this.initialize();
+    } finally {
+      this._resolveReady();
+    }
   }
 
   /**
@@ -297,8 +320,9 @@ class EngineManager {
         log('EngineManager: Switched to WebGPU adapter, model:', modelId);
 
         // Notify hidden window to initialize the parakeet.js orchestrator
-        if (this._hiddenWindow && !this._hiddenWindow.isDestroyed()) {
-          this._hiddenWindow.webContents.send('webgpu:init-orchestrator');
+        const hidden = this._getHiddenWindow();
+        if (hidden && !hidden.isDestroyed()) {
+          hidden.webContents.send('webgpu:init-orchestrator');
         }
       } else if (modelId.startsWith('local-')) {
         // Switch to local adapter
@@ -387,21 +411,19 @@ class EngineManager {
    */
   setupIPC(windows = {}) {
     this._getPopupWindow = windows.getPopupWindow || (() => null);
+    this._getHiddenWindow = windows.getHiddenWindow || (() => null);
 
-    // Store hidden window reference for WebGPU notifications
-    this._hiddenWindow = windows.hiddenWindow || null;
-
-    // Give the WebGPU adapter access to the hidden window for GPU probing
-    if (windows.hiddenWindow) {
-      this.webgpuAdapter.setHiddenWindow(windows.hiddenWindow);
-    }
+    // Give the WebGPU adapter a getter so GPU probes work whenever the
+    // hidden window happens to be ready, even if setupIPC ran first.
+    this.webgpuAdapter.setHiddenWindowGetter(this._getHiddenWindow);
 
     // ── Cloud config (used by SettingsPanel) ──
 
-    ipcMain.handle('cloud:get-config', () => {
+    ipcMain.handle('cloud:get-config', async () => {
+      // Wait for initialize() to finish restoring selectedModelId so the
+      // renderer's startup config-load doesn't see stale defaults.
+      await this._readyPromise;
       const adapterConfig = this.activeAdapter.getConfig();
-      // Always return the engine-manager's selected model so CaptureApp
-      // knows whether it's in local or remote mode
       return {
         ...adapterConfig,
         selectedModel: this.selectedModelId,

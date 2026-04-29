@@ -2,10 +2,12 @@
  * InferenceOrchestrator — Manages the parakeet.js Web Worker lifecycle.
  *
  * Provides a clean async API for CaptureApp:
- *   1. initialize(backend) — spin up worker, load model, warmup
+ *   1. initialize(backend, appVersion) — prep cache, spin up worker, load model, warmup
  *   2. transcribe(pcm, sampleRate) — run inference on raw PCM audio
  *   3. dispose() — tear down worker
  */
+
+import { prepareModelCache } from './model-cache';
 
 export interface TranscriptionResult {
   text: string;
@@ -30,14 +32,23 @@ export class InferenceOrchestrator {
   /**
    * Initialize the worker, load parakeet.js model, and run warmup.
    * @param backend - 'webgpu-hybrid' or 'wasm'
+   * @param appVersion - Current app version. When this changes between runs,
+   *                     the cached model files are wiped and re-downloaded.
    */
-  async initialize(backend: 'webgpu-hybrid' | 'wasm' = 'wasm'): Promise<void> {
+  async initialize(
+    backend: 'webgpu-hybrid' | 'wasm' = 'wasm',
+    appVersion?: string
+  ): Promise<void> {
     if (this.loading) throw new Error('Already loading');
     if (this.modelReady) return;
 
     this.loading = true;
 
     try {
+      if (appVersion) {
+        await prepareModelCache(appVersion);
+      }
+
       // Only create a new worker if we don't already have one
       if (!this.worker) {
         this.worker = new Worker(

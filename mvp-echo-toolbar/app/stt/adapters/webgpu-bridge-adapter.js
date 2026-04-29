@@ -25,7 +25,7 @@ class WebGpuBridgeAdapter {
     this.activeModelId = null;
     this.configPath = path.join(app.getPath('userData'), 'webgpu-adapter-config.json');
     this._gpuCapability = null; // cached from renderer probe
-    this._hiddenWindow = null;  // set via setHiddenWindow()
+    this._getHiddenWindow = () => null; // set via setHiddenWindowGetter()
     this._loadConfig();
   }
 
@@ -51,12 +51,12 @@ class WebGpuBridgeAdapter {
   }
 
   /**
-   * Set the hidden window reference for IPC communication with the renderer.
-   * Called by EngineManager during setupIPC.
-   * @param {BrowserWindow} win
+   * Provide a getter for the hidden window. Resolved lazily at probe time
+   * so the adapter doesn't have to be re-wired after the window is created.
+   * @param {() => BrowserWindow|null} getter
    */
-  setHiddenWindow(win) {
-    this._hiddenWindow = win;
+  setHiddenWindowGetter(getter) {
+    this._getHiddenWindow = getter || (() => null);
   }
 
   // ── Engine Port: transcribe ──
@@ -174,14 +174,15 @@ class WebGpuBridgeAdapter {
    * @returns {Promise<{available: boolean, adapterName?: string, vendor?: string, error?: string}>}
    */
   async _probeGpu() {
-    if (!this._hiddenWindow || this._hiddenWindow.isDestroyed()) {
+    const hidden = this._getHiddenWindow();
+    if (!hidden || hidden.isDestroyed()) {
       log('WebGpuBridgeAdapter: Cannot probe GPU -- hidden window not available');
       return { available: false, error: 'Hidden window not ready' };
     }
 
     try {
       // Ask the renderer to check navigator.gpu
-      const result = await this._hiddenWindow.webContents.executeJavaScript(`
+      const result = await hidden.webContents.executeJavaScript(`
         (async () => {
           if (!navigator.gpu) {
             return { available: false, error: 'WebGPU not supported in this browser' };
