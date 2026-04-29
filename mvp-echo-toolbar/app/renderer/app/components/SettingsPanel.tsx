@@ -24,7 +24,7 @@ const WEBGPU_MODEL_META: Record<string, { label: string; quality: string; speed:
 };
 
 const DEFAULT_MODELS: ModelOption[] = [
-  { id: 'gpu-english', label: 'English', quality: '99%', speed: '<300ms', rating: 5, group: 'gpu', state: 'loaded' },
+  { id: 'gpu-english', label: 'English', quality: '99%', speed: '<300ms', rating: 5, group: 'gpu', state: 'available' },
   { id: 'gpu-multilingual', label: 'Multilingual', quality: '97%', speed: '<500ms', rating: 4, group: 'gpu', state: 'available' },
   { id: 'local-fast', label: 'English CPU', quality: '80%', speed: '<2s', rating: 2.5, group: 'local', state: 'available' },
 ];
@@ -110,6 +110,19 @@ export default function SettingsPanel() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [gpuInfo, setGpuInfo] = useState<{ available: boolean; adapterName?: string; error?: string } | null>(null);
   const ipcRef = useRef<any>(null);
+  // Mirror selectedModelId so fetchModels can reconcile state without
+  // becoming stale or triggering re-renders via dependency churn.
+  const selectedModelIdRef = useRef(selectedModelId);
+  useEffect(() => { selectedModelIdRef.current = selectedModelId; }, [selectedModelId]);
+
+  const reconcileLoadedState = useCallback((list: ModelOption[]): ModelOption[] => {
+    const selected = selectedModelIdRef.current;
+    return list.map(m => {
+      if (m.state === 'switching' || m.state === 'downloading' || m.state === 'download') return m;
+      if (m.id === selected) return m.state === 'loaded' ? m : { ...m, state: 'loaded' as ModelState };
+      return m.state === 'loaded' ? { ...m, state: 'available' as ModelState } : m;
+    });
+  }, []);
 
   const hostedModels = models.filter(m => m.group === 'gpu');
   const localAllModels = models.filter(m => m.group === 'webgpu' || m.group === 'local');
@@ -174,11 +187,11 @@ export default function SettingsPanel() {
       const gpuList = gpuFromServer.length > 0 ? gpuFromServer : DEFAULT_MODELS.filter(m => m.group === 'gpu');
       const localList = localFromServer.length > 0 ? localFromServer : LOCAL_MODELS;
 
-      setModels([...gpuList, ...webgpuFromServer, ...localList]);
+      setModels(reconcileLoadedState([...gpuList, ...webgpuFromServer, ...localList]));
     } catch (e) {
       console.error('Failed to fetch models:', e);
     }
-  }, []);
+  }, [reconcileLoadedState]);
 
   // Detect WebGPU on mount
   useEffect(() => {
@@ -220,6 +233,16 @@ export default function SettingsPanel() {
     };
     loadConfig().then(() => fetchModels());
   }, [fetchModels]);
+
+  // Reconcile model "loaded" state when selectedModelId changes.
+  // (fetchModels also reconciles on each fetch — this catches selection
+  //  changes that don't trigger a re-fetch.)
+  useEffect(() => {
+    setModels(prev => {
+      const next = reconcileLoadedState(prev);
+      return next.some((m, i) => m !== prev[i]) ? next : prev;
+    });
+  }, [selectedModelId, reconcileLoadedState]);
 
   // Save config when endpoint/apiKey change
   useEffect(() => {
