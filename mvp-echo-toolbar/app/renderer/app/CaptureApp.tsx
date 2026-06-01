@@ -27,12 +27,17 @@ export default function CaptureApp() {
   const audioCapture = useRef(new AudioCapture());
   const isRecordingRef = useRef(false);
   const isProcessingRef = useRef(false);
+  const isStartingRef = useRef(false); // guards the async start window (re-entrancy)
   const selectedModelRef = useRef('');
   const selectedLanguageRef = useRef('');
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef(0);
   const orchestratorRef = useRef<InferenceOrchestrator>(new InferenceOrchestrator());
   const rawPcmActiveRef = useRef(false); // tracks which recording mode was used
+  const requestGenRef = useRef(0);       // generation counter — ignores stale/late transcription results
+  const cycleCountRef = useRef(0);       // DIAGNOSTIC: record→transcribe cycle count (temp, for RAM-loop triage)
+  const initFailRef = useRef(0);         // consecutive orchestrator init failures (bounds re-init thrash)
+  const lastInitAtRef = useRef(0);       // timestamp of last init attempt (re-init cooldown)
 
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -50,13 +55,16 @@ export default function CaptureApp() {
         appVersion = await api?.getAppVersion?.();
       } catch { /* cache versioning is best-effort */ }
       console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, v=${appVersion ?? 'unknown'})...`);
+      lastInitAtRef.current = Date.now();
       await orchestratorRef.current.initialize(backend, appVersion);
+      initFailRef.current = 0; // success resets the failure/backoff counter
       console.log('CaptureApp: WebGPU orchestrator ready');
 
       const ipc = (window as any).electron?.ipcRenderer;
       if (ipc) ipc.invoke('webgpu:model-ready', true);
     } catch (e) {
-      console.warn('CaptureApp: WebGPU orchestrator init failed:', e);
+      initFailRef.current += 1;
+      console.warn(`CaptureApp: WebGPU orchestrator init failed (attempt ${initFailRef.current}):`, e);
     }
   }, []);
 
@@ -181,6 +189,7 @@ export default function CaptureApp() {
       console.log('CaptureApp: RESET — clearing all state');
       isRecordingRef.current = false;
       isProcessingRef.current = false;
+      isStartingRef.current = false;
       rawPcmActiveRef.current = false;
       clearCountdown();
       audioCapture.current.cleanup();
@@ -203,9 +212,21 @@ export default function CaptureApp() {
       electronAPI.updateTrayState('processing');
       electronAPI.stopRecording('global-shortcut');
 
-      // Safety timeout: if processing takes >60s, force reset
+      // Claim this run. The 60s safety timeout below bumps the generation so any
+      // result that resolves AFTER the timeout is recognized as stale and dropped
+      // (instead of copying old text to the clipboard / flipping the tray on a
+      // run the user has already given up on).
+      const myGen = ++requestGenRef.current;
+      const isStale = () => myGen !== requestGenRef.current;
+
+      // Safety timeout: the renderer is the authority. If processing exceeds 60s,
+      // invalidate this run and HARD-CANCEL the in-flight worker (terminate) so it
+      // can't corrupt the next transcription. The next WebGPU recording re-inits
+      // the model from the local cache (load+warmup, no re-download).
       const safetyTimeout = setTimeout(() => {
-        console.error('CaptureApp: SAFETY TIMEOUT — processing exceeded 60s, resetting');
+        console.error('CaptureApp: SAFETY TIMEOUT — processing exceeded 60s, aborting + resetting');
+        requestGenRef.current++; // supersede this run
+        if (wasRawPcm) orchestratorRef.current.abort();
         resetState(electronAPI);
       }, 60000);
 
@@ -220,6 +241,7 @@ export default function CaptureApp() {
             const trimmed = trimSilence(pcm);
             console.log(`CaptureApp: Trimmed to ${trimmed.length} samples, sending to parakeet.js`);
             const result = await orchestratorRef.current.transcribe(trimmed, sampleRate);
+            if (isStale()) { console.warn('CaptureApp: stale WebGPU result ignored (run superseded)'); return; }
             console.log(`CaptureApp: Result: "${result.text}" (${result.processingTime.toFixed(0)}ms)`);
 
             if (result.text?.trim()) {
@@ -263,6 +285,7 @@ export default function CaptureApp() {
               model: selectedModelRef.current,
               language: selectedLanguageRef.current,
             });
+            if (isStale()) { console.warn('CaptureApp: stale transcription result ignored (run superseded)'); return; }
 
             if (result.success === false) {
               console.error('CaptureApp: Transcription failed:', result.error);
@@ -281,12 +304,32 @@ export default function CaptureApp() {
         }
       } catch (error: any) {
         console.error('CaptureApp: performStop error:', error);
-        electronAPI.updateTrayState('error');
-        setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+        // A worker aborted by the 60s timeout rejects later at its own 120s
+        // timeout — by then this run is stale and may have been replaced by a
+        // newer recording, so don't stomp its tray state.
+        if (!isStale()) {
+          electronAPI.updateTrayState('error');
+          setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+        }
       } finally {
         clearTimeout(safetyTimeout);
-        isProcessingRef.current = false;
-        rawPcmActiveRef.current = false;
+        // Only clear the flags if THIS run is still the current one. If a 60s
+        // timeout already superseded us (and possibly a new recording started),
+        // leave the newer run's flags alone.
+        if (!isStale()) {
+          isProcessingRef.current = false;
+          rawPcmActiveRef.current = false;
+        }
+        // DIAGNOSTIC (temp): track heap across record→transcribe cycles to
+        // distinguish a real retention leak from ORT arena reuse that plateaus.
+        // Remove once the RAM-loop root cause is confirmed.
+        cycleCountRef.current += 1;
+        const mem = (performance as any).memory;
+        if (mem) {
+          console.log(`CaptureApp: [mem] cycle=${cycleCountRef.current} usedHeap=${(mem.usedJSHeapSize / 1048576).toFixed(1)}MB totalHeap=${(mem.totalJSHeapSize / 1048576).toFixed(1)}MB limit=${(mem.jsHeapSizeLimit / 1048576).toFixed(0)}MB`);
+        } else {
+          console.log(`CaptureApp: [mem] cycle=${cycleCountRef.current} (performance.memory unavailable)`);
+        }
         console.log('CaptureApp: performStop complete, state=ready');
       }
     };
@@ -294,8 +337,14 @@ export default function CaptureApp() {
     const unsubscribe = api.onGlobalShortcutToggle(() => {
       console.log('CaptureApp: Global shortcut toggle received');
 
-      if (isProcessingRef.current) {
-        console.log('CaptureApp: Ignoring shortcut — transcription in progress');
+      // Ignore presses while processing OR while a start is still in flight.
+      // The start guard is the fix for the re-entrancy race: a second press
+      // landing after the 500ms main-process debounce but before the async
+      // getUserMedia/worklet setup resolves would otherwise be read as a "stop"
+      // of a recording that never finished starting — producing an empty
+      // transcription and orphaning a live mic stream + AudioContext.
+      if (isProcessingRef.current || isStartingRef.current) {
+        console.log('CaptureApp: Ignoring shortcut — busy (processing or start in flight)');
         return;
       }
 
@@ -305,8 +354,36 @@ export default function CaptureApp() {
         // ── Stop Recording (manual) ──
         performStop(api);
       } else {
+        // If a WebGPU model is selected but its orchestrator isn't ready yet,
+        // don't silently downgrade to the webm/IPC path — ignore the press with
+        // a brief tray hint so the user knows the model is still loading. If the
+        // orchestrator is idle (e.g. torn down after a timeout-abort or a lost
+        // GPU device), kick off a fresh init so the NEXT press can record —
+        // bounded lazy recovery, no retry loop.
+        if (selectedModelRef.current.startsWith('webgpu-') && !orchestratorRef.current.isReady()) {
+          console.log('CaptureApp: Ignoring shortcut — WebGPU model not ready');
+          if (!orchestratorRef.current.isLoading()) {
+            // Bounded recovery: re-init at most once per 15s and give up after 3
+            // consecutive failures, so a reload that keeps failing on a memory-
+            // constrained machine can't thrash (the "memory tried-and-reused" loop).
+            const sinceLast = Date.now() - lastInitAtRef.current;
+            if (initFailRef.current >= 3) {
+              console.error('CaptureApp: orchestrator init failed 3× — not auto-retrying; app restart needed');
+            } else if (sinceLast > 15000) {
+              console.log('CaptureApp: orchestrator idle — re-initializing');
+              initWebGpuOrchestrator();
+            } else {
+              console.log(`CaptureApp: skipping re-init (cooldown, ${Math.round(sinceLast / 1000)}s since last attempt)`);
+            }
+          }
+          api.updateTrayState('error');
+          setTimeout(() => api.updateTrayState('ready'), 1500);
+          return;
+        }
+
         // ── Start Recording ──
         console.log('CaptureApp: Starting recording');
+        isStartingRef.current = true; // in-flight guard ON (cleared in .finally below)
         isRecordingRef.current = true;
         api.updateTrayState('recording');
         api.startRecording('global-shortcut');
@@ -323,13 +400,31 @@ export default function CaptureApp() {
           ? audioCapture.current.startRawRecording()
           : audioCapture.current.startRecording();
 
-        startFn.catch((error: Error) => {
-          console.error('CaptureApp: Start recording failed:', error);
-          isRecordingRef.current = false;
-          clearCountdown();
-          api.updateTrayState('error');
-          setTimeout(() => api.updateTrayState('ready'), 3000);
-        });
+        // Start watchdog: if the start never settles (e.g. getUserMedia hangs on
+        // a flaky audio device after long idle), force a reset so the in-flight
+        // guard can't permanently wedge the toggle. Cleared when start settles.
+        const startWatchdog = setTimeout(() => {
+          if (isStartingRef.current) {
+            console.error('CaptureApp: START WATCHDOG — start did not complete in 10s, forcing reset');
+            resetState(api);
+          }
+        }, 10000);
+
+        startFn
+          .catch((error: Error) => {
+            console.error('CaptureApp: Start recording failed:', error);
+            isRecordingRef.current = false;
+            rawPcmActiveRef.current = false;
+            clearCountdown();
+            audioCapture.current.cleanup(); // tear down any half-opened stream/context
+            api.updateTrayState('error');
+            setTimeout(() => api.updateTrayState('ready'), 3000);
+          })
+          .finally(() => {
+            // Clear the guard + watchdog whether start succeeded or failed — no lockout.
+            clearTimeout(startWatchdog);
+            isStartingRef.current = false;
+          });
       }
     });
 

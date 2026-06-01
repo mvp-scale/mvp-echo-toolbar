@@ -110,10 +110,17 @@ export default function SettingsPanel() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [gpuInfo, setGpuInfo] = useState<{ available: boolean; adapterName?: string; error?: string } | null>(null);
   const ipcRef = useRef<any>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Mirror selectedModelId so fetchModels can reconcile state without
   // becoming stale or triggering re-renders via dependency churn.
   const selectedModelIdRef = useRef(selectedModelId);
   useEffect(() => { selectedModelIdRef.current = selectedModelId; }, [selectedModelId]);
+
+  // Always clear the WebGPU model-status poll on unmount. The popup that hosts
+  // this panel is created/destroyed repeatedly, so a poll left running (panel
+  // closed mid-download, or a model that never reports ready) would otherwise
+  // leak an interval firing IPC every 2s forever.
+  useEffect(() => () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } }, []);
 
   const reconcileLoadedState = useCallback((list: ModelOption[]): ModelOption[] => {
     const selected = selectedModelIdRef.current;
@@ -319,15 +326,31 @@ export default function SettingsPanel() {
           setSelectedModelId(model.id);
           ipc.invoke('cloud:configure', { model: model.id }).catch(() => {});
 
-          // Poll until the model is ready (orchestrator loaded in hidden window)
-          const pollReady = setInterval(async () => {
+          // Poll until the model is ready (orchestrator loaded in hidden window).
+          // Tracked in pollRef so it's cleared on unmount, and capped so a
+          // model that never reports ready can't poll forever.
+          if (pollRef.current) clearInterval(pollRef.current);
+          let attempts = 0;
+          const MAX_POLL_ATTEMPTS = 150; // 150 × 2s = 5 min ceiling
+          pollRef.current = setInterval(async () => {
+            attempts++;
             try {
               const status = await ipc.invoke('webgpu:model-status');
-              if (status?.downloaded) {
-                clearInterval(pollReady);
-                completeSwitch();
+              if (status?.downloaded || attempts >= MAX_POLL_ATTEMPTS) {
+                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+                if (status?.downloaded) {
+                  completeSwitch();
+                } else {
+                  console.warn('WebGPU model poll timed out after 5 min');
+                  fetchModels(); // resync UI state instead of leaving it stuck on "Downloading..."
+                }
               }
-            } catch { /* keep polling */ }
+            } catch {
+              if (attempts >= MAX_POLL_ATTEMPTS && pollRef.current) {
+                clearInterval(pollRef.current); pollRef.current = null;
+                fetchModels();
+              }
+            }
           }, 2000);
         } else {
           completeSwitch();

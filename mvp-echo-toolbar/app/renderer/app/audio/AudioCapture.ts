@@ -3,6 +3,10 @@
  * Extracted from App.tsx for use in hidden capture window
  */
 const RAW_PCM_SAMPLE_RATE = 16000;
+// Gate high-frequency per-chunk logging. Each line round-trips IPC to the main
+// process and appends to the debug log; left on, a long recording emits hundreds
+// of lines. Flip to true only when debugging the capture path.
+const DEBUG_AUDIO = false;
 
 export class AudioCapture {
   private mediaRecorder?: MediaRecorder;
@@ -45,6 +49,10 @@ export class AudioCapture {
 
     // Set up Web Audio API for real-time audio level detection
     this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (this.audioContext.state === 'suspended') {
+      console.log('[AudioCapture] AudioContext suspended on create — resuming');
+      await this.audioContext.resume();
+    }
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 256;
     this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
@@ -57,7 +65,7 @@ export class AudioCapture {
 
     this.mediaRecorder.ondataavailable = (event) => {
       this.audioChunks.push(event.data);
-      console.log(`[AudioCapture] Chunk received: ${event.data.size} bytes (total chunks: ${this.audioChunks.length})`);
+      if (DEBUG_AUDIO) console.log(`[AudioCapture] Chunk received: ${event.data.size} bytes (total chunks: ${this.audioChunks.length})`);
     };
 
     this.mediaRecorder.onerror = (event) => {
@@ -130,16 +138,30 @@ export class AudioCapture {
     this.onAudioLevel = onAudioLevel;
 
     console.log('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      }
-    });
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      });
+    } catch (err) {
+      console.error('[AudioCapture] getUserMedia FAILED (raw PCM):', err);
+      throw err;
+    }
+    console.log(`[AudioCapture] Mic granted (raw PCM): ${this.stream.getAudioTracks().length} track(s)`);
 
     this.audioContext = new AudioContext();
+    // A fresh AudioContext can come up 'suspended' (esp. after long idle); if it
+    // stays suspended the worklet never runs and we capture silence ("recorded
+    // nothing"). Resume explicitly and log the state.
+    if (this.audioContext.state === 'suspended') {
+      console.log('[AudioCapture] AudioContext suspended on create — resuming');
+      await this.audioContext.resume();
+    }
+    console.log(`[AudioCapture] AudioContext state=${this.audioContext.state}, sampleRate=${this.audioContext.sampleRate}`);
     this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
 
     // Audio level monitoring
@@ -235,6 +257,17 @@ export class AudioCapture {
       cancelAnimationFrame(this.animationId);
       this.animationId = undefined;
     }
+
+    // Release the AudioWorklet and any buffered PCM. Without this, a cleanup
+    // that isn't preceded by stopRawRecording() (e.g. a failed start, or the
+    // standard stop path after a raw start) leaves the worklet node connected
+    // and the accumulated PCM chunks referenced — leaking across record cycles.
+    if (this.workletNode) {
+      this.workletNode.port.onmessage = null;
+      this.workletNode.disconnect();
+      this.workletNode = undefined;
+    }
+    this.pcmChunks = [];
 
     if (this.sourceNode) {
       this.sourceNode.disconnect();

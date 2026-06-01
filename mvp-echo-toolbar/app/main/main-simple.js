@@ -11,6 +11,18 @@ const engineManager = new EngineManager();
 const trayManager = new TrayManager();
 const logPath = getLogPath();
 
+// ── Global crash safety ──
+// Without these, an uncaught error or rejected promise in any async path
+// silently kills the main process (no dialog, no log). We log and KEEP RUNNING:
+// for a resident tray utility, one stray async throw shouldn't take down voice
+// capture. (Recoverability is handled per-subsystem, e.g. renderer-crash below.)
+process.on('uncaughtException', (err) => {
+  log(`UNCAUGHT EXCEPTION: ${err && err.stack ? err.stack : err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  log(`UNHANDLED REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
 // ── Startup Cleanup (Boy Scout: leave no trace) ──
 
 // Fresh log file each session
@@ -73,6 +85,10 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   log('MVP-Echo Toolbar: Another instance is already running. Exiting.');
   app.quit();
+  // Stop the rest of this module from initializing (tray, shortcuts, windows,
+  // IPC) on a process that is already tearing down. Module-scope return is
+  // valid here — Electron wraps main modules in the CommonJS function wrapper.
+  return;
 }
 
 app.on('second-instance', () => {
@@ -84,6 +100,8 @@ let hiddenWindow = null;
 let popupWindow = null;
 let shortcutActive = false;
 let countdownActive = false;
+let rendererCrashCount = 0;
+const MAX_RENDERER_CRASHES = 3;
 
 function getPreloadPath() {
   return path.resolve(__dirname, '../preload/preload.js');
@@ -112,7 +130,7 @@ function createHiddenWindow() {
   });
 
   if (process.env.NODE_ENV === 'development') {
-    hiddenWindow.loadURL('http://localhost:5173/index.html');
+    hiddenWindow.loadURL('http://localhost:5175/index.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/index.html');
     hiddenWindow.loadFile(htmlPath);
@@ -122,17 +140,22 @@ function createHiddenWindow() {
     hiddenWindow = null;
   });
 
-  // Detect renderer crashes — log and recover tray state
+  // Detect renderer crashes — reset tray AND recreate the capture window.
+  // Without recreation the hidden window stays null and recording is silently
+  // dead until the app is restarted. Guarded by a crash-count cap so a
+  // crash-on-load can't spin into an infinite respawn loop.
   hiddenWindow.webContents.on('render-process-gone', (_event, details) => {
-    log(`CRITICAL: Hidden window renderer crashed! reason=${details.reason}, exitCode=${details.exitCode}`);
-    // Reset tray so user isn't stuck on "processing" forever
-    try {
-      if (trayIcon) trayIcon.setToolTip('MVP-Echo Toolbar - Ready');
-    } catch (_e) {}
-  });
+    log(`CRITICAL: Hidden window renderer gone! reason=${details.reason}, exitCode=${details.exitCode}`);
+    // Reset tray so the user isn't stuck on "Recording"/"Processing" forever.
+    try { trayManager.setState('ready'); } catch (_e) {}
 
-  hiddenWindow.webContents.on('crashed', () => {
-    log('CRITICAL: Hidden window webContents crashed');
+    if (++rendererCrashCount > MAX_RENDERER_CRASHES) {
+      log('Renderer crash loop detected — not recreating hidden window');
+      return;
+    }
+    if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.destroy();
+    hiddenWindow = null;
+    createHiddenWindow(); // rebuild the capture window so recording works again
   });
 }
 
@@ -166,7 +189,7 @@ function createPopupWindow() {
   });
 
   if (process.env.NODE_ENV === 'development') {
-    popupWindow.loadURL('http://localhost:5173/popup.html');
+    popupWindow.loadURL('http://localhost:5175/popup.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/popup.html');
     popupWindow.loadFile(htmlPath);
@@ -276,7 +299,7 @@ function showWelcomeWindow() {
   });
 
   if (process.env.NODE_ENV === 'development') {
-    welcomeWindow.loadURL('http://localhost:5173/welcome.html');
+    welcomeWindow.loadURL('http://localhost:5175/welcome.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/welcome.html');
     welcomeWindow.loadFile(htmlPath);
@@ -420,30 +443,15 @@ ipcMain.handle('copy-to-clipboard', async (_event, text) => {
   return { success: true };
 });
 
-// Tray state update with safety timeouts
-let processingTimer = null;
-let recordingTimer = null;
+// Tray state update. The tray is a pure reflection of renderer state — the
+// renderer (CaptureApp) is the single authority for the recording/processing
+// lifecycle and owns its own safety deadlines (60s processing valve + 590s
+// auto-stop). The previous main-side 30s/600s timers were a second,
+// unsynchronized source of truth: the 30s one fired mid-transcription and
+// flipped the tray to "ready" while the renderer was still processing, so the
+// next shortcut press was silently ignored ("alive but dead"). Removed.
 ipcMain.handle('tray:update-state', async (_event, state) => {
   trayManager.setState(state);
-  // Clear any existing timeouts
-  if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
-  if (recordingTimer) { clearTimeout(recordingTimer); recordingTimer = null; }
-  // Processing (transcription): 30s safety reset for stuck states
-  if (state === 'processing') {
-    processingTimer = setTimeout(() => {
-      log(`WARN: Tray stuck on "${state}" for 30s — resetting to ready`);
-      trayManager.setState('ready');
-      processingTimer = null;
-    }, 30000);
-  }
-  // Recording: 10-minute safety net for abandoned recordings
-  if (state === 'recording') {
-    recordingTimer = setTimeout(() => {
-      log(`WARN: Recording abandoned (10 min) — resetting to ready`);
-      trayManager.setState('ready');
-      recordingTimer = null;
-    }, 600000);
-  }
   return { success: true };
 });
 

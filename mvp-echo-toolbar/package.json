@@ -1,11 +1,11 @@
 {
   "name": "mvp-echo-toolbar",
-  "version": "3.0.10",
+  "version": "3.0.12",
   "description": "MVP-Echo Toolbar - System Tray Voice-to-Text Transcription",
   "main": "app/main/main-simple.js",
   "scripts": {
     "dev": "concurrently --prefix-colors \"cyan,yellow\" --prefix \"[{name}]\" --names \"renderer,electron\" \"npm:dev:renderer\" \"npm:dev:electron\"",
-    "dev:renderer": "vite --port 5173",
+    "dev:renderer": "vite --port 5175",
     "dev:electron": "NODE_ENV=development electron --no-sandbox --ozone-platform-hint=auto app/main/main-simple.js",
     "build": "vite build",
     "clean": "rm -rf dist",

@@ -55,6 +55,16 @@ export class InferenceOrchestrator {
           new URL('./inference-worker.ts', import.meta.url),
           { type: 'module' }
         );
+        // Persistent listener for out-of-band worker events (i.e. not tied to a
+        // pending sendMessage). A lost WebGPU device — common on hybrid-GPU
+        // laptops during a driver/TDR reset — surfaces here so we tear the
+        // worker down and re-init cleanly on next use instead of running blind.
+        this.worker.addEventListener('message', (event: MessageEvent) => {
+          if (event.data?.type === 'device-lost') {
+            console.error('[InferenceOrchestrator] WebGPU device lost — tearing down for clean re-init');
+            this.disposeSync();
+          }
+        });
       }
 
       await this.sendMessage(
@@ -66,10 +76,14 @@ export class InferenceOrchestrator {
       this.modelReady = true;
       console.log('[InferenceOrchestrator] Model loaded and ready');
     } catch (err) {
-      // Don't kill the worker on error — it may be mid-download
-      // Just log and let the user retry
-      console.error('[InferenceOrchestrator] Init failed:', err);
-      this.modelReady = false;
+      // Tear the worker down on failure. A half-initialized worker still holds
+      // a partial ~1.2GB model in memory; reusing it on the next attempt
+      // compounds RAM and never recovers. disposeSync() terminates + nulls it
+      // so the next initialize() starts from a clean worker. No auto-retry —
+      // the user/CaptureApp re-triggers init, avoiding a retry storm on an
+      // already memory-pressured machine.
+      console.error('[InferenceOrchestrator] Init failed — disposing worker for clean retry:', err);
+      this.disposeSync();
     } finally {
       this.loading = false;
     }
@@ -100,6 +114,19 @@ export class InferenceOrchestrator {
   }
 
   dispose(): void {
+    this.disposeSync();
+  }
+
+  /**
+   * Hard-cancel any in-flight inference by terminating the worker.
+   * parakeet.js's model.transcribe() has no cooperative cancel, so terminate is
+   * the only true abort — and it prevents a timed-out job from corrupting the
+   * next transcription via the shared, single-in-flight worker. The caller is
+   * responsible for re-initializing (lazily, on next use) before transcribing
+   * again; this stays warm-by-default and only pays the reload cost after an
+   * abnormal timeout.
+   */
+  abort(): void {
     this.disposeSync();
   }
 
