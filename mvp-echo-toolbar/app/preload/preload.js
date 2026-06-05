@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App info
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 
+  // Last-resort recovery: ask main to reload the hidden capture window when the
+  // audio pipeline is wedged and an in-renderer engine rebuild didn't recover.
+  requestCaptureReload: () => ipcRenderer.invoke('capture:request-reload'),
+
 
   // WebGPU adapter -- transcription result from renderer-side inference
   webgpuStoreTranscription: (result) => ipcRenderer.invoke('webgpu:store-transcription', result),

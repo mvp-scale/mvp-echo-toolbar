@@ -23,6 +23,35 @@ export class AudioCapture {
   private pcmChunks: Float32Array[] = [];
   private workletNode?: AudioWorkletNode;
 
+  // ── Persistent raw-PCM engine (WebGPU path) ──
+  // Reusing ONE AudioContext + worklet module + a silent keep-alive source across
+  // recordings avoids the per-cycle create/close churn that wedges the Windows
+  // audio pipeline into "running but silent" capture. The mic is still acquired
+  // per recording (privacy); the context is SUSPENDED between recordings, not
+  // closed. A staleness freshen-up rebuilds the engine after long uptime.
+  private rawContext?: AudioContext;
+  private rawContextRate: number = RAW_PCM_SAMPLE_RATE;
+  private keepAliveNode?: ConstantSourceNode;
+  private rawSource?: MediaStreamAudioSourceNode;
+  private rawWorklet?: AudioWorkletNode;
+  private rawStream?: MediaStream;
+  private rawEngineStartedAt = 0;
+
+  private static readonly WORKLET_CODE = `
+    class PcmCaptureProcessor extends AudioWorkletProcessor {
+      process(inputs) {
+        const ch = inputs[0] && inputs[0][0];
+        if (ch && ch.length > 0) {
+          const copy = new Float32Array(ch);
+          this.port.postMessage(copy, [copy.buffer]); // transfer, avoid clone
+        }
+        return true;
+      }
+    }
+    registerProcessor('pcm-capture', PcmCaptureProcessor);
+  `;
+  private static readonly MAX_ENGINE_AGE_MS = 10 * 60 * 1000; // freshen-up after 10 min uptime
+
 
   getStream(): MediaStream | undefined {
     return this.stream;
@@ -125,21 +154,84 @@ export class AudioCapture {
     });
   }
 
+  /** Age of the persistent raw engine in ms (0 if not built). */
+  rawEngineAgeMs(): number {
+    return this.rawContext ? Date.now() - this.rawEngineStartedAt : 0;
+  }
+
   /**
-   * Start recording raw PCM via AudioWorklet.
-   * Captures at the system's native sample rate (48kHz on Windows),
-   * resampled to 16kHz in stopRawRecording().
-   *
-   * AudioWorklet requires a secure context (file://, localhost, or HTTPS).
-   * Electron's hidden window qualifies. No ScriptProcessorNode (crashes on Windows),
-   * no MediaRecorder decode (crashes on Windows), no ffmpeg.
+   * Ensure the persistent raw-PCM engine exists (context + worklet module +
+   * silent keep-alive source). Rebuilds it if stale (freshen-up) or closed.
+   */
+  private async ensureRawEngine(): Promise<void> {
+    if (this.rawContext && this.rawContext.state !== 'closed') {
+      if (this.rawEngineAgeMs() < AudioCapture.MAX_ENGINE_AGE_MS) return;
+      console.log('[AudioCapture] Raw engine stale — rebuilding (freshen-up)');
+      await this.teardownRawEngine();
+    }
+
+    // Capture in a 16kHz context (browser auto-resamples the mic). UNDER
+    // INVESTIGATION: whether this real-time resample degrades speech vs the
+    // offline resample — the min/max/rms signal stats logged at stop will tell
+    // us, rather than guessing. Falls back to native rate if 16kHz isn't honored.
+    let ctx: AudioContext;
+    try {
+      ctx = new AudioContext({ sampleRate: RAW_PCM_SAMPLE_RATE });
+    } catch {
+      ctx = new AudioContext();
+    }
+    this.rawContext = ctx;
+    this.rawContextRate = ctx.sampleRate;
+    console.log(`[AudioCapture] Raw engine created: requested ${RAW_PCM_SAMPLE_RATE}Hz, got ${ctx.sampleRate}Hz, state=${ctx.state}`);
+
+    // Register the worklet module ONCE per context (re-adding throws).
+    const url = URL.createObjectURL(new Blob([AudioCapture.WORKLET_CODE], { type: 'application/javascript' }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+
+    // Silent keep-alive: a zero-gain ConstantSourceNode keeps the audio graph
+    // active so Chromium can't throttle/sleep the pipeline into silent capture.
+    try {
+      const keep = ctx.createConstantSource();
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      keep.connect(g).connect(ctx.destination);
+      keep.start();
+      this.keepAliveNode = keep;
+    } catch (e) {
+      console.warn('[AudioCapture] keep-alive source failed (non-fatal):', e);
+    }
+
+    this.rawEngineStartedAt = Date.now();
+  }
+
+  /** Fully tear down the persistent raw engine (recovery / unmount). */
+  async teardownRawEngine(): Promise<void> {
+    if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
+    if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
+    if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
+    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
+    if (this.rawContext && this.rawContext.state !== 'closed') { try { await this.rawContext.close(); } catch { /* ok */ } }
+    this.rawContext = undefined;
+    this.pcmChunks = [];
+    console.log('[AudioCapture] Raw engine torn down');
+  }
+
+  /**
+   * Start recording raw PCM via AudioWorklet on the persistent engine.
+   * The context+worklet+keep-alive persist across recordings (suspended between);
+   * only the mic stream + per-recording nodes are (re)created here.
    */
   async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
     this.onAudioLevel = onAudioLevel;
 
+    await this.ensureRawEngine();
+    const ctx = this.rawContext!;
+    if (ctx.state === 'suspended') await ctx.resume();
+
     console.log('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      this.rawStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: false,
@@ -151,68 +243,35 @@ export class AudioCapture {
       console.error('[AudioCapture] getUserMedia FAILED (raw PCM):', err);
       throw err;
     }
-    console.log(`[AudioCapture] Mic granted (raw PCM): ${this.stream.getAudioTracks().length} track(s)`);
+    console.log(`[AudioCapture] Mic granted (raw PCM): ${this.rawStream.getAudioTracks().length} track(s); ctx.state=${ctx.state}, rate=${ctx.sampleRate}, engineAge=${Math.round(this.rawEngineAgeMs() / 1000)}s`);
 
-    this.audioContext = new AudioContext();
-    // A fresh AudioContext can come up 'suspended' (esp. after long idle); if it
-    // stays suspended the worklet never runs and we capture silence ("recorded
-    // nothing"). Resume explicitly and log the state.
-    if (this.audioContext.state === 'suspended') {
-      console.log('[AudioCapture] AudioContext suspended on create — resuming');
-      await this.audioContext.resume();
-    }
-    console.log(`[AudioCapture] AudioContext state=${this.audioContext.state}, sampleRate=${this.audioContext.sampleRate}`);
-    this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
-
-    // Audio level monitoring
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-    this.sourceNode.connect(this.analyser);
-    this.monitorAudioLevel();
-
-    // Register AudioWorklet processor via blob URL
-    const workletCode = `
-      class PcmCaptureProcessor extends AudioWorkletProcessor {
-        process(inputs) {
-          const input = inputs[0];
-          if (input && input[0] && input[0].length > 0) {
-            this.port.postMessage(new Float32Array(input[0]));
-          }
-          return true;
-        }
-      }
-      registerProcessor('pcm-capture', PcmCaptureProcessor);
-    `;
-    const blob = new Blob([workletCode], { type: 'application/javascript' });
-    const workletUrl = URL.createObjectURL(blob);
-    await this.audioContext.audioWorklet.addModule(workletUrl);
-    URL.revokeObjectURL(workletUrl);
+    this.rawSource = ctx.createMediaStreamSource(this.rawStream);
 
     this.pcmChunks = [];
-    this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture');
-    this.workletNode.port.onmessage = (e: MessageEvent) => {
+    this.rawWorklet = new AudioWorkletNode(ctx, 'pcm-capture');
+    this.rawWorklet.port.onmessage = (e: MessageEvent) => {
       this.pcmChunks.push(e.data as Float32Array);
     };
+    this.rawSource.connect(this.rawWorklet);
 
-    this.sourceNode.connect(this.workletNode);
-
-    console.log(`[AudioCapture] Raw PCM recording at ${this.audioContext.sampleRate}Hz via AudioWorklet`);
+    console.log(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine)`);
   }
 
   /**
-   * Stop WebGPU recording: collect PCM chunks from AudioWorklet,
-   * resample to 16kHz, return Float32Array.
+   * Stop WebGPU recording: collect PCM chunks, resample to 16kHz only if the
+   * context didn't honor 16kHz. Returns the PCM plus the peak amplitude (so the
+   * caller can detect a silent/wedged capture). Keeps the engine alive
+   * (suspended) — does NOT close the context.
    */
-  async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number }> {
-    const nativeSampleRate = this.audioContext?.sampleRate || RAW_PCM_SAMPLE_RATE;
+  async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number; peak: number }> {
+    const rate = this.rawContextRate || RAW_PCM_SAMPLE_RATE;
 
-    if (this.workletNode) {
-      this.workletNode.disconnect();
-      this.workletNode = undefined;
-    }
+    // Release per-recording nodes + mic, but keep context/worklet/keep-alive.
+    if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
+    if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
+    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
 
-    // Concatenate PCM chunks from worklet
+    // Concatenate captured chunks
     const totalLength = this.pcmChunks.reduce((sum, c) => sum + c.length, 0);
     const rawPcm = new Float32Array(totalLength);
     let offset = 0;
@@ -222,18 +281,32 @@ export class AudioCapture {
     }
     this.pcmChunks = [];
 
-    console.log(`[AudioCapture] Raw PCM: ${rawPcm.length} samples at ${nativeSampleRate}Hz (${(rawPcm.length / nativeSampleRate).toFixed(1)}s)`);
+    // Signal stats — answer "is there REAL, varying audio here?" without guessing.
+    // peak = loudest point; min/max = does it swing both ways (peaks AND valleys);
+    // rms = average energy (real speech: rms << peak; flat/degenerate: rms ≈ peak).
+    let peak = 0, min = 0, max = 0, sumSq = 0;
+    for (let i = 0; i < rawPcm.length; i++) {
+      const s = rawPcm[i];
+      if (s > max) max = s;
+      if (s < min) min = s;
+      const a = s < 0 ? -s : s;
+      if (a > peak) peak = a;
+      sumSq += s * s;
+    }
+    const rms = rawPcm.length ? Math.sqrt(sumSq / rawPcm.length) : 0;
 
-    // Resample to 16kHz if needed
+    console.log(`[AudioCapture] Raw PCM: ${rawPcm.length} samples at ${rate}Hz (${(rawPcm.length / rate).toFixed(1)}s) — peak=${peak.toFixed(4)} min=${min.toFixed(4)} max=${max.toFixed(4)} rms=${rms.toFixed(4)}`);
+
+    // Resample only if the context did NOT honor 16kHz.
     let pcm: Float32Array;
-    if (nativeSampleRate !== RAW_PCM_SAMPLE_RATE && rawPcm.length > 0) {
-      console.log(`[AudioCapture] Resampling ${nativeSampleRate}Hz → ${RAW_PCM_SAMPLE_RATE}Hz...`);
-      const duration = rawPcm.length / nativeSampleRate;
+    if (rate !== RAW_PCM_SAMPLE_RATE && rawPcm.length > 0) {
+      console.log(`[AudioCapture] Resampling ${rate}Hz → ${RAW_PCM_SAMPLE_RATE}Hz...`);
+      const duration = rawPcm.length / rate;
       const outputLength = Math.ceil(duration * RAW_PCM_SAMPLE_RATE);
       const sourceBuffer = new AudioBuffer({
         length: rawPcm.length,
         numberOfChannels: 1,
-        sampleRate: nativeSampleRate,
+        sampleRate: rate,
       });
       sourceBuffer.getChannelData(0).set(rawPcm);
       const offlineCtx = new OfflineAudioContext(1, outputLength, RAW_PCM_SAMPLE_RATE);
@@ -248,8 +321,12 @@ export class AudioCapture {
       pcm = rawPcm;
     }
 
-    this.cleanup();
-    return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE };
+    // Suspend (not close) the persistent context between recordings.
+    if (this.rawContext && this.rawContext.state === 'running') {
+      this.rawContext.suspend().catch(() => {});
+    }
+
+    return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE, peak };
   }
 
   cleanup(): void {
@@ -291,5 +368,15 @@ export class AudioCapture {
     this.dataArray = undefined;
     this.onAudioLevel = undefined;
     this.audioChunks = [];
+
+    // Fully tear down the persistent raw engine too. cleanup() is the "reset
+    // everything" path (errors, start-watchdog, unmount, silent-capture
+    // recovery), so the next startRawRecording() rebuilds a fresh engine.
+    if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
+    if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
+    if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
+    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
+    if (this.rawContext && this.rawContext.state !== 'closed') { this.rawContext.close().catch(() => {}); }
+    this.rawContext = undefined;
   }
 }

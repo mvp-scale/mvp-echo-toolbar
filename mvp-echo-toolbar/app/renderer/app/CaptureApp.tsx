@@ -5,12 +5,18 @@ import { playWarningSound } from './audio/warning-sound';
 import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
 
 // ── Silence trimming (Parakeet is VAD-sensitive) ──
-function trimSilence(audio: Float32Array, threshold = 0.01): Float32Array {
+// threshold kept BELOW the silent-capture gate (0.005) so a quiet-but-real
+// recording is never fully trimmed to nothing; generous pad preserves onsets.
+function trimSilence(audio: Float32Array, threshold = 0.004): Float32Array {
   let start = 0, end = audio.length - 1;
   while (start < end && Math.abs(audio[start]) < threshold) start++;
   while (end > start && Math.abs(audio[end]) < threshold) end--;
-  const pad = 1600; // 100ms at 16kHz
-  return audio.slice(Math.max(0, start - pad), Math.min(audio.length, end + pad + 1));
+  const pad = 3200; // 200ms at 16kHz
+  const trimmed = audio.slice(Math.max(0, start - pad), Math.min(audio.length, end + pad + 1));
+  // Never hand the model a near-empty buffer (a too-aggressive trim yields empty
+  // transcriptions): if trimming nuked almost everything, use the original audio.
+  if (trimmed.length < 4800 && audio.length >= 4800) return audio; // <0.3s → original
+  return trimmed;
 }
 
 // ── Countdown timing constants ──
@@ -35,9 +41,9 @@ export default function CaptureApp() {
   const orchestratorRef = useRef<InferenceOrchestrator>(new InferenceOrchestrator());
   const rawPcmActiveRef = useRef(false); // tracks which recording mode was used
   const requestGenRef = useRef(0);       // generation counter — ignores stale/late transcription results
-  const cycleCountRef = useRef(0);       // DIAGNOSTIC: record→transcribe cycle count (temp, for RAM-loop triage)
   const initFailRef = useRef(0);         // consecutive orchestrator init failures (bounds re-init thrash)
   const lastInitAtRef = useRef(0);       // timestamp of last init attempt (re-init cooldown)
+  const silentStreakRef = useRef(0);     // consecutive silent/wedged captures (drives audio recovery)
 
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -234,20 +240,60 @@ export default function CaptureApp() {
         if (wasRawPcm && orchestratorRef.current.isReady()) {
           // ── WebGPU LOCAL PATH ──
           console.log('CaptureApp: Stopping raw PCM capture...');
-          const { pcm, sampleRate } = await audioCapture.current.stopRawRecording();
-          console.log(`CaptureApp: Got ${pcm.length} samples (${(pcm.length / sampleRate).toFixed(1)}s)`);
+          const { pcm, sampleRate, peak } = await audioCapture.current.stopRawRecording();
+          const recordedSec = pcm.length / sampleRate;
+          console.log(`CaptureApp: Got ${pcm.length} samples (${recordedSec.toFixed(1)}s), peak=${peak.toFixed(4)}`);
+
+          // ── Silent-capture detection + self-recovery ──
+          // A recording of real duration that comes back as near-digital-silence
+          // means the mic pipeline wedged (the "running but silent" bug). Don't
+          // transcribe garbage — reset the audio engine so the next try is fresh,
+          // and after repeated failures reload the capture window as a last resort.
+          const SILENCE_PEAK = 0.005;
+          if (recordedSec > 1.5 && peak < SILENCE_PEAK) {
+            silentStreakRef.current += 1;
+            console.warn(`CaptureApp: SILENT CAPTURE (peak=${peak.toFixed(4)}, ${recordedSec.toFixed(1)}s) — streak=${silentStreakRef.current}; rebuilding audio engine`);
+            audioCapture.current.cleanup(); // force a fresh engine on next start
+            if (silentStreakRef.current >= 3) {
+              console.error('CaptureApp: 3 consecutive silent captures — requesting capture-window reload');
+              electronAPI.requestCaptureReload?.();
+              silentStreakRef.current = 0;
+            }
+            electronAPI.updateTrayState('error');
+            setTimeout(() => electronAPI.updateTrayState('ready'), 2000);
+            return;
+          }
+          silentStreakRef.current = 0; // healthy capture
 
           if (pcm.length > 0) {
             const trimmed = trimSilence(pcm);
             console.log(`CaptureApp: Trimmed to ${trimmed.length} samples, sending to parakeet.js`);
-            const result = await orchestratorRef.current.transcribe(trimmed, sampleRate);
+            let result = await orchestratorRef.current.transcribe(trimmed, sampleRate);
             if (isStale()) { console.warn('CaptureApp: stale WebGPU result ignored (run superseded)'); return; }
+            // Retry ONCE on an empty result for clearly-real audio (we already
+            // passed the silent-capture gate). Targets the intermittent warm-worker
+            // blank; the worker also resets its scratch cache before each call.
+            if (!result.text?.trim()) {
+              console.warn('CaptureApp: empty result for real audio — retrying once');
+              result = await orchestratorRef.current.transcribe(trimSilence(pcm), sampleRate);
+              if (isStale()) { console.warn('CaptureApp: stale retry result ignored'); return; }
+            }
             console.log(`CaptureApp: Result: "${result.text}" (${result.processingTime.toFixed(0)}ms)`);
 
             if (result.text?.trim()) {
-              await electronAPI.copyToClipboard(result.text);
-              playCompletionSound();
-              electronAPI.updateTrayState('done');
+              // Ring the completion bell ONLY when the clipboard write is
+              // verified — the bell means "it's on your clipboard", not "done".
+              const copied = await electronAPI.copyToClipboard(result.text);
+              if (copied?.success) {
+                playCompletionSound();
+                electronAPI.updateTrayState('done');
+              } else {
+                console.error('CaptureApp: clipboard write NOT verified — no bell');
+                playWarningSound(); // distinct cue: transcribed but not copied
+                electronAPI.updateTrayState('error');
+                setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+              }
+              // Store regardless so the popup has the text for manual copy.
               electronAPI.webgpuStoreTranscription({
                 text: result.text,
                 processingTime: result.processingTime,
@@ -292,9 +338,17 @@ export default function CaptureApp() {
               electronAPI.updateTrayState('error');
               setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
             } else if (result.text?.trim()) {
-              await electronAPI.copyToClipboard(result.text);
-              playCompletionSound();
-              electronAPI.updateTrayState('done');
+              // Bell only on a verified clipboard write (see WebGPU path above).
+              const copied = await electronAPI.copyToClipboard(result.text);
+              if (copied?.success) {
+                playCompletionSound();
+                electronAPI.updateTrayState('done');
+              } else {
+                console.error('CaptureApp: clipboard write NOT verified — no bell');
+                playWarningSound();
+                electronAPI.updateTrayState('error');
+                setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+              }
             } else {
               electronAPI.updateTrayState('ready');
             }
@@ -319,16 +373,6 @@ export default function CaptureApp() {
         if (!isStale()) {
           isProcessingRef.current = false;
           rawPcmActiveRef.current = false;
-        }
-        // DIAGNOSTIC (temp): track heap across record→transcribe cycles to
-        // distinguish a real retention leak from ORT arena reuse that plateaus.
-        // Remove once the RAM-loop root cause is confirmed.
-        cycleCountRef.current += 1;
-        const mem = (performance as any).memory;
-        if (mem) {
-          console.log(`CaptureApp: [mem] cycle=${cycleCountRef.current} usedHeap=${(mem.usedJSHeapSize / 1048576).toFixed(1)}MB totalHeap=${(mem.totalJSHeapSize / 1048576).toFixed(1)}MB limit=${(mem.jsHeapSizeLimit / 1048576).toFixed(0)}MB`);
-        } else {
-          console.log(`CaptureApp: [mem] cycle=${cycleCountRef.current} (performance.memory unavailable)`);
         }
         console.log('CaptureApp: performStop complete, state=ready');
       }
@@ -402,13 +446,14 @@ export default function CaptureApp() {
 
         // Start watchdog: if the start never settles (e.g. getUserMedia hangs on
         // a flaky audio device after long idle), force a reset so the in-flight
-        // guard can't permanently wedge the toggle. Cleared when start settles.
+        // guard can't permanently wedge the toggle. 25s tolerates a slow cold
+        // start (permission prompt / device wake) without stomping a real one.
         const startWatchdog = setTimeout(() => {
           if (isStartingRef.current) {
-            console.error('CaptureApp: START WATCHDOG — start did not complete in 10s, forcing reset');
+            console.error('CaptureApp: START WATCHDOG — start did not complete in 25s, forcing reset');
             resetState(api);
           }
-        }, 10000);
+        }, 25000);
 
         startFn
           .catch((error: Error) => {
@@ -424,12 +469,21 @@ export default function CaptureApp() {
             // Clear the guard + watchdog whether start succeeded or failed — no lockout.
             clearTimeout(startWatchdog);
             isStartingRef.current = false;
+            // If a watchdog/reset fired while the mic was still opening, the
+            // just-acquired stream is now orphaned (isRecording was cleared) —
+            // tear it down so it can't leak a live mic.
+            if (!isRecordingRef.current) audioCapture.current.cleanup();
           });
       }
     });
 
     // Cleanup on unmount
     return () => {
+      // Restore original console.* so a reload/remount can't stack wrappers
+      // (each stacked wrapper multiplies the IPC log forwarding).
+      console.log = origLog;
+      console.error = origError;
+      console.warn = origWarn;
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       }

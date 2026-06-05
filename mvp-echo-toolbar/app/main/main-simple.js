@@ -140,6 +140,14 @@ function createHiddenWindow() {
     hiddenWindow = null;
   });
 
+  // A clean load means we're healthy — reset the crash budget so the cap is a
+  // rapid-crash-LOOP breaker, not a lifetime limit. Without this, 3 unrelated
+  // renderer crashes spread over a days-long session would permanently stop
+  // recovery and silently kill recording.
+  hiddenWindow.webContents.on('did-finish-load', () => {
+    rendererCrashCount = 0;
+  });
+
   // Detect renderer crashes — reset tray AND recreate the capture window.
   // Without recreation the hidden window stays null and recording is silently
   // dead until the app is restarted. Guarded by a crash-count cap so a
@@ -437,9 +445,39 @@ ipcMain.handle('stop-recording', async (_event, source = 'unknown') => {
   return { success: true };
 });
 
-// Copy to clipboard
+// Copy to clipboard — VERIFIED. The completion bell must mean "text is on the
+// clipboard", not just "writeText was called". Windows clipboard writes can fail
+// under contention (another app holding it), so write, read back, and retry once;
+// return real success so the renderer only rings the bell on a confirmed copy.
 ipcMain.handle('copy-to-clipboard', async (_event, text) => {
-  clipboard.writeText(text);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      clipboard.writeText(text);
+      if (clipboard.readText() === text) {
+        return { success: true };
+      }
+    } catch (e) {
+      log('Clipboard write error: ' + (e && e.message ? e.message : e));
+    }
+    await new Promise((r) => setTimeout(r, 60)); // brief backoff before retry
+  }
+  log('Clipboard write could NOT be verified after retries');
+  return { success: false };
+});
+
+// Last-resort audio recovery: reload the hidden capture window when the renderer
+// reports a wedged-and-unrecoverable audio pipeline. Reload resets the entire
+// audio/WebGPU stack (the model re-loads from the local cache).
+ipcMain.handle('capture:request-reload', async () => {
+  // Destroy + recreate rather than reload(): a plain reload reuses the same
+  // renderer/GPU process and inherits the wedged audio/device handles. A fresh
+  // window fully resets the audio + WebGPU stack (model re-loads from cache).
+  log('Capture window reload requested (wedged audio recovery) — destroying + recreating');
+  try {
+    if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.destroy();
+  } catch (_e) { /* ignore */ }
+  hiddenWindow = null;
+  createHiddenWindow();
   return { success: true };
 });
 

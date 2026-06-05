@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo",
-  "version": "3.0.12",
+  "version": "3.0.16",
   "description": "MVP-Echo - Windows 11 Voice-to-Text Transcription App",
   "main": "app/main/main-simple.js",
   "scripts": {
@@ -92,7 +92,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "verifyUpdateCodeSignature": false,

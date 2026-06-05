@@ -46,6 +46,11 @@ self.onmessage = async (event: MessageEvent) => {
 async function init(backend: 'webgpu-hybrid' | 'wasm'): Promise<void> {
   console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend})...`);
 
+  // The progress callback fires once per network read chunk (~tens of thousands
+  // of times for the ~1.2GB model). Throttle to whole-percent transitions so it
+  // doesn't flood the console/log with thousands of lines per download.
+  let lastPct = -1;
+  let lastFile = '';
   model = await fromHub('parakeet-tdt-0.6b-v2', {
     backend,
     // Pin the decoder (which always runs on WASM in webgpu mode) to int8 — its
@@ -57,6 +62,9 @@ async function init(backend: 'webgpu-hybrid' | 'wasm'): Promise<void> {
     verbose: false,
     progress: (p: { loaded: number; total: number; file: string }) => {
       const pct = p.total > 0 ? Math.round((p.loaded / p.total) * 100) : 0;
+      if (pct === lastPct && p.file === lastFile) return; // throttle: whole-% only
+      lastPct = pct;
+      lastFile = p.file;
       const mb = (p.loaded / 1024 / 1024).toFixed(1);
       const totalMb = (p.total / 1024 / 1024).toFixed(1);
       console.log(`[ParakeetWorker] Downloading ${p.file}: ${mb}/${totalMb} MB (${pct}%)`);
@@ -102,20 +110,35 @@ async function transcribe(audio: Float32Array, sampleRate: number): Promise<void
     return;
   }
 
+  // Drop any per-utterance scratch cache before each one-shot transcription —
+  // cheap insurance against warm-worker state contamination producing an empty
+  // result on otherwise-good audio (the intermittent blank-transcription bug).
+  try {
+    (model as any).resetMelCache?.();
+    (model as any).clearIncrementalCache?.();
+  } catch { /* ok */ }
+
+  // Time it ourselves — enableProfiling is off (to avoid parakeet's per-call
+  // RTF/console.table spam), which also drops its internal metrics. A plain
+  // timer restores the processing-time the UI shows, with no logging flood.
+  const t0 = performance.now();
   const result = await model.transcribe(audio, sampleRate, {
-    returnTimestamps: true,
+    returnTimestamps: false,  // unused downstream — saves decoder bookkeeping
     returnConfidences: true,
+    enableProfiling: false,   // stop the per-transcription RTF/console.table spam
   });
+  const elapsedMs = Math.round(performance.now() - t0);
 
   const text = result.utterance_text || '';
   const metrics = (result as any).metrics || {};
   const scores = (result as any).confidence_scores;
-  const confidence = scores?.word_confidence_avg ?? scores?.utterance ?? undefined;
+  // Correct parakeet.js confidence keys (was reading non-existent keys → always undefined).
+  const confidence = scores?.word_avg ?? scores?.token_avg ?? undefined;
 
   self.postMessage({
     type: 'transcription-result',
     text,
-    processingTime: metrics.total_ms ?? 0,
+    processingTime: metrics.total_ms ?? elapsedMs, // fall back to our own timer
     confidence,
     metrics,
   });
