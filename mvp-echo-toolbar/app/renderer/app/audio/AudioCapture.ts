@@ -2,6 +2,8 @@
  * Audio recording functionality (renderer process)
  * Extracted from App.tsx for use in hidden capture window
  */
+import { dlog, shortHash } from '../diag';
+
 const RAW_PCM_SAMPLE_RATE = 16000;
 // Gate high-frequency per-chunk logging. Each line round-trips IPC to the main
 // process and appends to the debug log; left on, a long recording emits hundreds
@@ -32,10 +34,17 @@ export class AudioCapture {
   private rawContext?: AudioContext;
   private rawContextRate: number = RAW_PCM_SAMPLE_RATE;
   private keepAliveNode?: ConstantSourceNode;
+  private rawSink?: GainNode; // zero-gain sink: gives the capture worklet a path to destination
   private rawSource?: MediaStreamAudioSourceNode;
   private rawWorklet?: AudioWorkletNode;
   private rawStream?: MediaStream;
   private rawEngineStartedAt = 0;
+  private lastStopAt = 0; // ms timestamp of the previous recording's stop — for idle-gap diagnostics
+  private lastDeviceHash = '';            // device fingerprint of the previous recording (detect Windows device swaps)
+  private workletMsgCount = 0;            // worklet quanta received this recording (detect dropped quanta)
+  private startDiag: Record<string, any> = {}; // device/settings snapshot captured at start (track is live then)
+  /** Optional hook fired on async source events (mute/unmute/ended). Set by CaptureApp. */
+  onTrackEvent?: (kind: string) => void;
 
   private static readonly WORKLET_CODE = `
     class PcmCaptureProcessor extends AudioWorkletProcessor {
@@ -50,7 +59,6 @@ export class AudioCapture {
     }
     registerProcessor('pcm-capture', PcmCaptureProcessor);
   `;
-  private static readonly MAX_ENGINE_AGE_MS = 10 * 60 * 1000; // freshen-up after 10 min uptime
 
 
   getStream(): MediaStream | undefined {
@@ -164,11 +172,10 @@ export class AudioCapture {
    * silent keep-alive source). Rebuilds it if stale (freshen-up) or closed.
    */
   private async ensureRawEngine(): Promise<void> {
-    if (this.rawContext && this.rawContext.state !== 'closed') {
-      if (this.rawEngineAgeMs() < AudioCapture.MAX_ENGINE_AGE_MS) return;
-      console.log('[AudioCapture] Raw engine stale — rebuilding (freshen-up)');
-      await this.teardownRawEngine();
-    }
+    // Reuse the warm engine whenever it's alive. No periodic "freshen-up"
+    // rebuild — rebuilding resets the engine to a cold state, which captures
+    // worse, not better. Only a real error/cleanup tears it down.
+    if (this.rawContext && this.rawContext.state !== 'closed') return;
 
     // Capture in a 16kHz context (browser auto-resamples the mic). UNDER
     // INVESTIGATION: whether this real-time resample degrades speech vs the
@@ -182,7 +189,7 @@ export class AudioCapture {
     }
     this.rawContext = ctx;
     this.rawContextRate = ctx.sampleRate;
-    console.log(`[AudioCapture] Raw engine created: requested ${RAW_PCM_SAMPLE_RATE}Hz, got ${ctx.sampleRate}Hz, state=${ctx.state}`);
+    dlog(`[AudioCapture] Raw engine created: requested ${RAW_PCM_SAMPLE_RATE}Hz, got ${ctx.sampleRate}Hz, state=${ctx.state}`);
 
     // Register the worklet module ONCE per context (re-adding throws).
     const url = URL.createObjectURL(new Blob([AudioCapture.WORKLET_CODE], { type: 'application/javascript' }));
@@ -202,6 +209,18 @@ export class AudioCapture {
       console.warn('[AudioCapture] keep-alive source failed (non-fatal):', e);
     }
 
+    // Silent sink for the capture worklet. ROOT-CAUSE FIX: a capture worklet
+    // whose output reaches NOTHING is an "island" — Web Audio is pull-based from
+    // the destination, so the graph doesn't reliably render the mic into it, and
+    // process() receives intermittent frames of zeros (full-length buffer, but
+    // near-zero RMS with the odd real spike = the blank/low-energy captures).
+    // Routing worklet → zero-gain Gain → destination puts the mic→worklet branch
+    // on an active path so it's pulled every quantum, while staying inaudible.
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    sink.connect(ctx.destination);
+    this.rawSink = sink;
+
     this.rawEngineStartedAt = Date.now();
   }
 
@@ -210,11 +229,12 @@ export class AudioCapture {
     if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
     if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
     if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
+    if (this.rawSink) { try { this.rawSink.disconnect(); } catch { /* ok */ } this.rawSink = undefined; }
     if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
     if (this.rawContext && this.rawContext.state !== 'closed') { try { await this.rawContext.close(); } catch { /* ok */ } }
     this.rawContext = undefined;
     this.pcmChunks = [];
-    console.log('[AudioCapture] Raw engine torn down');
+    dlog('[AudioCapture] Raw engine torn down');
   }
 
   /**
@@ -229,32 +249,70 @@ export class AudioCapture {
     const ctx = this.rawContext!;
     if (ctx.state === 'suspended') await ctx.resume();
 
-    console.log('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
+    dlog('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
     try {
       this.rawStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
+          echoCancellation: false,  // off: alters speech content (bad for ASR)
+          noiseSuppression: false,  // off: alters speech content (bad for ASR)
+          // AutoGain ON. This is the real fix for the intermittent blanks: with it
+          // OFF we captured the device's raw level, which drifts and is often far
+          // too quiet for Parakeet (rms ~0.006 = blank). AGC is *gain* (volume)
+          // normalization, NOT a content filter — it keeps the level in Parakeet's
+          // hearable range. A/B-proven: AGC off rms~0.006 → AGC on rms~0.05.
+          autoGainControl: true,
         }
       });
     } catch (err) {
       console.error('[AudioCapture] getUserMedia FAILED (raw PCM):', err);
       throw err;
     }
-    console.log(`[AudioCapture] Mic granted (raw PCM): ${this.rawStream.getAudioTracks().length} track(s); ctx.state=${ctx.state}, rate=${ctx.sampleRate}, engineAge=${Math.round(this.rawEngineAgeMs() / 1000)}s`);
+
+    // ── Diagnostics: device fingerprint + settings captured at START (track is
+    // live now; at stop it's been stopped). The hash detects a Windows device/
+    // default swap between recordings; idleGap detects a cold-after-gap device.
+    const track = this.rawStream.getAudioTracks()[0];
+    const st: MediaTrackSettings = track ? track.getSettings() : {};
+    const idStr = `${st.deviceId || ''}|${(st as any).groupId || ''}|${track?.label || ''}`;
+    const hash = shortHash(idStr);
+    const deviceChanged = !!this.lastDeviceHash && hash !== this.lastDeviceHash;
+    this.lastDeviceHash = hash;
+    const idleGapMs = this.lastStopAt ? Date.now() - this.lastStopAt : -1;
+    this.startDiag = {
+      dev: (track?.label || 'unknown').slice(0, 18),
+      hash,
+      chg: deviceChanged,
+      gapS: idleGapMs < 0 ? -1 : Math.round(idleGapMs / 1000),
+      ageS: Math.round(this.rawEngineAgeMs() / 1000),
+      rate: st.sampleRate,
+      ch: st.channelCount,
+      agc: (st as any).autoGainControl,
+      ns: (st as any).noiseSuppression,
+      ec: st.echoCancellation,
+    };
+    if (track) {
+      track.onmute = () => { this.onTrackEvent?.('mute'); };
+      track.onunmute = () => { this.onTrackEvent?.('unmute'); };
+      track.onended = () => { this.onTrackEvent?.('ended'); };
+    }
+    dlog(`[AudioCapture] Mic granted: dev=${this.startDiag.dev}·${hash}${deviceChanged ? ' CHANGED' : ''} gap=${this.startDiag.gapS}s age=${this.startDiag.ageS}s rate=${st.sampleRate} agc=${(st as any).autoGainControl}`);
 
     this.rawSource = ctx.createMediaStreamSource(this.rawStream);
 
     this.pcmChunks = [];
+    this.workletMsgCount = 0;
     this.rawWorklet = new AudioWorkletNode(ctx, 'pcm-capture');
     this.rawWorklet.port.onmessage = (e: MessageEvent) => {
+      this.workletMsgCount++;
       this.pcmChunks.push(e.data as Float32Array);
     };
     this.rawSource.connect(this.rawWorklet);
+    // Give the worklet a path to the destination (silent sink) so the graph
+    // reliably pulls the mic through it every quantum. Worklet writes no output → silent.
+    if (this.rawSink) this.rawWorklet.connect(this.rawSink);
 
-    console.log(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine)`);
+    dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination)`);
   }
 
   /**
@@ -263,8 +321,20 @@ export class AudioCapture {
    * caller can detect a silent/wedged capture). Keeps the engine alive
    * (suspended) — does NOT close the context.
    */
-  async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number; peak: number }> {
+  async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number; peak: number; rms: number; diag: Record<string, any> }> {
     const rate = this.rawContextRate || RAW_PCM_SAMPLE_RATE;
+
+    // ── Diagnostics: read mutable track + engine state BEFORE teardown ──
+    const track = this.rawStream?.getAudioTracks?.()[0];
+    const diag: Record<string, any> = {
+      ...this.startDiag,
+      ready: track?.readyState,
+      muted: track?.muted,
+      ctx: this.rawContext?.state,
+      ctxRate: this.rawContext?.sampleRate,
+      refs: !!(this.rawContext && this.rawSource && this.rawWorklet && this.rawSink),
+      msgs: this.workletMsgCount,
+    };
 
     // Release per-recording nodes + mic, but keep context/worklet/keep-alive.
     if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
@@ -295,12 +365,12 @@ export class AudioCapture {
     }
     const rms = rawPcm.length ? Math.sqrt(sumSq / rawPcm.length) : 0;
 
-    console.log(`[AudioCapture] Raw PCM: ${rawPcm.length} samples at ${rate}Hz (${(rawPcm.length / rate).toFixed(1)}s) — peak=${peak.toFixed(4)} min=${min.toFixed(4)} max=${max.toFixed(4)} rms=${rms.toFixed(4)}`);
+    dlog(`[AudioCapture] Raw PCM: ${rawPcm.length} samples at ${rate}Hz (${(rawPcm.length / rate).toFixed(1)}s) — peak=${peak.toFixed(4)} min=${min.toFixed(4)} max=${max.toFixed(4)} rms=${rms.toFixed(4)}`);
 
     // Resample only if the context did NOT honor 16kHz.
     let pcm: Float32Array;
     if (rate !== RAW_PCM_SAMPLE_RATE && rawPcm.length > 0) {
-      console.log(`[AudioCapture] Resampling ${rate}Hz → ${RAW_PCM_SAMPLE_RATE}Hz...`);
+      dlog(`[AudioCapture] Resampling ${rate}Hz → ${RAW_PCM_SAMPLE_RATE}Hz...`);
       const duration = rawPcm.length / rate;
       const outputLength = Math.ceil(duration * RAW_PCM_SAMPLE_RATE);
       const sourceBuffer = new AudioBuffer({
@@ -316,7 +386,7 @@ export class AudioCapture {
       source.start();
       const rendered = await offlineCtx.startRendering();
       pcm = rendered.getChannelData(0);
-      console.log(`[AudioCapture] Resampled: ${pcm.length} samples`);
+      dlog(`[AudioCapture] Resampled: ${pcm.length} samples`);
     } else {
       pcm = rawPcm;
     }
@@ -326,7 +396,8 @@ export class AudioCapture {
       this.rawContext.suspend().catch(() => {});
     }
 
-    return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE, peak };
+    this.lastStopAt = Date.now(); // mark for next recording's idle-gap calc
+    return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE, peak, rms, diag };
   }
 
   cleanup(): void {
@@ -375,6 +446,7 @@ export class AudioCapture {
     if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
     if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
     if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
+    if (this.rawSink) { try { this.rawSink.disconnect(); } catch { /* ok */ } this.rawSink = undefined; }
     if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
     if (this.rawContext && this.rawContext.state !== 'closed') { this.rawContext.close().catch(() => {}); }
     this.rawContext = undefined;

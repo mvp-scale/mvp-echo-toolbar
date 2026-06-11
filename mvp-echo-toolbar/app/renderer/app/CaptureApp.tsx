@@ -3,6 +3,7 @@ import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
 import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
+import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio } from './diag';
 
 // ── Silence trimming (Parakeet is VAD-sensitive) ──
 // threshold kept BELOW the silent-capture gate (0.005) so a quiet-but-real
@@ -43,7 +44,7 @@ export default function CaptureApp() {
   const requestGenRef = useRef(0);       // generation counter — ignores stale/late transcription results
   const initFailRef = useRef(0);         // consecutive orchestrator init failures (bounds re-init thrash)
   const lastInitAtRef = useRef(0);       // timestamp of last init attempt (re-init cooldown)
-  const silentStreakRef = useRef(0);     // consecutive silent/wedged captures (drives audio recovery)
+  const recCountRef = useRef(0);         // recording counter for diagnostics line numbering
 
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -123,12 +124,16 @@ export default function CaptureApp() {
     const api = (window as any).electronAPI;
     if (!api) return;
 
-    // Forward renderer console to main process log file
+    // Forward renderer console to main, but keep it QUIET by default: routine
+    // console.log only fires when diagnostics are enabled (--diag). Errors and
+    // warnings always go through. Per-recording detail goes to the dedicated
+    // diagnostics file via sendDiag(), not the console.
     const ipc = (window as any).electron?.ipcRenderer;
     const origLog = console.log;
     const origError = console.error;
     const origWarn = console.warn;
     console.log = (...args: any[]) => {
+      if (!isDiagEnabled()) return; // quiet unless diagnostics on
       origLog(...args);
       if (ipc) ipc.invoke('debug:renderer-log', args.map(String).join(' ')).catch(() => {});
     };
@@ -140,6 +145,13 @@ export default function CaptureApp() {
       origWarn(...args);
       if (ipc) ipc.invoke('debug:renderer-log', 'WARN: ' + args.map(String).join(' ')).catch(() => {});
     };
+
+    // Diagnostics wiring: learn whether deep capture is on (launch flag), and
+    // stream async source/device events to the diagnostics file when it is.
+    ipc?.invoke('diag:enabled').then((v: boolean) => setDiagEnabled(!!v)).catch(() => {});
+    audioCapture.current.onTrackEvent = (kind: string) => sendDiag(`track-event: ${kind}`);
+    const onDeviceChange = () => sendDiag('devicechange — system device list changed');
+    navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
 
     console.log('CaptureApp: Setting up global shortcut listener');
 
@@ -240,30 +252,14 @@ export default function CaptureApp() {
         if (wasRawPcm && orchestratorRef.current.isReady()) {
           // ── WebGPU LOCAL PATH ──
           console.log('CaptureApp: Stopping raw PCM capture...');
-          const { pcm, sampleRate, peak } = await audioCapture.current.stopRawRecording();
+          const { pcm, sampleRate, peak, rms, diag } = await audioCapture.current.stopRawRecording();
           const recordedSec = pcm.length / sampleRate;
-          console.log(`CaptureApp: Got ${pcm.length} samples (${recordedSec.toFixed(1)}s), peak=${peak.toFixed(4)}`);
+          console.log(`CaptureApp: Got ${pcm.length} samples (${recordedSec.toFixed(1)}s), peak=${peak.toFixed(4)}, rms=${rms.toFixed(4)}`);
 
-          // ── Silent-capture detection + self-recovery ──
-          // A recording of real duration that comes back as near-digital-silence
-          // means the mic pipeline wedged (the "running but silent" bug). Don't
-          // transcribe garbage — reset the audio engine so the next try is fresh,
-          // and after repeated failures reload the capture window as a last resort.
-          const SILENCE_PEAK = 0.005;
-          if (recordedSec > 1.5 && peak < SILENCE_PEAK) {
-            silentStreakRef.current += 1;
-            console.warn(`CaptureApp: SILENT CAPTURE (peak=${peak.toFixed(4)}, ${recordedSec.toFixed(1)}s) — streak=${silentStreakRef.current}; rebuilding audio engine`);
-            audioCapture.current.cleanup(); // force a fresh engine on next start
-            if (silentStreakRef.current >= 3) {
-              console.error('CaptureApp: 3 consecutive silent captures — requesting capture-window reload');
-              electronAPI.requestCaptureReload?.();
-              silentStreakRef.current = 0;
-            }
-            electronAPI.updateTrayState('error');
-            setTimeout(() => electronAPI.updateTrayState('ready'), 2000);
-            return;
-          }
-          silentStreakRef.current = 0; // healthy capture
+          // NOTE: no pre-transcribe RMS/peak discard. AutoGain (on) keeps the
+          // captured level in range, so we transcribe every recording rather than
+          // throwing away quiet-but-valid audio (that gate caused false-positive
+          // drops and a cold-rebuild loop). rms is logged above for diagnostics.
 
           if (pcm.length > 0) {
             const trimmed = trimSilence(pcm);
@@ -279,6 +275,18 @@ export default function CaptureApp() {
               if (isStale()) { console.warn('CaptureApp: stale retry result ignored'); return; }
             }
             console.log(`CaptureApp: Result: "${result.text}" (${result.processingTime.toFixed(0)}ms)`);
+
+            // ── Diagnostics fingerprint: one line per recording → diag file (--diag) ──
+            sendDiag(
+              `#${++recCountRef.current} dev=${diag.dev}·${diag.hash}${diag.chg ? ' CHG' : ''}` +
+              ` gap=${diag.gapS}s age=${diag.ageS}s rate=${diag.rate} agc=${diag.agc} ns=${diag.ns} ec=${diag.ec}` +
+              ` ready=${diag.ready} muted=${diag.muted} ctx=${diag.ctx}/${diag.ctxRate} refs=${diag.refs ? 'ok' : 'LOST'} msgs=${diag.msgs}` +
+              ` samples=${pcm.length}(${recordedSec.toFixed(1)}s) peak=${peak.toFixed(3)} rms=${rms.toFixed(4)}` +
+              ` result=${result.text?.trim() ? result.text.trim().length + 'ch' : 'EMPTY'} proc=${result.processingTime.toFixed(0)}ms`
+            );
+            // Persist the exact captured audio (full, pre-trim) for playback —
+            // the filename flags the EMPTY ones so they're easy to find & listen to.
+            saveDiagAudio(`rec-${String(recCountRef.current).padStart(3, '0')}-rms${rms.toFixed(4)}-${result.text?.trim() ? 'ok' : 'EMPTY'}.wav`, pcm, sampleRate);
 
             if (result.text?.trim()) {
               // Ring the completion bell ONLY when the clipboard write is
@@ -484,6 +492,8 @@ export default function CaptureApp() {
       console.log = origLog;
       console.error = origError;
       console.warn = origWarn;
+      navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
+      audioCapture.current.onTrackEvent = undefined;
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       }

@@ -11,6 +11,15 @@ const engineManager = new EngineManager();
 const trayManager = new TrayManager();
 const logPath = getLogPath();
 
+// ── Diagnostics flag ──
+// OFF by default (clean, quiet console). Enable at launch with either:
+//   "MVP-Echo Toolbar.exe" --diag      (CLI arg)
+//   set MVP_DEBUG=1 && "MVP-Echo Toolbar.exe"   (env var, reliable for portable)
+// When on, the renderer streams one structured fingerprint line per recording to
+// a dedicated diagnostics file (separate from the general debug log).
+const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
+const diagPath = path.join(os.tmpdir(), 'mvp-echo-diagnostics.log');
+
 // ── Global crash safety ──
 // Without these, an uncaught error or rejected promise in any async path
 // silently kills the main process (no dialog, no log). We log and KEEP RUNNING:
@@ -40,6 +49,14 @@ try {
 } catch (_e) { /* ignore */ }
 
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
+
+// Diagnostics: announce status + start a fresh diagnostics file when enabled.
+if (DIAG_ENABLED) {
+  try { fs.writeFileSync(diagPath, `# MVP-Echo diagnostics — session start ${new Date().toISOString()}\n`); } catch (_e) { /* ignore */ }
+  log(`MVP-Echo Toolbar: DIAGNOSTICS ON → ${diagPath}`);
+} else {
+  log('MVP-Echo Toolbar: diagnostics OFF (launch with --diag or MVP_DEBUG=1 to enable)');
+}
 
 
 // ── App Config (configurable keybind) ──
@@ -463,6 +480,37 @@ ipcMain.handle('copy-to-clipboard', async (_event, text) => {
   }
   log('Clipboard write could NOT be verified after retries');
   return { success: false };
+});
+
+// Diagnostics: renderer asks whether deep capture is enabled (set by launch flag).
+ipcMain.handle('diag:enabled', async () => DIAG_ENABLED);
+
+// Diagnostics: renderer streams one structured fingerprint line per recording.
+// Written to the dedicated diagnostics file only when enabled.
+ipcMain.handle('diag:record', async (_event, line) => {
+  if (!DIAG_ENABLED) return { success: false };
+  try {
+    fs.appendFileSync(diagPath, `[${new Date().toISOString()}] ${line}\n`);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e && e.message };
+  }
+});
+
+// Diagnostics: persist the exact captured PCM (as WAV) so it can be played back —
+// the ground-truth test for captured-fine vs sparse vs corrupted. Files land in a
+// subfolder next to the diagnostics log; only written when diagnostics are on.
+const diagAudioDir = path.join(os.tmpdir(), 'mvp-echo-audio');
+ipcMain.handle('diag:save-audio', async (_event, name, buf) => {
+  if (!DIAG_ENABLED) return { success: false };
+  try {
+    if (!fs.existsSync(diagAudioDir)) fs.mkdirSync(diagAudioDir, { recursive: true });
+    const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, '_');
+    fs.writeFileSync(path.join(diagAudioDir, safe), Buffer.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf));
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e && e.message };
+  }
 });
 
 // Last-resort audio recovery: reload the hidden capture window when the renderer
