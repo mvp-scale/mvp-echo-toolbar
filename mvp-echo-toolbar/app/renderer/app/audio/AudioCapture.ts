@@ -46,6 +46,20 @@ export class AudioCapture {
   /** Optional hook fired on async source events (mute/unmute/ended). Set by CaptureApp. */
   onTrackEvent?: (kind: string) => void;
 
+  /**
+   * Fired ONCE per recording when capture is confirmed live — real frames are
+   * flowing AND the track is unmuted (the headset has finished its auto-unmute).
+   * The arg is ms since startRawRecording began (≈ keypress→live latency). Set by
+   * CaptureApp to play the authoritative "talk now" cue, instead of cueing on
+   * keypress — which fires before the device has actually engaged and is the
+   * window where early speech gets lost (captured frames but no voice).
+   */
+  onCaptureReady?: (latencyMs: number) => void;
+  private captureReadyFired = false;
+  private captureReadySamples = 0;  // frames received WHILE UNMUTED (counts toward the ready threshold)
+  private captureStartTs = 0;       // ms timestamp at start of this recording (≈ keypress)
+  private captureReadyTimer?: ReturnType<typeof setTimeout>;
+
   private static readonly WORKLET_CODE = `
     class PcmCaptureProcessor extends AudioWorkletProcessor {
       process(inputs) {
@@ -245,6 +259,11 @@ export class AudioCapture {
   async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
     this.onAudioLevel = onAudioLevel;
 
+    // Reset capture-ready tracking for this recording (timestamp ≈ keypress).
+    this.captureReadyFired = false;
+    this.captureReadySamples = 0;
+    this.captureStartTs = Date.now();
+
     await this.ensureRawEngine();
     const ctx = this.rawContext!;
     if (ctx.state === 'suspended') await ctx.resume();
@@ -302,17 +321,49 @@ export class AudioCapture {
 
     this.pcmChunks = [];
     this.workletMsgCount = 0;
+    const readySamplesNeeded = Math.round(ctx.sampleRate * 0.25); // ~250ms of unmuted frames = "really flowing"
     this.rawWorklet = new AudioWorkletNode(ctx, 'pcm-capture');
     this.rawWorklet.port.onmessage = (e: MessageEvent) => {
       this.workletMsgCount++;
-      this.pcmChunks.push(e.data as Float32Array);
+      const chunk = e.data as Float32Array;
+      this.pcmChunks.push(chunk);
+      this.maybeFireCaptureReady(chunk.length, readySamplesNeeded);
     };
     this.rawSource.connect(this.rawWorklet);
     // Give the worklet a path to the destination (silent sink) so the graph
     // reliably pulls the mic through it every quantum. Worklet writes no output → silent.
     if (this.rawSink) this.rawWorklet.connect(this.rawSink);
 
+    // Safety net: always emit a "talk now" cue even if the readiness gate never
+    // resolves (e.g. a device that never clears track.muted) — better a slightly
+    // early cue than none. Cleared the instant the real signal fires (or on stop).
+    this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), 1500);
+
     dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination)`);
+  }
+
+  /**
+   * Fire the capture-ready cue once enough frames have flowed WHILE UNMUTED.
+   * Frames received while the track reports muted (the headset's auto-unmute
+   * transition) are NOT counted — so "ready" means ~250ms of genuinely-live
+   * audio, which is exactly the dead window we don't want the user speaking into.
+   */
+  private maybeFireCaptureReady(n: number, needed: number): void {
+    if (this.captureReadyFired) return;
+    const track = this.rawStream?.getAudioTracks?.()[0];
+    if (track && track.muted) return; // still mid-unmute — don't say "talk now" yet
+    this.captureReadySamples += n;
+    if (this.captureReadySamples >= needed) this.fireCaptureReady('frames');
+  }
+
+  /** Mark capture live, clear the fallback timer, notify CaptureApp exactly once. */
+  private fireCaptureReady(via: string): void {
+    if (this.captureReadyFired) return;
+    this.captureReadyFired = true;
+    if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
+    const latencyMs = Date.now() - this.captureStartTs;
+    dlog(`[AudioCapture] capture-ready via ${via} after ${latencyMs}ms`);
+    try { this.onCaptureReady?.(latencyMs); } catch { /* ok */ }
   }
 
   /**
@@ -337,6 +388,7 @@ export class AudioCapture {
     };
 
     // Release per-recording nodes + mic, but keep context/worklet/keep-alive.
+    if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
     if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
     if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
     if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
@@ -401,6 +453,8 @@ export class AudioCapture {
   }
 
   cleanup(): void {
+    if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
+    this.captureReadyFired = false;
     if (this.animationId !== undefined) {
       cancelAnimationFrame(this.animationId);
       this.animationId = undefined;

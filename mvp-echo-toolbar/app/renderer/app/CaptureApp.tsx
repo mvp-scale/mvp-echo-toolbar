@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
+import { playStartSound } from './audio/start-sound';
 import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
 import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio } from './diag';
 
@@ -150,6 +151,16 @@ export default function CaptureApp() {
     // stream async source/device events to the diagnostics file when it is.
     ipc?.invoke('diag:enabled').then((v: boolean) => setDiagEnabled(!!v)).catch(() => {});
     audioCapture.current.onTrackEvent = (kind: string) => sendDiag(`track-event: ${kind}`);
+    // Authoritative "talk now" cue: fires only when the mic is CONFIRMED live
+    // (real frames flowing + track unmuted), not on keypress. The on-press color
+    // flip just means "press received"; THIS tone is the signal to start speaking,
+    // so early speech no longer lands in the device's unmute/warm-up dead window.
+    audioCapture.current.onCaptureReady = (latencyMs: number) => {
+      if (!isRecordingRef.current) return; // ignore a late fire after stop/reset
+      playStartSound();
+      api.updateTrayState('recording'); // (re)assert the live color now that capture is real
+      sendDiag(`ready: keypress→live ${latencyMs}ms`);
+    };
     const onDeviceChange = () => sendDiag('devicechange — system device list changed');
     navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
 
