@@ -4,7 +4,7 @@ import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
 import { playStartSound } from './audio/start-sound';
 import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
-import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio } from './diag';
+import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio, ilog } from './diag';
 
 // ── Silence trimming (Parakeet is VAD-sensitive) ──
 // threshold kept BELOW the silent-capture gate (0.005) so a quiet-but-real
@@ -159,6 +159,7 @@ export default function CaptureApp() {
       if (!isRecordingRef.current) return; // ignore a late fire after stop/reset
       playStartSound();
       api.updateTrayState('recording'); // (re)assert the live color now that capture is real
+      ilog(`● live in ${latencyMs}ms`);
       sendDiag(`ready: keypress→live ${latencyMs}ms`);
     };
     const onDeviceChange = () => sendDiag('devicechange — system device list changed');
@@ -306,11 +307,13 @@ export default function CaptureApp() {
               if (copied?.success) {
                 playCompletionSound();
                 electronAPI.updateTrayState('done');
+                ilog(`✓ ${result.text.trim().length} chars · rec ${recordedSec.toFixed(1)}s · proc ${(result.processingTime / 1000).toFixed(1)}s · copied`);
               } else {
                 console.error('CaptureApp: clipboard write NOT verified — no bell');
                 playWarningSound(); // distinct cue: transcribed but not copied
                 electronAPI.updateTrayState('error');
                 setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+                ilog(`⚠ ${result.text.trim().length} chars · rec ${recordedSec.toFixed(1)}s · clipboard write FAILED`);
               }
               // Store regardless so the popup has the text for manual copy.
               electronAPI.webgpuStoreTranscription({
@@ -321,10 +324,12 @@ export default function CaptureApp() {
                 language: 'en',
               });
             } else {
+              ilog(`∅ no speech · rec ${recordedSec.toFixed(1)}s`);
               electronAPI.updateTrayState('ready');
             }
           } else {
             console.warn('CaptureApp: Empty audio');
+            ilog('∅ no audio captured');
             electronAPI.updateTrayState('ready');
           }
         } else {

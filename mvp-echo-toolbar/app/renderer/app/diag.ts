@@ -25,6 +25,22 @@ export function dlog(...args: any[]): void {
   if (enabled) console.log(...args);
 }
 
+/**
+ * Minimal ALWAYS-ON info log — one concise line per recording for everyday
+ * observability, with NO --diag flag needed. Reaches the persisted debug log
+ * (via main) and the live console. Distinct from dlog() (verbose, diag-only).
+ *
+ * Keep these lines METRICS-ONLY — never the transcript text — so spoken words
+ * never land in the on-disk log; the full text lives in the popup/clipboard (and
+ * under --diag). Uses console.info (not the diag-gated console.log) so it stays
+ * visible in default mode, and invokes the always-on debug-log channel directly.
+ */
+export function ilog(line: string): void {
+  try { console.info(line); } catch { /* ok */ }
+  const ipc = (window as any).electron?.ipcRenderer;
+  try { ipc?.invoke('debug:renderer-log', line); } catch { /* best-effort */ }
+}
+
 /** Append one structured line to the diagnostics file (main writes it). */
 export function sendDiag(line: string): void {
   if (!enabled) return;
