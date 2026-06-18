@@ -12,6 +12,11 @@
 const DB_NAME = 'parakeet-cache-db';
 const STORE_NAME = 'file-store';
 const VERSION_KEY = 'mvp-echo:cache-version';
+// Cache identity is the MODEL, not the app. Bump this ONLY when the actual model
+// or parakeet.js storage format changes — NEVER on an app-version bump. Legacy
+// values were app versions (e.g. "3.0.22") with no "model:" prefix; they migrate
+// silently (the model is unchanged), so updating the app never re-downloads.
+const MODEL_CACHE_VERSION = 'model:parakeet-tdt-0.6b-v2:1';
 
 async function requestPersistence(): Promise<boolean> {
   if (!navigator.storage?.persist) return false;
@@ -58,26 +63,38 @@ export interface CachePrepResult {
 /**
  * Prepare the parakeet.js IndexedDB cache for use.
  * Call before the inference worker starts downloading.
+ *
+ * Requests persistent storage (so the blob survives eviction) and clears the
+ * cache ONLY when the MODEL identity changes — not on app-version bumps, which
+ * previously forced a needless ~1.2GB re-download on every update.
  */
-export async function prepareModelCache(appVersion: string): Promise<CachePrepResult> {
+export async function prepareModelCache(): Promise<CachePrepResult> {
   const persistent = await requestPersistence();
   const previousVersion = localStorage.getItem(VERSION_KEY);
   let cleared = false;
 
-  if (previousVersion && previousVersion !== appVersion) {
+  // Only wipe on a real model change: the stored key uses the "model:" scheme
+  // and differs from the current one. Legacy app-version values (no "model:"
+  // prefix) migrate silently — the model didn't change, so the cached blob is
+  // reused and the app update does NOT trigger a re-download.
+  const storedModelKey = previousVersion && previousVersion.startsWith('model:') ? previousVersion : null;
+  if (storedModelKey && storedModelKey !== MODEL_CACHE_VERSION) {
     try {
       await clearParakeetStore();
       cleared = true;
-      console.log(`[ModelCache] Cleared cache from previous version ${previousVersion}`);
+      console.log(`[ModelCache] Model changed (${storedModelKey} → ${MODEL_CACHE_VERSION}) — cleared cache`);
     } catch (e) {
-      console.warn('[ModelCache] Failed to clear stale cache:', e);
+      // Do NOT advance the key on a failed clear, or the next run treats a
+      // stale/partial cache as fresh. Keep the old key and bail.
+      console.warn('[ModelCache] Failed to clear stale cache — keeping old key:', e);
+      return { persistent, cleared, previousVersion, currentVersion: storedModelKey };
     }
   }
 
-  localStorage.setItem(VERSION_KEY, appVersion);
+  localStorage.setItem(VERSION_KEY, MODEL_CACHE_VERSION);
   console.log(
-    `[ModelCache] persistent=${persistent} cleared=${cleared} version=${appVersion}` +
+    `[ModelCache] persistent=${persistent} cleared=${cleared} key=${MODEL_CACHE_VERSION}` +
     (previousVersion ? ` (was ${previousVersion})` : ' (first run)')
   );
-  return { persistent, cleared, previousVersion, currentVersion: appVersion };
+  return { persistent, cleared, previousVersion, currentVersion: MODEL_CACHE_VERSION };
 }

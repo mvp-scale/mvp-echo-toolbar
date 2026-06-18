@@ -32,8 +32,10 @@ export class InferenceOrchestrator {
   /**
    * Initialize the worker, load parakeet.js model, and run warmup.
    * @param backend - 'webgpu-hybrid' or 'wasm'
-   * @param appVersion - Current app version. When this changes between runs,
-   *                     the cached model files are wiped and re-downloaded.
+   * @param appVersion - Current app version, for logging only. The model cache is
+   *                     NO LONGER keyed on it (that forced a needless re-download
+   *                     on every update); it's keyed on the model identity and
+   *                     cleared only when the model itself changes.
    */
   async initialize(
     backend: 'webgpu-hybrid' | 'wasm' = 'wasm',
@@ -45,9 +47,10 @@ export class InferenceOrchestrator {
     this.loading = true;
 
     try {
-      if (appVersion) {
-        await prepareModelCache(appVersion);
-      }
+      // Always prep the cache: requests persistent storage (so the ~1.2GB blob
+      // survives eviction) and migrates/validates the model-cache key. Runs even
+      // when appVersion is unknown — persistence must be requested regardless.
+      await prepareModelCache();
 
       // Only create a new worker if we don't already have one
       if (!this.worker) {
@@ -74,7 +77,7 @@ export class InferenceOrchestrator {
       );
 
       this.modelReady = true;
-      console.log('[InferenceOrchestrator] Model loaded and ready');
+      console.log(`[InferenceOrchestrator] Model loaded and ready${appVersion ? ` (app v${appVersion})` : ''}`);
     } catch (err) {
       // Tear the worker down on failure. A half-initialized worker still holds
       // a partial ~1.2GB model in memory; reusing it on the next attempt

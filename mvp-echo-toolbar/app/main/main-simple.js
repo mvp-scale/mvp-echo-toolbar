@@ -347,9 +347,12 @@ app.whenReady().then(async () => {
   const appConfig = loadAppConfig();
   const shortcutLabel = shortcutDisplayLabel(appConfig.shortcut);
 
-  // Auto-approve microphone permission
+  // Auto-approve the mic, and persistent-storage. The latter exempts the ~1.2GB
+  // parakeet model blob (cached in IndexedDB) from Chromium quota eviction —
+  // without it, navigator.storage.persist() is denied and the cache can be
+  // evicted under storage pressure, forcing a full re-download on a later launch.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'media') {
+    if (permission === 'media' || permission === 'persistent-storage') {
       callback(true);
     } else {
       callback(false);
