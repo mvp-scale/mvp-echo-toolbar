@@ -1,3 +1,47 @@
+
+<!-- aOa-guidance -->
+## Improved grep — use Bash grep/egrep for all code search
+
+All code search MUST go through Bash `grep`/`egrep`. This applies to you AND any subagents
+you spawn. The built-in Grep/Glob tools bypass the semantic index and require 5-10x more calls.
+
+### What grep returns
+
+```
+$ grep processTaintBaseEviction
+  2dkfzw  pkg/controller/nodelifecycle:nc.processTaintBaseEviction(ctx)[979-1068]:979  @scheduling  #taint #eviction
+  2dkg19  pkg/controller/nodelifecycle:nc.doEviction(ctx, taint)[1070-1142]:1070  @scheduling  #eviction #node
+  --      pkg/controller/taint:tc.handlePodUpdate(old, cur)[245-312]:245  @scheduling  #taint #pod
+```
+
+Each line gives you: peek code, full signature, method boundaries `[start-end]`, @domain, #terms.
+
+### Workflow: grep → peek
+
+```
+$ grep processTaintBaseEviction          # find symbols
+$ aoa peek 2dkfzw 2dkg19                 # read multiple method bodies in one call
+```
+
+- If peek returns "symbol not found", fall back to Read at the `[start-end]` lines from grep.
+- `--` instead of a peek code means too large for peek — use Read at those lines.
+
+### Commands
+
+| Task | Command | Example |
+|------|---------|---------|
+| Find symbol | `grep name` | `grep reconcilePod` |
+| Multi-symbol | `egrep 'A\|B\|C'` | `egrep 'health\|ready\|alive'` |
+| Scoped search | `grep --scope path pat` | `grep --scope controller reconcile` |
+| Find files | `aoa locate name` | `aoa locate webhook` |
+| Glob files | `aoa find glob` | `aoa find *_types.go` |
+| Read methods | `aoa peek code` | `aoa peek a1 b2 c3` |
+| Directory tree | `aoa tree dir -d N` | `aoa tree pkg/api -d 2` |
+
+**Use Read for**: non-code files (YAML, configs, go.mod), surrounding context (imports, constants),
+or when peek shows `--`.
+<!-- /aOa-guidance -->
+
 # CRITICAL: aOa Search Override
 
 **ALWAYS use `aoa grep` instead of Grep/Glob tools.**
