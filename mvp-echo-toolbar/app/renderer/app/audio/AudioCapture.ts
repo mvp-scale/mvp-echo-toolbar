@@ -28,9 +28,11 @@ export class AudioCapture {
   // ── Persistent raw-PCM engine (WebGPU path) ──
   // Reusing ONE AudioContext + worklet module + a silent keep-alive source across
   // recordings avoids the per-cycle create/close churn that wedges the Windows
-  // audio pipeline into "running but silent" capture. The mic is still acquired
-  // per recording (privacy); the context is SUSPENDED between recordings, not
-  // closed. A staleness freshen-up rebuilds the engine after long uptime.
+  // audio pipeline into "running but silent" capture. The mic stream is now also
+  // kept warm across recordings (released after IDLE_RELEASE_MS of silence) to
+  // eliminate the ~1-2s OS device cold-open that was paid on every press.
+  // The context is SUSPENDED between recordings, not closed. A staleness
+  // freshen-up rebuilds the engine after long uptime.
   private rawContext?: AudioContext;
   private rawContextRate: number = RAW_PCM_SAMPLE_RATE;
   private keepAliveNode?: ConstantSourceNode;
@@ -59,6 +61,14 @@ export class AudioCapture {
   private captureReadySamples = 0;  // frames received WHILE UNMUTED (counts toward the ready threshold)
   private captureStartTs = 0;       // ms timestamp at start of this recording (≈ keypress)
   private captureReadyTimer?: ReturnType<typeof setTimeout>;
+
+  // ── Warm-mic idle release ──
+  // After stopRawRecording() the mic stream is kept open so the next recording
+  // can skip the OS device cold-open (saves ~1-2s). After IDLE_RELEASE_MS of
+  // inactivity the stream is released so the OS mic indicator turns off.
+  private idleReleaseTimer?: ReturnType<typeof setTimeout>;
+  private static readonly IDLE_RELEASE_MS = 30000; // 30s idle before releasing mic
+  private deviceChangeListenerAdded = false;        // guard: add listener only once
 
   private static readonly WORKLET_CODE = `
     class PcmCaptureProcessor extends AudioWorkletProcessor {
@@ -251,36 +261,31 @@ export class AudioCapture {
     this.rawEngineStartedAt = Date.now();
   }
 
-  /** Fully tear down the persistent raw engine (recovery / unmount). */
-  async teardownRawEngine(): Promise<void> {
-    if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
-    if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
-    if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
-    if (this.rawSink) { try { this.rawSink.disconnect(); } catch { /* ok */ } this.rawSink = undefined; }
-    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
-    if (this.rawContext && this.rawContext.state !== 'closed') { try { await this.rawContext.close(); } catch { /* ok */ } }
-    this.rawContext = undefined;
-    this.pcmChunks = [];
-    dlog('[AudioCapture] Raw engine torn down');
-  }
-
   /**
-   * Start recording raw PCM via AudioWorklet on the persistent engine.
-   * The context+worklet+keep-alive persist across recordings (suspended between);
-   * only the mic stream + per-recording nodes are (re)created here.
+   * Ensure the mic stream is open and live. Reuses the existing stream if the
+   * track is still live (warm-mic path — no OS round-trip). Acquires a fresh
+   * stream otherwise (first acquisition, or after an idle release / device change).
+   *
+   * Returns true  → stream was already warm (device is delivering audio now).
+   * Returns false → fresh acquisition (cold start; energy-gate readiness applies).
+   *
+   * Also registers the device-change listener the first time (once per instance).
    */
-  async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
-    this.onAudioLevel = onAudioLevel;
+  private async ensureMicStream(): Promise<boolean> {
+    // Reuse the warm stream if its audio track is still live.
+    if (this.rawStream) {
+      const existingTrack = this.rawStream.getAudioTracks()[0];
+      if (existingTrack && existingTrack.readyState === 'live') {
+        dlog('[AudioCapture] Mic stream reused (warm)');
+        return true; // wasWarm
+      }
+      // Track ended unexpectedly — fall through to re-acquire.
+      dlog('[AudioCapture] Warm stream track ended; re-acquiring mic');
+      this.rawStream.getTracks().forEach(t => t.stop());
+      this.rawStream = undefined;
+    }
 
-    // Reset capture-ready tracking for this recording (timestamp ≈ keypress).
-    this.captureReadyFired = false;
-    this.captureReadySamples = 0;
-    this.captureStartTs = Date.now();
-
-    await this.ensureRawEngine();
-    const ctx = this.rawContext!;
-    if (ctx.state === 'suspended') await ctx.resume();
-
+    // ── Cold acquire ──
     dlog('[AudioCapture] Requesting mic (raw PCM via AudioWorklet)...');
     try {
       this.rawStream = await navigator.mediaDevices.getUserMedia({
@@ -301,9 +306,7 @@ export class AudioCapture {
       throw err;
     }
 
-    // ── Diagnostics: device fingerprint + settings captured at START (track is
-    // live now; at stop it's been stopped). The hash detects a Windows device/
-    // default swap between recordings; idleGap detects a cold-after-gap device.
+    // ── Diagnostics: device fingerprint + settings captured at START ──
     const track = this.rawStream.getAudioTracks()[0];
     const st: MediaTrackSettings = track ? track.getSettings() : {};
     const idStr = `${st.deviceId || ''}|${(st as any).groupId || ''}|${track?.label || ''}`;
@@ -330,7 +333,100 @@ export class AudioCapture {
     }
     dlog(`[AudioCapture] Mic granted: dev=${this.startDiag.dev}·${hash}${deviceChanged ? ' CHANGED' : ''} gap=${this.startDiag.gapS}s age=${this.startDiag.ageS}s rate=${st.sampleRate} agc=${(st as any).autoGainControl}`);
 
-    this.rawSource = ctx.createMediaStreamSource(this.rawStream);
+    // Register the device-change listener exactly once per instance.
+    // On a device change we release the warm stream so the next recording
+    // re-acquires the (possibly new default) device.
+    if (!this.deviceChangeListenerAdded) {
+      this.deviceChangeListenerAdded = true;
+      try {
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+          dlog('[AudioCapture] devicechange event — releasing warm mic stream');
+          try { this.releaseMicStream(); } catch { /* ok */ }
+        });
+      } catch (e) {
+        console.warn('[AudioCapture] Could not add devicechange listener (non-fatal):', e);
+      }
+    }
+
+    return false; // wasWarm
+  }
+
+  /**
+   * Stop all tracks on the warm mic stream and clear it so the OS mic
+   * indicator turns off. Called by the idle-release timer and on device change.
+   */
+  private releaseMicStream(): void {
+    if (this.idleReleaseTimer) {
+      clearTimeout(this.idleReleaseTimer);
+      this.idleReleaseTimer = undefined;
+    }
+    if (this.rawStream) {
+      this.rawStream.getTracks().forEach(t => t.stop());
+      this.rawStream = undefined;
+      dlog('[AudioCapture] mic released after idle');
+    }
+  }
+
+  /**
+   * Schedule the mic stream to be released after IDLE_RELEASE_MS of inactivity.
+   * Clears any existing timer first so repeated calls reset the countdown.
+   */
+  private scheduleIdleRelease(): void {
+    if (this.idleReleaseTimer) {
+      clearTimeout(this.idleReleaseTimer);
+      this.idleReleaseTimer = undefined;
+    }
+    this.idleReleaseTimer = setTimeout(() => {
+      this.idleReleaseTimer = undefined;
+      this.releaseMicStream();
+    }, AudioCapture.IDLE_RELEASE_MS);
+    dlog(`[AudioCapture] idle-release timer set (${AudioCapture.IDLE_RELEASE_MS / 1000}s)`);
+  }
+
+  /** Fully tear down the persistent raw engine (recovery / unmount). */
+  async teardownRawEngine(): Promise<void> {
+    if (this.idleReleaseTimer) { clearTimeout(this.idleReleaseTimer); this.idleReleaseTimer = undefined; }
+    if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
+    if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
+    if (this.keepAliveNode) { try { this.keepAliveNode.stop(); this.keepAliveNode.disconnect(); } catch { /* ok */ } this.keepAliveNode = undefined; }
+    if (this.rawSink) { try { this.rawSink.disconnect(); } catch { /* ok */ } this.rawSink = undefined; }
+    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
+    if (this.rawContext && this.rawContext.state !== 'closed') { try { await this.rawContext.close(); } catch { /* ok */ } }
+    this.rawContext = undefined;
+    this.pcmChunks = [];
+    dlog('[AudioCapture] Raw engine torn down');
+  }
+
+  /**
+   * Start recording raw PCM via AudioWorklet on the persistent engine.
+   * The context+worklet+keep-alive persist across recordings (suspended between);
+   * the mic stream is now ALSO kept warm between recordings (released after
+   * IDLE_RELEASE_MS idle). If the stream was already warm, the capture-ready cue
+   * fires immediately — no dead window. If cold (first use or after idle release),
+   * the existing energy-gate path applies unchanged.
+   */
+  async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
+    this.onAudioLevel = onAudioLevel;
+
+    // Clear any pending idle-release timer — we're about to use the mic again.
+    if (this.idleReleaseTimer) {
+      clearTimeout(this.idleReleaseTimer);
+      this.idleReleaseTimer = undefined;
+    }
+
+    // Reset capture-ready tracking for this recording (timestamp ≈ keypress).
+    this.captureReadyFired = false;
+    this.captureReadySamples = 0;
+    this.captureStartTs = Date.now();
+
+    await this.ensureRawEngine();
+    const ctx = this.rawContext!;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    // Reuse the warm mic stream if possible; otherwise acquire fresh (cold).
+    const wasWarm = await this.ensureMicStream();
+
+    this.rawSource = ctx.createMediaStreamSource(this.rawStream!);
 
     this.pcmChunks = [];
     this.workletMsgCount = 0;
@@ -346,20 +442,25 @@ export class AudioCapture {
       let sumSq = 0;
       for (let i = 0; i < chunk.length; i++) { const v = chunk[i]; sumSq += v * v; }
       const rms = chunk.length ? Math.sqrt(sumSq / chunk.length) : 0;
-      this.maybeFireCaptureReady(chunk.length, rms, readySamplesNeeded);
+      if (!wasWarm) this.maybeFireCaptureReady(chunk.length, rms, readySamplesNeeded);
     };
     this.rawSource.connect(this.rawWorklet);
     // Give the worklet a path to the destination (silent sink) so the graph
     // reliably pulls the mic through it every quantum. Worklet writes no output → silent.
     if (this.rawSink) this.rawWorklet.connect(this.rawSink);
 
-    // Safety net: always emit a "talk now" cue even if the energy gate never
-    // resolves (a very quiet room, or a device that never clears track.muted).
-    // Last-resort (~2s); the energy path fires first the moment real audio
-    // arrives. Cleared the instant the real signal fires (or on stop).
-    this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), AudioCapture.READY_FALLBACK_MS);
+    if (wasWarm) {
+      // Device was already delivering audio — fire the cue immediately so the
+      // user can speak without waiting for the energy gate.
+      this.fireCaptureReady('warm');
+    } else {
+      // Cold first acquisition (or after idle release / device change). Keep
+      // the existing energy-gate path: fire when ~250ms of above-floor frames
+      // have flowed, with a 2s fallback in case energy never crosses.
+      this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), AudioCapture.READY_FALLBACK_MS);
+    }
 
-    dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination)`);
+    dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination, warm=${wasWarm})`);
   }
 
   /**
@@ -409,7 +510,9 @@ export class AudioCapture {
    * Stop WebGPU recording: collect PCM chunks, resample to 16kHz only if the
    * context didn't honor 16kHz. Returns the PCM plus the peak amplitude (so the
    * caller can detect a silent/wedged capture). Keeps the engine alive
-   * (suspended) — does NOT close the context.
+   * (suspended) — does NOT close the context. Does NOT stop the mic stream;
+   * instead schedules an idle-release timer so the stream stays warm for the
+   * next recording but turns off after IDLE_RELEASE_MS of inactivity.
    */
   async stopRawRecording(): Promise<{ pcm: Float32Array; sampleRate: number; peak: number; rms: number; diag: Record<string, any> }> {
     const rate = this.rawContextRate || RAW_PCM_SAMPLE_RATE;
@@ -426,11 +529,13 @@ export class AudioCapture {
       msgs: this.workletMsgCount,
     };
 
-    // Release per-recording nodes + mic, but keep context/worklet/keep-alive.
+    // Release per-recording nodes, but keep context/worklet/keep-alive AND the
+    // mic stream (warm-mic optimisation). The stream is released by the idle
+    // timer (scheduleIdleRelease below) after IDLE_RELEASE_MS of inactivity.
     if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
     if (this.rawWorklet) { this.rawWorklet.port.onmessage = null; try { this.rawWorklet.disconnect(); } catch { /* ok */ } this.rawWorklet = undefined; }
     if (this.rawSource) { try { this.rawSource.disconnect(); } catch { /* ok */ } this.rawSource = undefined; }
-    if (this.rawStream) { this.rawStream.getTracks().forEach(t => t.stop()); this.rawStream = undefined; }
+    // NOTE: rawStream is intentionally NOT stopped here — kept warm for next recording.
 
     // Concatenate captured chunks
     const totalLength = this.pcmChunks.reduce((sum, c) => sum + c.length, 0);
@@ -488,11 +593,16 @@ export class AudioCapture {
     }
 
     this.lastStopAt = Date.now(); // mark for next recording's idle-gap calc
+
+    // Keep the mic stream warm; release it after inactivity.
+    this.scheduleIdleRelease();
+
     return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE, peak, rms, diag };
   }
 
   cleanup(): void {
     if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
+    if (this.idleReleaseTimer) { clearTimeout(this.idleReleaseTimer); this.idleReleaseTimer = undefined; }
     this.captureReadyFired = false;
     if (this.animationId !== undefined) {
       cancelAnimationFrame(this.animationId);
