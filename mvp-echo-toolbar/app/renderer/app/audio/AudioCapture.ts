@@ -74,6 +74,19 @@ export class AudioCapture {
     registerProcessor('pcm-capture', PcmCaptureProcessor);
   `;
 
+  // Readiness gate energy floor: a captured chunk must carry RMS above this to
+  // count as "the mic is delivering real audio". Below it = the device's
+  // unmute/AGC cold-ramp (near-digital-silence quanta) that previously tripped
+  // the frame-COUNT gate and fired the "talk now" cue into the dead window —
+  // the user then spoke into nothing (empty result, voice lost). Conservative
+  // starting value; TUNE from the logged `capture-ready via energy ... rms=`
+  // distribution per device. The fallback timer guarantees a cue if energy
+  // never crosses (e.g. a very quiet room), so over-waiting is the safe failure.
+  private static readonly READY_ENERGY_FLOOR = 0.005;
+  // Last-resort cue if the energy gate never resolves. ~2s comfortably exceeds a
+  // typical headset unmute ramp, so even the fallback lands on a live device.
+  private static readonly READY_FALLBACK_MS = 2000;
+
 
   getStream(): MediaStream | undefined {
     return this.stream;
@@ -327,42 +340,68 @@ export class AudioCapture {
       this.workletMsgCount++;
       const chunk = e.data as Float32Array;
       this.pcmChunks.push(chunk);
-      this.maybeFireCaptureReady(chunk.length, readySamplesNeeded);
+      // Per-chunk RMS for the readiness gate. Cheap (~128 samples/quantum).
+      // ENERGY — not mere frame arrival — is what tells us the mic is actually
+      // delivering audio rather than streaming cold-ramp silence.
+      let sumSq = 0;
+      for (let i = 0; i < chunk.length; i++) { const v = chunk[i]; sumSq += v * v; }
+      const rms = chunk.length ? Math.sqrt(sumSq / chunk.length) : 0;
+      this.maybeFireCaptureReady(chunk.length, rms, readySamplesNeeded);
     };
     this.rawSource.connect(this.rawWorklet);
     // Give the worklet a path to the destination (silent sink) so the graph
     // reliably pulls the mic through it every quantum. Worklet writes no output → silent.
     if (this.rawSink) this.rawWorklet.connect(this.rawSink);
 
-    // Safety net: always emit a "talk now" cue even if the readiness gate never
-    // resolves (e.g. a device that never clears track.muted) — better a slightly
-    // early cue than none. Cleared the instant the real signal fires (or on stop).
-    this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), 1500);
+    // Safety net: always emit a "talk now" cue even if the energy gate never
+    // resolves (a very quiet room, or a device that never clears track.muted).
+    // Last-resort (~2s); the energy path fires first the moment real audio
+    // arrives. Cleared the instant the real signal fires (or on stop).
+    this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), AudioCapture.READY_FALLBACK_MS);
 
     dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination)`);
   }
 
   /**
-   * Fire the capture-ready cue once enough frames have flowed WHILE UNMUTED.
-   * Frames received while the track reports muted (the headset's auto-unmute
-   * transition) are NOT counted — so "ready" means ~250ms of genuinely-live
-   * audio, which is exactly the dead window we don't want the user speaking into.
+   * Fire the capture-ready cue once ~250ms of ENERGY-BEARING frames have flowed
+   * while the track is unmuted. TWO gates, both required:
+   *   1. track.muted === false       — the headset cleared its mute transition.
+   *   2. per-chunk RMS > floor        — the mic is actually delivering audio,
+   *                                     not streaming the unmute/AGC cold-ramp.
+   * Gate #2 is the fix for the dead-window empties: frame ARRIVAL alone tripped
+   * the old gate during the silent ramp, so "talk now" fired before the device
+   * was live and the user's speech was lost. Counting only above-floor frames
+   * means "ready" == genuinely-live audio. The fallback timer still guarantees a
+   * cue if energy never crosses (very quiet room), so over-waiting is the safe
+   * failure — never an early false "go".
    */
-  private maybeFireCaptureReady(n: number, needed: number): void {
+  private maybeFireCaptureReady(n: number, rms: number, needed: number): void {
     if (this.captureReadyFired) return;
     const track = this.rawStream?.getAudioTracks?.()[0];
-    if (track && track.muted) return; // still mid-unmute — don't say "talk now" yet
+    if (track && track.muted) return;                    // still mid-unmute
+    if (rms < AudioCapture.READY_ENERGY_FLOOR) {
+      // Below the floor = cold-ramp silence, or a gap after a stray transient.
+      // RESET so "ready" requires ~250ms of CONTIGUOUS above-floor audio — a
+      // record-keypress click plus scattered ramp energy can't sum their way to
+      // ready; only the device steadily delivering real audio (past the ramp)
+      // can. This is the guard against low-level/transient energy firing the cue
+      // early, which a plain absolute floor alone would miss.
+      this.captureReadySamples = 0;
+      return;
+    }
     this.captureReadySamples += n;
-    if (this.captureReadySamples >= needed) this.fireCaptureReady('frames');
+    if (this.captureReadySamples >= needed) this.fireCaptureReady('energy', rms);
   }
 
   /** Mark capture live, clear the fallback timer, notify CaptureApp exactly once. */
-  private fireCaptureReady(via: string): void {
+  private fireCaptureReady(via: string, rms = 0): void {
     if (this.captureReadyFired) return;
     this.captureReadyFired = true;
     if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
     const latencyMs = Date.now() - this.captureStartTs;
-    dlog(`[AudioCapture] capture-ready via ${via} after ${latencyMs}ms`);
+    // Log via + rms so the energy floor can be tuned from real-device data
+    // (and so a 'timeout' fire — the device never crossed the floor — is visible).
+    dlog(`[AudioCapture] capture-ready via ${via} after ${latencyMs}ms (rms=${rms.toFixed(4)})`);
     try { this.onCaptureReady?.(latencyMs); } catch { /* ok */ }
   }
 
