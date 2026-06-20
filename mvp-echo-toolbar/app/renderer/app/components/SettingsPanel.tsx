@@ -101,6 +101,8 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
   );
 }
 
+type MicReadinessMode = 'keep-ready' | 'release-each';
+
 export default function SettingsPanel() {
   const [endpointUrl, setEndpointUrl] = useState('http://192.168.1.10:20300/v1/audio/transcriptions');
   const [apiKey, setApiKey] = useState('');
@@ -109,6 +111,7 @@ export default function SettingsPanel() {
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'testing' | 'connected'>('disconnected');
   const [configLoaded, setConfigLoaded] = useState(false);
   const [gpuInfo, setGpuInfo] = useState<{ available: boolean; adapterName?: string; error?: string } | null>(null);
+  const [micReadinessMode, setMicReadinessMode] = useState<MicReadinessMode>('keep-ready');
   const ipcRef = useRef<any>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Mirror selectedModelId so fetchModels can reconcile state without
@@ -241,6 +244,15 @@ export default function SettingsPanel() {
     loadConfig().then(() => fetchModels());
   }, [fetchModels]);
 
+  // Load mic readiness mode from app-config on mount
+  useEffect(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) return;
+    ipc.invoke('app-config:get').then((cfg: any) => {
+      if (cfg?.micReadinessMode) setMicReadinessMode(cfg.micReadinessMode as MicReadinessMode);
+    }).catch(() => {});
+  }, []);
+
   // Reconcile model "loaded" state when selectedModelId changes.
   // (fetchModels also reconciles on each fetch — this catches selection
   //  changes that don't trigger a re-fetch.)
@@ -279,6 +291,15 @@ export default function SettingsPanel() {
       setConnectionStatus('disconnected');
     }
   }, [endpointUrl, apiKey, fetchModels]);
+
+  const handleMicReadinessMode = useCallback(async (mode: MicReadinessMode) => {
+    setMicReadinessMode(mode);
+    const ipc = ipcRef.current;
+    if (!ipc) return;
+    ipc.invoke('app-config:set', { micReadinessMode: mode }).catch((err: Error) =>
+      console.warn('Failed to save micReadinessMode:', err)
+    );
+  }, []);
 
   const handleSelectModel = useCallback(async (model: ModelOption) => {
     if (model.state === 'switching' || model.state === 'downloading') return;
@@ -479,6 +500,41 @@ export default function SettingsPanel() {
           {localAllModels.map(model => (
             <ModelCard key={model.id} model={model} onSelect={handleSelectModel} />
           ))}
+        </div>
+
+        {/* Microphone readiness */}
+        <div>
+          <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
+            Microphone Readiness
+          </label>
+          <button
+            onClick={() => handleMicReadinessMode('keep-ready')}
+            className={`w-full flex items-center px-2 py-1 rounded transition-colors text-left mb-0.5 ${
+              micReadinessMode === 'keep-ready' ? 'bg-primary/10' : 'hover:bg-muted/50'
+            }`}
+          >
+            <div className="flex-1 flex items-center gap-1.5 min-w-0">
+              {micReadinessMode === 'keep-ready'
+                ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                : <span className="w-1.5 h-1.5 rounded-full border border-muted-foreground/40 shrink-0" />}
+              <span className="text-[10px] text-foreground">Keep ready</span>
+              <span className="text-[8px] text-muted-foreground ml-1">— warm stream, instant repeats, releases after 30s idle</span>
+            </div>
+          </button>
+          <button
+            onClick={() => handleMicReadinessMode('release-each')}
+            className={`w-full flex items-center px-2 py-1 rounded transition-colors text-left ${
+              micReadinessMode === 'release-each' ? 'bg-primary/10' : 'hover:bg-muted/50'
+            }`}
+          >
+            <div className="flex-1 flex items-center gap-1.5 min-w-0">
+              {micReadinessMode === 'release-each'
+                ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                : <span className="w-1.5 h-1.5 rounded-full border border-muted-foreground/40 shrink-0" />}
+              <span className="text-[10px] text-foreground">Release after each use</span>
+              <span className="text-[8px] text-muted-foreground ml-1">— OS mic indicator off between recordings</span>
+            </div>
+          </button>
         </div>
 
       </div>

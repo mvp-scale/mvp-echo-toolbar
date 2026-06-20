@@ -63,7 +63,7 @@ if (DIAG_ENABLED) {
 
 function loadAppConfig() {
   const configPath = path.join(app.getPath('userData'), 'app-config.json');
-  const defaults = { shortcut: 'CommandOrControl+Alt+Z' };
+  const defaults = { shortcut: 'CommandOrControl+Alt+Z', micReadinessMode: 'keep-ready' };
 
   try {
     if (fs.existsSync(configPath)) {
@@ -636,6 +636,26 @@ ipcMain.handle('welcome:set-preference', async (_event, preference) => {
 
 ipcMain.handle('app:get-version', async () => {
   return app.getVersion();
+});
+
+// App config get/set — generic key-value access to app-config.json.
+// Reuses the same file as the shortcut config, with safe merge-on-write.
+ipcMain.handle('app-config:get', async () => {
+  return loadAppConfig();
+});
+
+ipcMain.handle('app-config:set', async (_event, updates) => {
+  const configPath = path.join(app.getPath('userData'), 'app-config.json');
+  try {
+    const current = loadAppConfig();
+    const next = { ...current, ...updates };
+    fs.writeFileSync(configPath, JSON.stringify(next, null, 2), 'utf8');
+    log('App config updated: ' + JSON.stringify(next));
+    return { success: true };
+  } catch (e) {
+    log('Failed to write app-config.json: ' + (e && e.message ? e.message : e));
+    return { success: false, error: e && e.message };
+  }
 });
 
 ipcMain.handle('welcome:close', async () => {

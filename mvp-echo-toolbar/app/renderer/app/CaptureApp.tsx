@@ -99,6 +99,17 @@ export default function CaptureApp() {
       } catch (e) {
         console.warn('CaptureApp: Failed to load config:', e);
       }
+
+      // Apply mic readiness mode from app-config (separate from cloud config).
+      try {
+        const appConfig = await ipc.invoke('app-config:get');
+        if (appConfig?.micReadinessMode) {
+          audioCapture.current.setMicReleaseMode(appConfig.micReadinessMode);
+          console.log(`CaptureApp: micReadinessMode=${appConfig.micReadinessMode}`);
+        }
+      } catch (e) {
+        console.warn('CaptureApp: Failed to load app-config:', e);
+      }
     };
 
     loadConfig();
@@ -264,6 +275,13 @@ export default function CaptureApp() {
         if (wasRawPcm && orchestratorRef.current.isReady()) {
           // ── WebGPU LOCAL PATH ──
           console.log('CaptureApp: Stopping raw PCM capture...');
+          // Re-read mic-readiness at stop time so a Settings change applies
+          // without an app restart (the warm/release decision is made here).
+          try {
+            const cfgIpc = (window as any).electron?.ipcRenderer;
+            const ac = cfgIpc ? await cfgIpc.invoke('app-config:get') : null;
+            if (ac?.micReadinessMode) audioCapture.current.setMicReleaseMode(ac.micReadinessMode);
+          } catch { /* ok */ }
           const { pcm, sampleRate, peak, rms, diag } = await audioCapture.current.stopRawRecording();
           const recordedSec = pcm.length / sampleRate;
           console.log(`CaptureApp: Got ${pcm.length} samples (${recordedSec.toFixed(1)}s), peak=${peak.toFixed(4)}, rms=${rms.toFixed(4)}`);

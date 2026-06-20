@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld('electron', {
         'webgpu:check-availability', 'webgpu:model-status',
         'webgpu:model-ready',
         'diag:enabled', 'diag:record', 'diag:save-audio',
+        'app-config:get', 'app-config:set',
       ];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);

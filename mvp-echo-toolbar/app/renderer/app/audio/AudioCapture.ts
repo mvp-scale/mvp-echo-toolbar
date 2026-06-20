@@ -70,6 +70,17 @@ export class AudioCapture {
   private static readonly IDLE_RELEASE_MS = 30000; // 30s idle before releasing mic
   private deviceChangeListenerAdded = false;        // guard: add listener only once
 
+  // ── Mic release mode ──
+  // 'keep-ready'   → warm stream, instant repeat recordings, auto-release after 30s idle (default)
+  // 'release-each' → release mic immediately after every recording (OS indicator off between uses)
+  private micReleaseMode: 'keep-ready' | 'release-each' = 'keep-ready';
+
+  /** Update the mic release mode. Takes effect on the next stopRawRecording(). */
+  setMicReleaseMode(mode: 'keep-ready' | 'release-each'): void {
+    this.micReleaseMode = mode;
+    dlog(`[AudioCapture] micReleaseMode set to '${mode}'`);
+  }
+
   private static readonly WORKLET_CODE = `
     class PcmCaptureProcessor extends AudioWorkletProcessor {
       process(inputs) {
@@ -594,8 +605,13 @@ export class AudioCapture {
 
     this.lastStopAt = Date.now(); // mark for next recording's idle-gap calc
 
-    // Keep the mic stream warm; release it after inactivity.
-    this.scheduleIdleRelease();
+    // Release mode: 'release-each' turns off the OS mic indicator immediately;
+    // 'keep-ready' keeps the stream warm and releases after IDLE_RELEASE_MS.
+    if (this.micReleaseMode === 'release-each') {
+      this.releaseMicStream();
+    } else {
+      this.scheduleIdleRelease();
+    }
 
     return { pcm, sampleRate: RAW_PCM_SAMPLE_RATE, peak, rms, diag };
   }
