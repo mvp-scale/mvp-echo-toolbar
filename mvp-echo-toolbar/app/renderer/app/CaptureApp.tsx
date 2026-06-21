@@ -100,12 +100,16 @@ export default function CaptureApp() {
         console.warn('CaptureApp: Failed to load config:', e);
       }
 
-      // Apply mic readiness mode from app-config (separate from cloud config).
+      // Apply mic readiness mode and idle duration from app-config (separate from cloud config).
       try {
         const appConfig = await ipc.invoke('app-config:get');
         if (appConfig?.micReadinessMode) {
           audioCapture.current.setMicReleaseMode(appConfig.micReadinessMode);
           console.log(`CaptureApp: micReadinessMode=${appConfig.micReadinessMode}`);
+        }
+        if (typeof appConfig?.micIdleReleaseMs === 'number') {
+          audioCapture.current.setIdleReleaseMs(appConfig.micIdleReleaseMs);
+          console.log(`CaptureApp: micIdleReleaseMs=${appConfig.micIdleReleaseMs}`);
         }
       } catch (e) {
         console.warn('CaptureApp: Failed to load app-config:', e);
@@ -281,6 +285,7 @@ export default function CaptureApp() {
             const cfgIpc = (window as any).electron?.ipcRenderer;
             const ac = cfgIpc ? await cfgIpc.invoke('app-config:get') : null;
             if (ac?.micReadinessMode) audioCapture.current.setMicReleaseMode(ac.micReadinessMode);
+            if (typeof ac?.micIdleReleaseMs === 'number') audioCapture.current.setIdleReleaseMs(ac.micIdleReleaseMs);
           } catch { /* ok */ }
           const { pcm, sampleRate, peak, rms, diag } = await audioCapture.current.stopRawRecording();
           const recordedSec = pcm.length / sampleRate;

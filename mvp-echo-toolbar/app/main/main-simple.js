@@ -63,7 +63,7 @@ if (DIAG_ENABLED) {
 
 function loadAppConfig() {
   const configPath = path.join(app.getPath('userData'), 'app-config.json');
-  const defaults = { shortcut: 'CommandOrControl+Alt+Z', micReadinessMode: 'keep-ready' };
+  const defaults = { shortcut: 'CommandOrControl+Alt+Z', micReadinessMode: 'keep-ready', micIdleReleaseMs: 30000 };
 
   try {
     if (fs.existsSync(configPath)) {

@@ -112,6 +112,7 @@ export default function SettingsPanel() {
   const [configLoaded, setConfigLoaded] = useState(false);
   const [gpuInfo, setGpuInfo] = useState<{ available: boolean; adapterName?: string; error?: string } | null>(null);
   const [micReadinessMode, setMicReadinessMode] = useState<MicReadinessMode>('keep-ready');
+  const [micIdleReleaseMs, setMicIdleReleaseMs] = useState<number>(30000);
   const ipcRef = useRef<any>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Mirror selectedModelId so fetchModels can reconcile state without
@@ -244,12 +245,13 @@ export default function SettingsPanel() {
     loadConfig().then(() => fetchModels());
   }, [fetchModels]);
 
-  // Load mic readiness mode from app-config on mount
+  // Load mic readiness mode and idle duration from app-config on mount
   useEffect(() => {
     const ipc = (window as any).electron?.ipcRenderer;
     if (!ipc) return;
     ipc.invoke('app-config:get').then((cfg: any) => {
       if (cfg?.micReadinessMode) setMicReadinessMode(cfg.micReadinessMode as MicReadinessMode);
+      if (typeof cfg?.micIdleReleaseMs === 'number') setMicIdleReleaseMs(cfg.micIdleReleaseMs);
     }).catch(() => {});
   }, []);
 
@@ -298,6 +300,15 @@ export default function SettingsPanel() {
     if (!ipc) return;
     ipc.invoke('app-config:set', { micReadinessMode: mode }).catch((err: Error) =>
       console.warn('Failed to save micReadinessMode:', err)
+    );
+  }, []);
+
+  const handleMicIdleReleaseMs = useCallback((ms: number) => {
+    setMicIdleReleaseMs(ms);
+    const ipc = ipcRef.current;
+    if (!ipc) return;
+    ipc.invoke('app-config:set', { micIdleReleaseMs: ms }).catch((err: Error) =>
+      console.warn('Failed to save micIdleReleaseMs:', err)
     );
   }, []);
 
@@ -518,7 +529,7 @@ export default function SettingsPanel() {
                 ? <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
                 : <span className="w-1.5 h-1.5 rounded-full border border-muted-foreground/40 shrink-0" />}
               <span className="text-[10px] text-foreground">Keep ready</span>
-              <span className="text-[8px] text-muted-foreground ml-1">— warm stream, instant repeats, releases after 30s idle</span>
+              <span className="text-[8px] text-muted-foreground ml-1">— warm stream, instant repeats, auto-releases after idle</span>
             </div>
           </button>
           <button
@@ -535,6 +546,32 @@ export default function SettingsPanel() {
               <span className="text-[8px] text-muted-foreground ml-1">— OS mic indicator off between recordings</span>
             </div>
           </button>
+          {micReadinessMode === 'keep-ready' && (
+            <div className="flex items-center gap-1.5 mt-1 px-2">
+              <span className="text-[9px] text-muted-foreground shrink-0">Hold for</span>
+              {([
+                { label: '30s', ms: 30000 },
+                { label: '1m',  ms: 60000 },
+                { label: '2m',  ms: 120000 },
+                { label: '5m',  ms: 300000 },
+              ] as const).map(({ label, ms }) => (
+                <button
+                  key={ms}
+                  onClick={() => handleMicIdleReleaseMs(ms)}
+                  className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
+                    micIdleReleaseMs === ms
+                      ? 'bg-primary/10 text-foreground'
+                      : 'hover:bg-muted/50 text-muted-foreground'
+                  }`}
+                >
+                  {micIdleReleaseMs === ms && (
+                    <span className="inline-block w-1 h-1 rounded-full bg-green-400 mr-0.5 align-middle" />
+                  )}
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
       </div>

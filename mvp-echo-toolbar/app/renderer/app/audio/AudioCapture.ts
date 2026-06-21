@@ -67,11 +67,12 @@ export class AudioCapture {
   // can skip the OS device cold-open (saves ~1-2s). After IDLE_RELEASE_MS of
   // inactivity the stream is released so the OS mic indicator turns off.
   private idleReleaseTimer?: ReturnType<typeof setTimeout>;
-  private static readonly IDLE_RELEASE_MS = 30000; // 30s idle before releasing mic
+  private static readonly IDLE_RELEASE_MS = 30000; // 30s idle before releasing mic (default)
+  private idleReleaseMs: number = AudioCapture.IDLE_RELEASE_MS; // instance-configurable duration
   private deviceChangeListenerAdded = false;        // guard: add listener only once
 
   // ── Mic release mode ──
-  // 'keep-ready'   → warm stream, instant repeat recordings, auto-release after 30s idle (default)
+  // 'keep-ready'   → warm stream, instant repeat recordings, auto-release after idleReleaseMs (default)
   // 'release-each' → release mic immediately after every recording (OS indicator off between uses)
   private micReleaseMode: 'keep-ready' | 'release-each' = 'keep-ready';
 
@@ -79,6 +80,16 @@ export class AudioCapture {
   setMicReleaseMode(mode: 'keep-ready' | 'release-each'): void {
     this.micReleaseMode = mode;
     dlog(`[AudioCapture] micReleaseMode set to '${mode}'`);
+  }
+
+  /**
+   * Set how long the mic stream is held warm before auto-releasing in 'keep-ready' mode.
+   * Takes effect on the next stopRawRecording(). Ignored if ms is non-finite or <= 0.
+   */
+  setIdleReleaseMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    this.idleReleaseMs = Math.max(5000, ms);
+    dlog(`[AudioCapture] idleReleaseMs set to ${this.idleReleaseMs}ms`);
   }
 
   private static readonly WORKLET_CODE = `
@@ -390,8 +401,8 @@ export class AudioCapture {
     this.idleReleaseTimer = setTimeout(() => {
       this.idleReleaseTimer = undefined;
       this.releaseMicStream();
-    }, AudioCapture.IDLE_RELEASE_MS);
-    dlog(`[AudioCapture] idle-release timer set (${AudioCapture.IDLE_RELEASE_MS / 1000}s)`);
+    }, this.idleReleaseMs);
+    dlog(`[AudioCapture] idle-release timer set (${this.idleReleaseMs / 1000}s)`);
   }
 
   /** Fully tear down the persistent raw engine (recovery / unmount). */
