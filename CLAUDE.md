@@ -42,6 +42,7 @@ $ aoa peek 2dkfzw 2dkg19                 # read multiple method bodies in one ca
 or when peek shows `--`.
 <!-- /aOa-guidance -->
 
+
 # CRITICAL: aOa Search Override
 
 **ALWAYS use `aoa grep` instead of Grep/Glob tools.**
