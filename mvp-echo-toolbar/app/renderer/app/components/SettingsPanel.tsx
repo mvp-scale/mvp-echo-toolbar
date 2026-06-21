@@ -547,13 +547,16 @@ export default function SettingsPanel() {
             </div>
           </button>
           {micReadinessMode === 'keep-ready' && (
-            <div className="flex items-center gap-1.5 mt-1 px-2">
+            <div className="flex flex-wrap items-center gap-1.5 mt-1 px-2">
               <span className="text-[9px] text-muted-foreground shrink-0">Hold for</span>
               {([
                 { label: '30s', ms: 30000 },
                 { label: '1m',  ms: 60000 },
                 { label: '2m',  ms: 120000 },
                 { label: '5m',  ms: 300000 },
+                { label: '10m', ms: 600000 },
+                { label: '30m', ms: 1800000 },
+                { label: '1h',  ms: 3600000 },
               ] as const).map(({ label, ms }) => (
                 <button
                   key={ms}
