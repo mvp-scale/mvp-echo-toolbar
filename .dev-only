@@ -13,6 +13,11 @@ WIP-*.md
 TESTING.md
 GITHUB_ACTIONS_GUIDE.md
 
+# Session handoff + internal investigation reports (dev-only — never ship to main)
+mvp-echo-toolbar/BRIDGE.md
+mvp-echo-toolbar/STARTUP-REGRESSION-REPORT.md
+mvp-echo-toolbar/RELEASE-INSTABILITY-GAP-ANALYSIS.md
+
 # Claude Code configuration (dev tooling)
 .claude/
 CLAUDE.md
