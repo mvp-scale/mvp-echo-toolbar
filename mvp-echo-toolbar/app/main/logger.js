@@ -16,6 +16,7 @@ const MAX_LOG_BYTES = 5 * 1024 * 1024; // 5 MB ceiling within a session
 let queue = [];
 let flushScheduled = false;
 let writtenBytes = 0;
+let writing = false;   // an fs.appendFile is currently in flight
 
 function scheduleFlush() {
   if (flushScheduled) return;
@@ -25,9 +26,13 @@ function scheduleFlush() {
 
 function flushQueue() {
   flushScheduled = false;
-  if (queue.length === 0) return;
+  // Only ONE append may be in flight. fs.appendFile does not serialize
+  // overlapping calls, so a second flush landing while the first is still
+  // writing interleaves the two buffers and corrupts lines mid-character.
+  if (writing || queue.length === 0) return;
   const batch = queue.join('');
   queue = [];
+  writing = true;
 
   // Bound the file: a long session (days of uptime) would otherwise grow it
   // without limit. At the cap, keep the most recent half rather than wiping to
@@ -46,13 +51,23 @@ function flushQueue() {
       }
     }
     writtenBytes += Buffer.byteLength(batch);
-    fs.appendFile(logPath, batch, () => { /* ignore write errors */ });
+    fs.appendFile(logPath, batch, () => {
+      writing = false;
+      // Anything queued while this write was in flight goes out next.
+      if (queue.length > 0) scheduleFlush();
+    });
   } catch (err) {
-    // Ignore log write errors
+    writing = false;
   }
 }
 
-function log(message) {
+function log(...parts) {
+  // Variadic: callers pass `log('label:', value)` in several places and the
+  // single-parameter version silently dropped everything after the first,
+  // producing log lines that ended in a bare colon.
+  const message = parts
+    .map((p) => (typeof p === 'string' ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })()))
+    .join(' ');
   const timestamp = new Date().toISOString();
   console.log(message);
   queue.push(`[${timestamp}] ${message}\n`);
