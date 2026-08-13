@@ -80,18 +80,47 @@ class WebGpuBridgeAdapter {
     // Check if model is downloaded
     const hasModel = this.activeModelId && this.modelManager.isModelDownloaded(this.activeModelId);
 
-    // Check GPU capability (use cached value if available)
-    if (!this._gpuCapability) {
-      this._gpuCapability = await this._probeGpu();
+    // Check GPU capability. Only cache a DETERMINATE result: an indeterminate
+    // probe (hidden window not up yet) must not be frozen in as "no GPU" for
+    // the rest of the session -- _probeGpu() itself caches only on success.
+    const capability = this._gpuCapability || await this._probeGpu();
+    if (!capability.indeterminate) {
+      this._gpuCapability = capability;
     }
 
-    if (!this._gpuCapability || !this._gpuCapability.available) {
-      return { available: false, error: 'WebGPU not available on this system' };
+    if (!capability.available) {
+      return { available: false, error: capability.error || 'WebGPU not available on this system' };
     }
     if (!hasModel) {
       return { available: false, error: 'WebGPU model not downloaded' };
     }
     return { available: true };
+  }
+
+  // ── Hardware-only capability probe (three-state) ──
+
+  /**
+   * Probe whether this machine *physically* has a usable GPU, independent of
+   * whether the model happens to be loaded in the renderer right now.
+   *
+   * `isAvailable()` deliberately folds those two facts together, which makes it
+   * the wrong signal for restoring a saved model preference at startup: the
+   * "model is warm" half is structurally unknowable at that point (the renderer
+   * only reports it via an IPC sent *after* it reads the restored selection
+   * back). Keying startup selection on isAvailable() would therefore disable
+   * WebGPU on every cold boot.
+   *
+   * @returns {Promise<'available'|'unavailable'|'unknown'>}
+   *   'unknown' means the probe could not run (renderer not up yet) -- callers
+   *   should treat it as "don't know", never as "no GPU".
+   */
+  async probeGpuCapability() {
+    const capability = this._gpuCapability || await this._probeGpu();
+    if (!capability.indeterminate) {
+      this._gpuCapability = capability;
+    }
+    if (capability.available) return 'available';
+    return capability.indeterminate ? 'unknown' : 'unavailable';
   }
 
   // ── Engine Port: getHealth ──
@@ -177,7 +206,9 @@ class WebGpuBridgeAdapter {
     const hidden = this._getHiddenWindow();
     if (!hidden || hidden.isDestroyed()) {
       log('WebGpuBridgeAdapter: Cannot probe GPU -- hidden window not available');
-      return { available: false, error: 'Hidden window not ready' };
+      // indeterminate: we could not ASK, which is not the same as "no GPU".
+      // Callers must not cache or act on this as a negative result.
+      return { available: false, indeterminate: true, error: 'Hidden window not ready' };
     }
 
     try {
@@ -210,8 +241,10 @@ class WebGpuBridgeAdapter {
       log('WebGpuBridgeAdapter: GPU probe result:', JSON.stringify(result));
       return result;
     } catch (err) {
+      // executeJavaScript itself failed (renderer navigating, destroyed
+      // mid-call, ...). We never got an answer, so this is indeterminate too.
       log('WebGpuBridgeAdapter: GPU probe failed:', err.message);
-      return { available: false, error: err.message };
+      return { available: false, indeterminate: true, error: err.message };
     }
   }
 

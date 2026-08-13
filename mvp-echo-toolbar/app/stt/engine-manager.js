@@ -90,42 +90,46 @@ class EngineManager {
     // Clean up orphaned temp files from previous sessions / crashes
     this._cleanupOrphanedTempFiles();
 
+    // Probe adapters in priority order, then restore the saved model selection
+    // ONCE, at the end. (It used to be called from each branch, which meant a
+    // branch's already-computed probe result was silently discarded.)
+    let result;
+
     // Check WebGPU adapter first (best quality, local GPU)
     const webgpuResult = await this.webgpuAdapter.isAvailable();
     if (webgpuResult.available) {
       this.activeAdapter = this.webgpuAdapter;
       this.activeAdapterName = 'webgpu';
       log('EngineManager: WebGPU adapter is available and selected');
-      this._restoreModelSelection();
-      return { adapter: 'webgpu', available: true };
+      result = { adapter: 'webgpu', available: true };
+    } else {
+      // Check remote adapter
+      const remoteResult = await this.remoteAdapter.isAvailable();
+      if (remoteResult.available) {
+        this.activeAdapter = this.remoteAdapter;
+        this.activeAdapterName = 'remote';
+        log('EngineManager: Remote adapter is available and selected');
+        result = { adapter: 'remote', available: true };
+      } else {
+        // Check local sidecar
+        const localResult = await this.localSidecarAdapter.isAvailable();
+        if (localResult.available || localResult === true) {
+          this.activeAdapter = this.localSidecarAdapter;
+          this.activeAdapterName = 'local-sidecar';
+          log('EngineManager: Local sidecar adapter selected');
+          result = { adapter: 'local-sidecar', available: true };
+        } else {
+          // Fallback: keep remote as active so user can configure it via Settings
+          this.activeAdapter = this.remoteAdapter;
+          this.activeAdapterName = 'remote';
+          log('EngineManager: No adapter available yet; remote selected for configuration');
+          result = { adapter: 'remote', available: false };
+        }
+      }
     }
 
-    // Check remote adapter
-    const remoteResult = await this.remoteAdapter.isAvailable();
-    if (remoteResult.available) {
-      this.activeAdapter = this.remoteAdapter;
-      this.activeAdapterName = 'remote';
-      log('EngineManager: Remote adapter is available and selected');
-      this._restoreModelSelection();
-      return { adapter: 'remote', available: true };
-    }
-
-    // Check local sidecar
-    const localResult = await this.localSidecarAdapter.isAvailable();
-    if (localResult.available || localResult === true) {
-      this.activeAdapter = this.localSidecarAdapter;
-      this.activeAdapterName = 'local-sidecar';
-      log('EngineManager: Local sidecar adapter selected');
-      this._restoreModelSelection();
-      return { adapter: 'local-sidecar', available: true };
-    }
-
-    // Fallback: keep remote as active so user can configure it via Settings
-    this.activeAdapter = this.remoteAdapter;
-    this.activeAdapterName = 'remote';
-    log('EngineManager: No adapter available yet; remote selected for configuration');
-    this._restoreModelSelection();
-    return { adapter: 'remote', available: false };
+    await this._restoreModelSelection();
+    return result;
   }
 
   /**
@@ -149,20 +153,49 @@ class EngineManager {
    *   2. Local sidecar adapter's saved activeModelId (from local-sidecar-config.json)
    *   3. Keep the default 'local-fast'
    */
-  _restoreModelSelection() {
+  async _restoreModelSelection() {
     try {
       const remoteConfig = this.remoteAdapter.getConfig();
-      // Check WebGPU adapter's saved model first (config only, no async probe)
       const webgpuConfig = this.webgpuAdapter.getConfig();
+
+      // A saved WebGPU preference can arrive through EITHER the webgpu adapter's
+      // own config or the remote adapter's persisted selectedModel (which stores
+      // a bare model id and is matched on the "webgpu-" prefix below). Both doors
+      // must respect the same capability check, so resolve it once here.
+      // Probed lazily -- only when something actually asks for WebGPU.
+      const remoteWantsWebgpu = !!remoteConfig.selectedModel
+        && remoteConfig.isConfigured
+        && String(remoteConfig.selectedModel).startsWith('webgpu-');
+      const wantsWebgpu = (webgpuConfig.activeModelId && webgpuConfig.isConfigured) || remoteWantsWebgpu;
+      const gpuUsable = wantsWebgpu
+        ? (await this.webgpuAdapter.probeGpuCapability()) !== 'unavailable'
+        : false;
+
       if (webgpuConfig.activeModelId && webgpuConfig.isConfigured) {
-        this.selectedModelId = webgpuConfig.activeModelId;
-        this.activeAdapter = this.webgpuAdapter;
-        this.activeAdapterName = 'webgpu';
-        log('EngineManager: Restored WebGPU model selection:', this.selectedModelId);
-        return;
+        // Gate on HARDWARE capability only -- deliberately not isAvailable().
+        //
+        // isAvailable() also requires the model to be warm in the renderer,
+        // which cannot be true yet at this point: the renderer only reports it
+        // after reading this very selection back via cloud:get-config. Gating
+        // on it would disable WebGPU on every cold boot.
+        //
+        // 'unknown' (renderer not up yet) therefore means "trust the saved
+        // preference". Only a definitive 'unavailable' -- a probe that ran and
+        // found no usable GPU -- overrides the user's choice.
+        if (gpuUsable) {
+          this.selectedModelId = webgpuConfig.activeModelId;
+          this.activeAdapter = this.webgpuAdapter;
+          this.activeAdapterName = 'webgpu';
+          log('EngineManager: Restored WebGPU model selection:', this.selectedModelId);
+          return;
+        }
+        log('EngineManager: Ignoring saved WebGPU preference -- no usable GPU on this system');
       }
 
-      if (remoteConfig.selectedModel && remoteConfig.isConfigured) {
+      // Skip the remote-config branch when it names a WebGPU model we've just
+      // established this machine can't run -- otherwise the prefix match below
+      // would reactivate the adapter the check above deliberately rejected.
+      if (remoteConfig.selectedModel && remoteConfig.isConfigured && !(remoteWantsWebgpu && !gpuUsable)) {
         this.selectedModelId = remoteConfig.selectedModel;
         // Ensure the correct adapter is active for the restored model
         if (this.selectedModelId.startsWith('local-')) {
