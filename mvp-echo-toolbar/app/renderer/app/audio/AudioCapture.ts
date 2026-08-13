@@ -57,6 +57,13 @@ export class AudioCapture {
    * window where early speech gets lost (captured frames but no voice).
    */
   onCaptureReady?: (latencyMs: number) => void;
+
+  /**
+   * Fired when the mic being recorded from dies mid-capture. The recording
+   * cannot be salvaged — the caller should abort it and tell the user, rather
+   * than let it surface as a silently truncated or empty transcription.
+   */
+  onCaptureLost?: (reason: string) => void;
   private captureReadyFired = false;
   private captureReadySamples = 0;  // frames received WHILE UNMUTED (counts toward the ready threshold)
   private captureStartTs = 0;       // ms timestamp at start of this recording (≈ keypress)
@@ -377,7 +384,19 @@ export class AudioCapture {
     if (track) {
       track.onmute = () => { this.onTrackEvent?.('mute'); };
       track.onunmute = () => { this.onTrackEvent?.('unmute'); };
-      track.onended = () => { this.onTrackEvent?.('ended'); };
+      track.onended = () => {
+        this.onTrackEvent?.('ended');
+        // 'ended' on the ACTIVE track means the device we are recording FROM
+        // is gone — unplugged, disabled, or seized. Unlike `devicechange`
+        // (which carries no device identity and fires for any device in the
+        // system) this is tied to the mic actually in use, so it is the only
+        // reliable "your recording just died" signal. Without it the worklet
+        // simply stops receiving frames and the user gets a silent truncation.
+        if (this.rawWorklet) {
+          dlog('[AudioCapture] active mic track ended mid-recording — capture lost');
+          try { this.onCaptureLost?.('mic-disconnected'); } catch { /* ok */ }
+        }
+      };
     }
     dlog(`[AudioCapture] Mic granted: dev=${this.startDiag.dev}·${hash}${deviceChanged ? ' CHANGED' : ''} gap=${this.startDiag.gapS}s age=${this.startDiag.ageS}s rate=${st.sampleRate} agc=${(st as any).autoGainControl}`);
 
@@ -473,6 +492,10 @@ export class AudioCapture {
     if (this.rawContext && this.rawContext.state !== 'closed') { try { await this.rawContext.close(); } catch { /* ok */ } }
     this.rawContext = undefined;
     this.pcmChunks = [];
+    // The stream is already gone, so a deferred release has nothing left to do.
+    // Leaving the flag set would leak it into the NEXT recording and force a
+    // spurious release there, silently defeating keep-ready for that cycle.
+    this.micReleasePending = false;
     dlog('[AudioCapture] Raw engine torn down');
   }
 
@@ -480,9 +503,8 @@ export class AudioCapture {
    * Start recording raw PCM via AudioWorklet on the persistent engine.
    * The context+worklet+keep-alive persist across recordings (suspended between);
    * the mic stream is now ALSO kept warm between recordings (released after
-   * IDLE_RELEASE_MS idle). If the stream was already warm, the capture-ready cue
-   * fires immediately — no dead window. If cold (first use or after idle release),
-   * the existing energy-gate path applies unchanged.
+   * IDLE_RELEASE_MS idle). Both warm and cold acquisitions gate the capture-ready
+   * cue on real audio energy; warm just needs far less of it (see readySamplesFor).
    */
   async startRawRecording(onAudioLevel?: (level: number) => void): Promise<void> {
     this.onAudioLevel = onAudioLevel;
@@ -695,6 +717,9 @@ export class AudioCapture {
     if (this.captureReadyTimer) { clearTimeout(this.captureReadyTimer); this.captureReadyTimer = undefined; }
     if (this.idleReleaseTimer) { clearTimeout(this.idleReleaseTimer); this.idleReleaseTimer = undefined; }
     this.captureReadyFired = false;
+    // A deferred mic release must not survive a teardown that bypassed
+    // stopRawRecording() — it would fire against the NEXT recording's stream.
+    this.micReleasePending = false;
     if (this.animationId !== undefined) {
       cancelAnimationFrame(this.animationId);
       this.animationId = undefined;

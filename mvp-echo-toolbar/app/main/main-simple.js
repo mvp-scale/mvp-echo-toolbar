@@ -122,6 +122,8 @@ const MAX_RENDERER_CRASHES = 3;
 
 /** True once EngineManager has finished initializing and the hotkey can record. */
 let engineReady = false;
+/** True when startup ended in a terminal failure (no retry is pending). */
+let startupFailed = false;
 
 function getPreloadPath() {
   return path.resolve(__dirname, '../preload/preload.js');
@@ -481,6 +483,15 @@ app.whenReady().then(async () => {
     // "model not ready" branch and would instead start a recording routed to
     // the wrong (default) adapter, which then fails silently.
     if (!engineReady) {
+      if (startupFailed) {
+        // Startup is not "in progress" — it is over and it failed, with no
+        // retry. Showing "Starting up..." here would erase the error state
+        // (the only signal the user gets) and imply recovery that isn't
+        // happening. Re-assert the error instead.
+        log(`Global ${shortcutLabel} received but startup failed - staying in error state`);
+        trayManager.setState('error');
+        return;
+      }
       log(`Global ${shortcutLabel} received before engine ready - ignoring`);
       trayManager.setState('starting');
       return;
@@ -509,6 +520,7 @@ app.whenReady().then(async () => {
   // Bounded: a failed or hung load must surface, not wedge startup forever.
   const loadResult = await waitForFirstLoad(hiddenWindow);
   if (!loadResult.ok) {
+    startupFailed = true;
     rendererCrashCount++;
     log(`CRITICAL: hidden capture window failed to load (${loadResult.reason}). ` +
         `Recording is unavailable; engine init skipped. ` +

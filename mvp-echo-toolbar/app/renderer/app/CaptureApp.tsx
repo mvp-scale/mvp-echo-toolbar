@@ -434,6 +434,22 @@ export default function CaptureApp() {
       }
     };
 
+    // The mic we are recording FROM died (unplugged/disabled). The audio is
+    // unrecoverable, so abort loudly rather than let it surface as a silently
+    // truncated or empty transcription — historically the most confusing
+    // failure this app had, because it looks identical to "you said nothing".
+    audioCapture.current.onCaptureLost = (reason: string) => {
+      if (!isRecordingRef.current) return;
+      console.error(`CaptureApp: capture lost mid-recording (${reason}) — aborting`);
+      sendDiag(`capture-lost: ${reason}`);
+      requestGenRef.current++; // supersede this run so a late result can't land
+      playWarningSound();      // distinct from the completion bell
+      ilog('✗ microphone disconnected — recording lost');
+      resetState(api);
+      api.updateTrayState('error');
+      setTimeout(() => api.updateTrayState('ready'), 3000);
+    };
+
     const unsubscribe = api.onGlobalShortcutToggle(() => {
       console.log('CaptureApp: Global shortcut toggle received');
 
@@ -542,6 +558,7 @@ export default function CaptureApp() {
       console.warn = origWarn;
       navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
       audioCapture.current.onTrackEvent = undefined;
+      audioCapture.current.onCaptureLost = undefined;
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       }

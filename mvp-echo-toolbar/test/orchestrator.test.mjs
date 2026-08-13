@@ -95,6 +95,7 @@ describe('Fix 0b — teardown must settle the in-flight request', () => {
 
     await assert.rejects(
       () => withinMs(initPromise, 1000),
+      /device lost/i,
       'device-lost must reject the pending init instead of leaving it for the 900s timeout',
     );
     assert.strictEqual(orch.isLoading(), false, 'isLoading() must clear — the recovery path is gated on it');
@@ -119,6 +120,40 @@ describe('Fix 0b — teardown must settle the in-flight request', () => {
     await first.catch(() => {});
   });
 
+  test('a teardown during the pre-worker phase does not reopen the loading guard', async () => {
+    // Mutation guard: if disposeSync() cleared `loading` unconditionally, a
+    // dispose landing while initialize() is still in prepareModelCache() would
+    // reopen the guard, letting a second initialize() race the first -- two
+    // workers, ~2.5GB of model each.
+    const { orch, workers } = makeOrchestrator();
+
+    const first = orch.initialize('wasm'); // still pre-worker at this point
+    orch.dispose();                        // nothing concrete to cancel yet
+
+    await assert.rejects(() => orch.initialize('wasm'), (e) => e instanceof AlreadyLoadingError,
+      'the in-flight init still owns the loading guard');
+
+    await assert.rejects(() => withinMs(first, 1000), /cancelled/i,
+      'a teardown during cache prep must actually cancel the init');
+    assert.ok(workers.length <= 1, `must never spawn a second worker, saw ${workers.length}`);
+    assert.strictEqual(orch.isLoading(), false);
+  });
+
+  test('a successful init resolves and reports ready', async () => {
+    // The happy path had no coverage at all, yet the teardown refactor touched
+    // the same cleanup code it runs through.
+    const { orch, latest } = makeOrchestrator();
+
+    const initPromise = orch.initialize('wasm');
+    await flush();
+    latest().emit({ type: 'ready' });
+    await withinMs(initPromise, 1000);
+
+    assert.strictEqual(orch.isReady(), true);
+    assert.strictEqual(orch.isLoading(), false);
+    assert.strictEqual(latest().terminated, false, 'a healthy worker must be kept warm');
+  });
+
   test('a superseded worker cannot terminate its replacement', async () => {
     // Epoch guard (recon B): a stale init's late cleanup must not tear down a
     // newer worker and stomp its loading state.
@@ -137,9 +172,10 @@ describe('Fix 0b — teardown must settle the in-flight request', () => {
     const freshWorker = workers[1];
     assert.notStrictEqual(freshWorker, staleWorker, 'a new worker should have been created');
 
-    // The stale worker emits device-lost late. It is terminated, so a faithful
-    // fake delivers nothing — but assert the replacement survives regardless.
-    staleWorker.emit({ type: 'device-lost', reason: 'unknown' });
+    // Force delivery from the stale worker. Using emit() here would let the
+    // fake's own termination check block the message, so the test would pass
+    // even with the production supersession guard deleted — a vacuous test.
+    staleWorker.emitForced({ type: 'device-lost', reason: 'unknown' });
 
     assert.strictEqual(freshWorker.terminated, false, 'the replacement worker must not be torn down');
     assert.strictEqual(orch.isLoading(), true, 'the newer init must still be in flight');

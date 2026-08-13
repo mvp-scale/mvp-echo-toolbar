@@ -46,6 +46,14 @@ export class InferenceOrchestrator {
    */
   private pending: { reject: (err: Error) => void } | null = null;
 
+  /**
+   * Bumped by every teardown. initialize() captures it and re-checks after each
+   * await, so a dispose()/abort() arriving during the pre-worker phase (while
+   * prepareModelCache() is running, when there is no worker or pending request
+   * to cancel) still stops the init instead of silently completing.
+   */
+  private teardownEpoch = 0;
+
   constructor(createWorker?: WorkerFactory) {
     this.createWorker =
       createWorker ??
@@ -76,12 +84,18 @@ export class InferenceOrchestrator {
     if (this.modelReady) return;
 
     this.loading = true;
+    const myEpoch = this.teardownEpoch;
 
     try {
       // Always prep the cache: requests persistent storage (so the ~1.2GB blob
       // survives eviction) and migrates/validates the model-cache key. Runs even
       // when appVersion is unknown — persistence must be requested regardless.
       await prepareModelCache();
+
+      // A dispose()/abort() landing during the cache prep above had nothing to
+      // cancel (no worker, no pending request). Honour it here rather than
+      // spawning a worker and loading ~2.5GB the caller already gave up on.
+      if (this.teardownEpoch !== myEpoch) throw new Error('Initialization cancelled');
 
       // Only create a new worker if we don't already have one
       if (!this.worker) {
@@ -171,6 +185,10 @@ export class InferenceOrchestrator {
   }
 
   private disposeSync(reason?: Error): void {
+    // Signals any in-flight initialize() that it has been superseded, even if
+    // it is currently in a phase with nothing concrete to cancel.
+    this.teardownEpoch++;
+
     // Settle the in-flight request BEFORE terminating. terminate() makes a
     // reply impossible, so an unsettled promise would sit until its own
     // timeout — 900_000ms for init, which is the 15-minute wedge: `loading`

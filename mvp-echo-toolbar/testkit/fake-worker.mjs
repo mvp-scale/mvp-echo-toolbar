@@ -37,6 +37,20 @@ export class FakeWorker {
     // matters, because the bug under test is a promise left pending forever
     // precisely because no further message can arrive.
     if (this.terminated) return;
+    this.emitForced(data);
+  }
+
+  /**
+   * Deliver a message even if terminate() has been called.
+   *
+   * Needed to test the orchestrator's *own* supersession guard. If a test
+   * relies on `emit()`'s termination check to keep a stale message out, the
+   * fake is doing the guard's job and the test passes even with the production
+   * guard deleted — which is exactly the vacuous-test trap. A real Worker can
+   * also have a message already dispatched before terminate() takes effect, so
+   * this is not a purely hypothetical ordering.
+   */
+  emitForced(data) {
     for (const fn of [...this.listeners]) fn({ data });
   }
 }
