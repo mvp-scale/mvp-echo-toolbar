@@ -3,7 +3,7 @@ import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
 import { playStartSound } from './audio/start-sound';
-import { InferenceOrchestrator } from './webgpu/inference-orchestrator';
+import { InferenceOrchestrator, AlreadyLoadingError } from './webgpu/inference-orchestrator';
 import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio, ilog } from './diag';
 
 // ── Silence trimming (Parakeet is VAD-sensitive) ──
@@ -68,9 +68,18 @@ export default function CaptureApp() {
       initFailRef.current = 0; // success resets the failure/backoff counter
       console.log('CaptureApp: WebGPU orchestrator ready');
 
+      // Only claim readiness to main when it is genuinely true. This used to
+      // fire unconditionally — and because initialize() swallowed failures, a
+      // failed load still reported "model loaded" (visible in Settings).
       const ipc = (window as any).electron?.ipcRenderer;
-      if (ipc) ipc.invoke('webgpu:model-ready', true);
+      if (ipc && orchestratorRef.current.isReady()) ipc.invoke('webgpu:model-ready', true);
     } catch (e) {
+      // A duplicate/concurrent init request is not a model-load failure —
+      // it must not consume one of the three strikes below.
+      if (e instanceof AlreadyLoadingError) {
+        console.log('CaptureApp: orchestrator init already in flight — ignoring duplicate request');
+        return;
+      }
       initFailRef.current += 1;
       console.warn(`CaptureApp: WebGPU orchestrator init failed (attempt ${initFailRef.current}):`, e);
     }

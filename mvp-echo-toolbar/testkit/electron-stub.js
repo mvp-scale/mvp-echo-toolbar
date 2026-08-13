@@ -55,7 +55,7 @@ function installElectronStub() {
  * wanted in a test run.
  */
 function silenceLogger() {
-  const loggerPath = require.resolve('../../app/main/logger.js');
+  const loggerPath = require.resolve('../app/main/logger.js');
   require.cache[loggerPath] = {
     id: loggerPath,
     filename: loggerPath,

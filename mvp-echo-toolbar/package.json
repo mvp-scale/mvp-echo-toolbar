@@ -12,7 +12,7 @@
     "dist": "npm run clean && npm run typecheck && npm run build && electron-builder --win --publish=never",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.js"
+    "test": "node --import ./testkit/register-ts.mjs --test test/"
   },
   "keywords": [
     "voice-to-text",

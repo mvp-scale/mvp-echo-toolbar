@@ -20,7 +20,7 @@
 const { test, describe, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
-const { installElectronStub, silenceLogger } = require('./helpers/electron-stub');
+const { installElectronStub, silenceLogger } = require('../testkit/electron-stub');
 
 installElectronStub();
 silenceLogger();
