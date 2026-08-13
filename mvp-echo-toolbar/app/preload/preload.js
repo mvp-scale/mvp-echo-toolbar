@@ -70,6 +70,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('webgpu:init-orchestrator', () => callback());
     return () => ipcRenderer.removeAllListeners('webgpu:init-orchestrator');
   },
+
+  // WebGPU -- listen for a teardown request (user switched to a non-GPU engine)
+  onWebgpuDisposeOrchestrator: (callback) => {
+    ipcRenderer.removeAllListeners('webgpu:dispose-orchestrator');
+    ipcRenderer.on('webgpu:dispose-orchestrator', () => callback());
+    return () => ipcRenderer.removeAllListeners('webgpu:dispose-orchestrator');
+  },
 });
 
 // Cloud configuration IPC (used by popup settings panel)

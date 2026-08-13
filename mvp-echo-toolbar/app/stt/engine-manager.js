@@ -349,6 +349,22 @@ class EngineManager {
   }
 
   /**
+   * Tell the renderer to tear down the WebGPU worker.
+   *
+   * Switching away from a WebGPU model used to leave the orchestrator fully
+   * loaded — encoder + decoder sessions, GPU buffers and the un-revoked model
+   * blob, roughly 2.5GB — resident and idle for the rest of the session, doing
+   * nothing. Nothing in the manager ever reached the renderer's dispose().
+   */
+  _releaseWebGpuOrchestrator() {
+    const hidden = this._getHiddenWindow();
+    if (hidden && !hidden.isDestroyed()) {
+      log('EngineManager: releasing WebGPU orchestrator (switched to a non-GPU engine)');
+      hidden.webContents.send('webgpu:dispose-orchestrator');
+    }
+  }
+
+  /**
    * Switch model, crossing adapter boundaries if needed.
    *
    * - local-* models → activate LocalSidecarAdapter
@@ -379,13 +395,19 @@ class EngineManager {
         this.activeAdapterName = 'local-sidecar';
         this.selectedModelId = modelId;
         log('EngineManager: Switched to local-sidecar adapter, model:', modelId);
+        this._releaseWebGpuOrchestrator();
       } else {
-        // Switch to remote adapter + delegate model switch to server
+        // Switch to remote adapter + delegate model switch to server.
+        // Await BEFORE committing: the webgpu/local branches above only
+        // reassign after a successful switch, and doing it the other way round
+        // here left the manager stranded on a broken adapter when the switch
+        // failed, with the previously-working one deactivated.
+        await this.remoteAdapter.switchModel(modelId);
         this.activeAdapter = this.remoteAdapter;
         this.activeAdapterName = 'remote';
-        await this.remoteAdapter.switchModel(modelId);
         this.selectedModelId = modelId;
         log('EngineManager: Switched to remote adapter, model:', modelId);
+        this._releaseWebGpuOrchestrator();
       }
       return { success: true };
     } catch (error) {

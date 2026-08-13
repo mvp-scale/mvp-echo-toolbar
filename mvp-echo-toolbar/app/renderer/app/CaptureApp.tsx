@@ -142,7 +142,20 @@ export default function CaptureApp() {
       initWebGpuOrchestrator();
     });
 
-    return () => { if (typeof unsub === 'function') unsub(); };
+    // Release the worker when the user switches to a non-GPU engine. Without
+    // this the fully-loaded model (~2.5GB of sessions, GPU buffers and the
+    // un-revoked model blob) stayed resident and idle for the whole session.
+    const unsubDispose = api.onWebgpuDisposeOrchestrator?.(() => {
+      console.log('CaptureApp: Received webgpu:dispose-orchestrator from main');
+      orchestratorRef.current.dispose();
+      const ipc = (window as any).electron?.ipcRenderer;
+      if (ipc) ipc.invoke('webgpu:model-ready', false);
+    });
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      if (typeof unsubDispose === 'function') unsubDispose();
+    };
   }, [initWebGpuOrchestrator]);
 
   useEffect(() => {
