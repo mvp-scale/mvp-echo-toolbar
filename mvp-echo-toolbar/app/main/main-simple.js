@@ -23,6 +23,14 @@ const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
 // ON by default (it is the fix). Off via --no-coi / MVP_NO_COI=1 so a single
 // build can be tested both ways -- see the COI block in whenReady().
 const COI_ENABLED = !(process.argv.includes('--no-coi') || !!process.env.MVP_NO_COI);
+
+// ── Replay mode ──
+// --replay=<path-to.wav> pushes a saved recording through the real
+// transcription pipeline instead of the microphone. Deterministic: the same
+// bytes and the same model every run, so a difference in output is the code
+// change and not how the sentence was read.
+const REPLAY_ARG = process.argv.find((a) => a.startsWith('--replay='));
+const REPLAY_PATH = REPLAY_ARG ? REPLAY_ARG.slice('--replay='.length).replace(/^"|"$/g, '') : null;
 const diagPath = path.join(os.tmpdir(), 'mvp-echo-diagnostics.log');
 
 // ── Global crash safety ──
@@ -609,6 +617,17 @@ app.whenReady().then(async () => {
   engineReady = true;
   trayManager.setState('ready');
   log('MVP-Echo Toolbar: Engine ready');
+
+  if (REPLAY_PATH) {
+    try {
+      const bytes = fs.readFileSync(REPLAY_PATH);
+      log(`Replay: sending ${REPLAY_PATH} (${bytes.length} bytes) to the capture window`);
+      const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      hiddenWindow.webContents.send('diag:replay-audio', copy);
+    } catch (e) {
+      log(`Replay FAILED to read ${REPLAY_PATH}: ${e && e.message}`);
+    }
+  }
 });
 
 // Tray app: window-all-closed does NOT quit

@@ -71,6 +71,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeAllListeners('webgpu:init-orchestrator');
   },
 
+  // Diagnostics -- replay a saved WAV through the transcription pipeline
+  onReplayAudio: (callback) => {
+    ipcRenderer.removeAllListeners('diag:replay-audio');
+    ipcRenderer.on('diag:replay-audio', (_event, buf) => callback(buf));
+    return () => ipcRenderer.removeAllListeners('diag:replay-audio');
+  },
+
   // WebGPU -- listen for a teardown request (user switched to a non-GPU engine)
   onWebgpuDisposeOrchestrator: (callback) => {
     ipcRenderer.removeAllListeners('webgpu:dispose-orchestrator');

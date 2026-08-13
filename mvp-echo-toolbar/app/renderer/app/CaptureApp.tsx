@@ -4,7 +4,7 @@ import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
 import { playStartSound } from './audio/start-sound';
 import { InferenceOrchestrator, AlreadyLoadingError } from './webgpu/inference-orchestrator';
-import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio, ilog } from './diag';
+import { setDiagEnabled, isDiagEnabled, sendDiag, saveDiagAudio, ilog, decodeWav } from './diag';
 
 // ── Silence trimming (Parakeet is VAD-sensitive) ──
 // threshold kept BELOW the silent-capture gate (0.005) so a quiet-but-real
@@ -142,6 +142,29 @@ export default function CaptureApp() {
       initWebGpuOrchestrator();
     });
 
+    // --replay=<file.wav>: push a saved recording through the real pipeline.
+    // Deterministic regression testing -- same bytes, same model, so any change
+    // in the transcript is the code and not how a sentence was read aloud.
+    const unsubReplay = api.onReplayAudio?.((buf: ArrayBuffer) => {
+      (async () => {
+        try {
+          const { pcm, sampleRate } = decodeWav(buf);
+          console.log(`CaptureApp: REPLAY ${pcm.length} samples (${(pcm.length / sampleRate).toFixed(1)}s @ ${sampleRate}Hz)`);
+          if (!orchestratorRef.current.isReady()) {
+            console.error('CaptureApp: REPLAY aborted — orchestrator not ready');
+            return;
+          }
+          const t0 = Date.now();
+          const result = await orchestratorRef.current.transcribe(trimSilence(pcm), sampleRate);
+          console.log(`CaptureApp: REPLAY RESULT (${Date.now() - t0}ms): "${result.text}"`);
+          ilog(`replay: ${result.text?.length ?? 0} chars in ${Date.now() - t0}ms`);
+          sendDiag(`replay result=${result.text?.length ?? 0}ch: ${result.text}`);
+        } catch (e) {
+          console.error('CaptureApp: REPLAY failed:', e);
+        }
+      })();
+    });
+
     // Release the worker when the user switches to a non-GPU engine. Without
     // this the fully-loaded model (~2.5GB of sessions, GPU buffers and the
     // un-revoked model blob) stayed resident and idle for the whole session.
@@ -155,6 +178,7 @@ export default function CaptureApp() {
     return () => {
       if (typeof unsub === 'function') unsub();
       if (typeof unsubDispose === 'function') unsubDispose();
+      if (typeof unsubReplay === 'function') unsubReplay();
     };
   }, [initWebGpuOrchestrator]);
 
