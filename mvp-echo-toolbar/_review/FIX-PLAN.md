@@ -238,7 +238,7 @@ that cannot be produced on a headless Linux box. See the manual-check list below
 | 4 | **3b** | 1 | `!app.isPackaged && NODE_ENV==='development'` asset gating | 8 | LOW | S | `main-simple.js:149,216,326` |✅ |
 | 5 | **4** | 1 | `did-fail-load` + 15 s bounded wait → error tray state, via existing crash budget | 3b | LOW | S+W | `main-simple.js:399-405` |🟩 |
 | 6 | **5** | 1 | Warm-mic gate (~50 ms energy / ~100–150 ms fallback) | T2 | LOW-MED | H | `AudioCapture.ts:467,474-478` |⬜ |
-| 7 | **1** | 1 | Defer `releaseMicStream()` while recording + wire `track.onended` to abort | 5 | LOW | S+W | `AudioCapture.ts:361-371,380-390` | ⬜ |
+| 7 | **1** | 1 | Defer `releaseMicStream()` while recording + wire `track.onended` to abort | 5 | LOW | S+W | `AudioCapture.ts:361-371,380-390` |✅ |
 | 8 | **3** | 1 | Register hotkey before engine init **+ `engineReadyRef` + new `starting` tray state/icon** | 4 | MED | S+H | `main-simple.js:396-438`, `tray-manager.js`, `icons/` |🟩 |
 | 9 | **0a** | 1 | `initialize()` re-throws; typed `AlreadyLoadingError` excluded from 3-strike count; gate `model-ready` IPC | T1 | LOW | H+S | `inference-orchestrator.ts:81-92`, `CaptureApp.tsx:67-76` |✅ |
 | 10 | **9** | 1 | Three-state hardware-only probe; `unknown` ⇒ trust saved pref; collapse 4 call sites → 1 | T2 | **MED** | H | `engine-manager.js:152-193`, `webgpu-bridge-adapter.js:79-95,153-158` | ✅ |
