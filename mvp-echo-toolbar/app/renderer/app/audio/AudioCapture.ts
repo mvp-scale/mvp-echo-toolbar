@@ -70,6 +70,8 @@ export class AudioCapture {
   private static readonly IDLE_RELEASE_MS = 30000; // 30s idle before releasing mic (default)
   private idleReleaseMs: number = AudioCapture.IDLE_RELEASE_MS; // instance-configurable duration
   private deviceChangeListenerAdded = false;        // guard: add listener only once
+  /** A mic release was requested mid-recording and is waiting for the stop. */
+  private micReleasePending = false;
 
   // ── Mic release mode ──
   // 'keep-ready'   → warm stream, instant repeat recordings, auto-release after idleReleaseMs (default)
@@ -118,6 +120,30 @@ export class AudioCapture {
   // Last-resort cue if the energy gate never resolves. ~2s comfortably exceeds a
   // typical headset unmute ramp, so even the fallback lands on a live device.
   private static readonly READY_FALLBACK_MS = 2000;
+
+  // ── Warm-path readiness ──
+  // A reused ("warm") stream used to fire the cue INSTANTLY with no checks at
+  // all — no mute check, no confirmation that a single frame had arrived. That
+  // reproduced the dead-window bug the cold gate exists to prevent, for the
+  // path that is actually the default (micReleaseMode 'keep-ready', holdable
+  // up to an hour). A device that power-saved during that hold is exactly the
+  // case that breaks.
+  //
+  // Warm still gets a gate, just a much cheaper one: the device is already
+  // open, so it only has to prove it is delivering audio *now*.
+  private static readonly READY_SECONDS_COLD = 0.25;
+  private static readonly READY_SECONDS_WARM = 0.05;
+  private static readonly READY_FALLBACK_WARM_MS = 150;
+
+  /**
+   * Frames of contiguous above-floor audio required before the "talk now" cue.
+   * Exposed (static, pure) so the thresholds are unit-testable.
+   */
+  static readySamplesFor(sampleRate: number, wasWarm: boolean): number {
+    return Math.round(
+      sampleRate * (wasWarm ? AudioCapture.READY_SECONDS_WARM : AudioCapture.READY_SECONDS_COLD),
+    );
+  }
 
 
   getStream(): MediaStream | undefined {
@@ -362,8 +388,7 @@ export class AudioCapture {
       this.deviceChangeListenerAdded = true;
       try {
         navigator.mediaDevices.addEventListener('devicechange', () => {
-          dlog('[AudioCapture] devicechange event — releasing warm mic stream');
-          try { this.releaseMicStream(); } catch { /* ok */ }
+          try { this.requestMicRelease('devicechange'); } catch { /* ok */ }
         });
       } catch (e) {
         console.warn('[AudioCapture] Could not add devicechange listener (non-fatal):', e);
@@ -371,6 +396,38 @@ export class AudioCapture {
     }
 
     return false; // wasWarm
+  }
+
+  /**
+   * Release the warm mic — but never out from under a live recording.
+   *
+   * `devicechange` fires for ANY system audio device arriving or leaving:
+   * headphones, a Bluetooth reconnect, a USB dock. It used to release
+   * unconditionally, which stopped the very track the active worklet graph was
+   * reading from. Nothing throws in that case — the worklet simply stops
+   * receiving frames, so the recording ends up truncated or empty and the user
+   * only sees "no speech".
+   *
+   * The release is deferred rather than dropped: after the recording ends we
+   * still want the next one to cold-acquire the (possibly new default) device,
+   * which is also what re-arms the full cold readiness gate.
+   */
+  requestMicRelease(reason: string): void {
+    if (this.rawWorklet) {
+      this.micReleasePending = true;
+      dlog(`[AudioCapture] ${reason} during recording — deferring mic release until stop`);
+      return;
+    }
+    dlog(`[AudioCapture] ${reason} — releasing warm mic stream`);
+    this.releaseMicStream();
+  }
+
+  /** Flush a release deferred by {@link requestMicRelease}. Called after a stop. */
+  applyPendingMicRelease(): void {
+    if (!this.micReleasePending) return;
+    this.micReleasePending = false;
+    dlog('[AudioCapture] applying deferred mic release');
+    this.releaseMicStream();
   }
 
   /**
@@ -452,7 +509,9 @@ export class AudioCapture {
 
     this.pcmChunks = [];
     this.workletMsgCount = 0;
-    const readySamplesNeeded = Math.round(ctx.sampleRate * 0.25); // ~250ms of unmuted frames = "really flowing"
+    // Warm streams need far less proof than cold ones (the device is already
+    // open), but they do still need some — see READY_SECONDS_WARM.
+    const readySamplesNeeded = AudioCapture.readySamplesFor(ctx.sampleRate, wasWarm);
     this.rawWorklet = new AudioWorkletNode(ctx, 'pcm-capture');
     this.rawWorklet.port.onmessage = (e: MessageEvent) => {
       this.workletMsgCount++;
@@ -464,23 +523,23 @@ export class AudioCapture {
       let sumSq = 0;
       for (let i = 0; i < chunk.length; i++) { const v = chunk[i]; sumSq += v * v; }
       const rms = chunk.length ? Math.sqrt(sumSq / chunk.length) : 0;
-      if (!wasWarm) this.maybeFireCaptureReady(chunk.length, rms, readySamplesNeeded);
+      this.maybeFireCaptureReady(chunk.length, rms, readySamplesNeeded);
     };
     this.rawSource.connect(this.rawWorklet);
     // Give the worklet a path to the destination (silent sink) so the graph
     // reliably pulls the mic through it every quantum. Worklet writes no output → silent.
     if (this.rawSink) this.rawWorklet.connect(this.rawSink);
 
-    if (wasWarm) {
-      // Device was already delivering audio — fire the cue immediately so the
-      // user can speak without waiting for the energy gate.
-      this.fireCaptureReady('warm');
-    } else {
-      // Cold first acquisition (or after idle release / device change). Keep
-      // the existing energy-gate path: fire when ~250ms of above-floor frames
-      // have flowed, with a 2s fallback in case energy never crosses.
-      this.captureReadyTimer = setTimeout(() => this.fireCaptureReady('timeout'), AudioCapture.READY_FALLBACK_MS);
-    }
+    // Both paths now gate on real audio; only the thresholds differ. The warm
+    // path previously fired instantly with no checks, which is how the cue
+    // could still say "talk now" into a device that wasn't delivering audio
+    // (e.g. a Bluetooth headset that power-saved during a long keep-ready hold).
+    // The fallback timer guarantees a cue either way, so over-waiting stays the
+    // safe failure mode rather than an early false "go".
+    this.captureReadyTimer = setTimeout(
+      () => this.fireCaptureReady('timeout'),
+      wasWarm ? AudioCapture.READY_FALLBACK_WARM_MS : AudioCapture.READY_FALLBACK_MS,
+    );
 
     dlog(`[AudioCapture] Raw PCM recording at ${ctx.sampleRate}Hz (persistent engine, worklet→sink→destination, warm=${wasWarm})`);
   }
@@ -616,9 +675,14 @@ export class AudioCapture {
 
     this.lastStopAt = Date.now(); // mark for next recording's idle-gap calc
 
-    // Release mode: 'release-each' turns off the OS mic indicator immediately;
-    // 'keep-ready' keeps the stream warm and releases after IDLE_RELEASE_MS.
-    if (this.micReleaseMode === 'release-each') {
+    // A device change during the recording deferred its release to here, so the
+    // next recording still cold-acquires the (possibly new default) device —
+    // which is also what re-arms the full cold readiness gate.
+    if (this.micReleasePending) {
+      this.applyPendingMicRelease();
+    } else if (this.micReleaseMode === 'release-each') {
+      // 'release-each' turns off the OS mic indicator immediately;
+      // 'keep-ready' keeps the stream warm and releases after IDLE_RELEASE_MS.
       this.releaseMicStream();
     } else {
       this.scheduleIdleRelease();
