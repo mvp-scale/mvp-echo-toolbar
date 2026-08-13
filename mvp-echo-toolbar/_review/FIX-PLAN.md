@@ -225,21 +225,24 @@ riskiest change (0b) lands into a codebase already stabilised by the safer ones.
 
 ## Tracking table
 
-Status: `⬜ not started` · `🟨 in progress` · `🟩 done` · `✅ verified against DoD`
+Status: `⬜ not started` · `🟨 in progress` · `🟩 done, awaiting Windows check` · `✅ verified against DoD`
+
+`🟩` means implemented and statically verified, but its DoD names Windows-manual evidence
+that cannot be produced on a headless Linux box. See the manual-check list below the table.
 
 | # | ID | Phase | Fix | Depends on | Risk | Evidence | Files | Status |
 |---|---|---|---|---|---|---|---|---|
-| 1 | **8** | 0 | Typecheck gate (`tsc --noEmit`) + fix 1 error + gitignore 4 artifacts | — | LOW | S | `package.json`, `.gitignore`, `PopupApp.tsx:151` | ⬜ |
-| 2 | **T1** | 0 | Test seam: inject worker factory into `InferenceOrchestrator` (optional ctor param, no signature changes) | — | LOW | S | `inference-orchestrator.ts` | ⬜ |
-| 3 | **T2** | 0 | Test seam: `node:test` runner + `require.cache` electron stub (zero new deps) | — | LOW | S | new `test/` | ⬜ |
-| 4 | **3b** | 1 | `!app.isPackaged && NODE_ENV==='development'` asset gating | 8 | LOW | S | `main-simple.js:149,216,326` | ⬜ |
-| 5 | **4** | 1 | `did-fail-load` + 15 s bounded wait → error tray state, via existing crash budget | 3b | LOW | S+W | `main-simple.js:399-405` | ⬜ |
-| 6 | **5** | 1 | Warm-mic gate (~50 ms energy / ~100–150 ms fallback) | T2 | LOW-MED | H | `AudioCapture.ts:467,474-478` | ⬜ |
+| 1 | **8** | 0 | Typecheck gate (`tsc --noEmit`) + fix 1 error + gitignore 4 artifacts | — | LOW | S | `package.json`, `.gitignore`, `PopupApp.tsx:151` | ✅ |
+| 2 | **T1** | 0 | Test seam: inject worker factory into `InferenceOrchestrator` (optional ctor param, no signature changes) | — | LOW | S | `inference-orchestrator.ts` |✅ |
+| 3 | **T2** | 0 | Test seam: `node:test` runner + `require.cache` electron stub (zero new deps) | — | LOW | S | `test/helpers/electron-stub.js` | ✅ |
+| 4 | **3b** | 1 | `!app.isPackaged && NODE_ENV==='development'` asset gating | 8 | LOW | S | `main-simple.js:149,216,326` |✅ |
+| 5 | **4** | 1 | `did-fail-load` + 15 s bounded wait → error tray state, via existing crash budget | 3b | LOW | S+W | `main-simple.js:399-405` |🟩 |
+| 6 | **5** | 1 | Warm-mic gate (~50 ms energy / ~100–150 ms fallback) | T2 | LOW-MED | H | `AudioCapture.ts:467,474-478` |⬜ |
 | 7 | **1** | 1 | Defer `releaseMicStream()` while recording + wire `track.onended` to abort | 5 | LOW | S+W | `AudioCapture.ts:361-371,380-390` | ⬜ |
-| 8 | **3** | 1 | Register hotkey before engine init **+ `engineReadyRef` + new `starting` tray state/icon** | 4 | MED | S+H | `main-simple.js:396-438`, `tray-manager.js`, `icons/` | ⬜ |
-| 9 | **0a** | 1 | `initialize()` re-throws; typed `AlreadyLoadingError` excluded from 3-strike count; gate `model-ready` IPC | T1 | LOW | H+S | `inference-orchestrator.ts:81-92`, `CaptureApp.tsx:67-76` | ⬜ |
-| 10 | **9** | 1 | Three-state hardware-only probe; `unknown` ⇒ trust saved pref; collapse 4 call sites → 1 | T2, 0a | **MED** | H | `engine-manager.js:152-193`, `webgpu-bridge-adapter.js:79-95,153-158` | ⬜ |
-| 11 | **0b** | 1 | Reject pending request on teardown **only when pending exists** + epoch guard | 0a, T1 | **MED (highest)** | H | `inference-orchestrator.ts:136-143,145-175` | ⬜ |
+| 8 | **3** | 1 | Register hotkey before engine init **+ `engineReadyRef` + new `starting` tray state/icon** | 4 | MED | S+H | `main-simple.js:396-438`, `tray-manager.js`, `icons/` |🟩 |
+| 9 | **0a** | 1 | `initialize()` re-throws; typed `AlreadyLoadingError` excluded from 3-strike count; gate `model-ready` IPC | T1 | LOW | H+S | `inference-orchestrator.ts:81-92`, `CaptureApp.tsx:67-76` |✅ |
+| 10 | **9** | 1 | Three-state hardware-only probe; `unknown` ⇒ trust saved pref; collapse 4 call sites → 1 | T2 | **MED** | H | `engine-manager.js:152-193`, `webgpu-bridge-adapter.js:79-95,153-158` | ✅ |
+| 11 | **0b** | 1 | Reject pending request on teardown **only when pending exists** + epoch guard | 0a, T1 | **MED (highest)** | H | `inference-orchestrator.ts:136-143,145-175` |✅ |
 | 12 | **0e** | 2 | `postMessage` transfer list; reuse `trimmed` on retry | T1 | LOW | H | `inference-orchestrator.ts:173`, `CaptureApp.tsx:299-311` | ⬜ |
 | 13 | **0c** | 2 | 30 s chunking + `LCSPTFAMerger` + per-chunk health gate + gap markers | 0e, T2 | MED | H | `inference-worker.ts:125-126`, new chunker | ⬜ |
 | 14 | **2** | 3 | COOP/COEP via `onHeadersReceived`; assert `crossOriginIsolated` | 4 | MED | W | `main-simple.js` | ⬜ |
@@ -249,6 +252,18 @@ Status: `⬜ not started` · `🟨 in progress` · `🟩 done` · `✅ verified 
 | 18 | **0f** | 4 | Cap/evict diag WAV dir + diagnostics log; fix orphan sweep pattern | — | LOW | H | `main-simple.js:40-49` | ⬜ |
 | 19 | **12** | 4 | Async logger + rate-limit renderer console forwarding | — | LOW | S | `logger.js:12-33` | ⬜ |
 | 20 | **NAV** | 4 | `will-navigate` deny + `setWindowOpenHandler` deny (~3 lines) | — | LOW | S | `main-simple.js:135,199,308` | ⬜ |
+
+### Windows manual checks (for rows marked 🟩)
+
+These cannot be produced on a headless Linux box — no `DISPLAY`, `chrome-sandbox` not setuid, and
+WebGPU unreachable. Each takes under a minute on the target machine.
+
+| Row | Check | Pass looks like |
+|---|---|---|
+| 5 (**4**) | Rename `dist/renderer/index.html`, launch the exe | Tray goes to **error** within ~15s and the log names the failed load. Previously: tray looked healthy, hotkey silently dead, forever. |
+| 8 (**3**) | Launch, then hit the hotkey immediately — before the tray settles | Tray shows **"Starting up..."**, nothing records, and the log reads `received before engine ready`. Previously: it would start a recording routed to the wrong adapter and fail silently. |
+| 8 (**3**) | Launch and watch the tray | Tooltip reads **"Starting up..."** then flips to **"Ready"**. Timestamps in the log show shortcut registration *before* `EngineManager initialized`. |
+| 4 (**3b**) | `set NODE_ENV=development` then run the packaged exe | App still loads its bundled UI (does **not** try `localhost:5175` and render blank). |
 
 **Not scheduled** (explicit decisions, see "Deliberately skipped"): code signing · committed lockfile /
 `npm ci` · `sandbox: true` + CSP tightening · build slimming (6, 7) — fold into the next build change ·
