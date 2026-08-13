@@ -18,6 +18,11 @@ const logPath = getLogPath();
 // When on, the renderer streams one structured fingerprint line per recording to
 // a dedicated diagnostics file (separate from the general debug log).
 const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
+
+// ── Cross-origin isolation toggle ──
+// ON by default (it is the fix). Off via --no-coi / MVP_NO_COI=1 so a single
+// build can be tested both ways -- see the COI block in whenReady().
+const COI_ENABLED = !(process.argv.includes('--no-coi') || !!process.env.MVP_NO_COI);
 const diagPath = path.join(os.tmpdir(), 'mvp-echo-diagnostics.log');
 
 // ── Global crash safety ──
@@ -455,23 +460,33 @@ app.whenReady().then(async () => {
   // 'credentialless' rather than 'require-corp': the model is fetched
   // cross-origin from HuggingFace, and require-corp would reject those
   // responses unless they carry CORP. credentialless permits them.
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    // Only our OWN documents get the isolation headers. Stamping them onto a
-    // cross-origin model download would be meaningless at best.
-    const isOwnDocument =
-      details.url.startsWith('file://') || details.url.startsWith('http://localhost:5175');
-    if (!isOwnDocument) {
-      callback({});
-      return;
-    }
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Cross-Origin-Opener-Policy': ['same-origin'],
-        'Cross-Origin-Embedder-Policy': ['credentialless'],
-      },
+  // Escape hatch: this is the one change that could break a FRESH model
+  // download (COEP vs. HuggingFace's CORS), and that cannot be verified on a
+  // dev box with no Windows, no WebGPU and no real network. Launching with
+  // --no-coi (or MVP_NO_COI=1) disables it WITHOUT a rebuild, so a single
+  // build can test both states and isolate the cause of a failed download.
+  if (COI_ENABLED) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      // Only our OWN documents get the isolation headers. Stamping them onto a
+      // cross-origin model download would be meaningless at best.
+      const isOwnDocument =
+        details.url.startsWith('file://') || details.url.startsWith('http://localhost:5175');
+      if (!isOwnDocument) {
+        callback({});
+        return;
+      }
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Cross-Origin-Opener-Policy': ['same-origin'],
+          'Cross-Origin-Embedder-Policy': ['credentialless'],
+        },
+      });
     });
-  });
+    log('MVP-Echo Toolbar: cross-origin isolation ON (multi-threaded WASM decode)');
+  } else {
+    log('MVP-Echo Toolbar: cross-origin isolation DISABLED via --no-coi (decode will be single-threaded)');
+  }
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'media' || permission === 'persistent-storage') {
