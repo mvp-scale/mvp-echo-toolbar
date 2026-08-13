@@ -9,6 +9,22 @@ not distribution hardening. See "Deliberately skipped" at the end.
 
 ---
 
+## Current state — 18 of 20 rows landed
+
+| Phase | Status |
+|---|---|
+| **Phase 0** — typecheck gate + test seams | ✅ done |
+| **Phase 1** — reliability (7 fixes) | ✅ done, independently reviewed, 7 follow-up issues found and fixed |
+| **Phase 2** — chunking + PCM transfer | ✅ done |
+| **Phase 3** — cross-origin isolation | ✅ done · ⏸ profiling + parallel workers **deliberately blocked** (need timing measured on real hardware) |
+| **Phase 4** — housekeeping | ✅ done |
+
+**30 tests passing, typecheck clean, 13 commits on `dev`. Nothing has been built or run on Windows yet** — see "Windows manual checks" near the end. Per-row detail is in the tracking table at the bottom.
+
+Legend: ✅ implemented + evidence produced · 🟩 implemented, awaiting a Windows check · ⬜ not started
+
+---
+
 ## How to read the review
 
 | If you want… | Read |
@@ -32,15 +48,15 @@ pass, **09–14** deep data-path/lifecycle passes.
 Everything the user experiences as friction: the hotkey doing nothing, recordings coming back empty,
 the app freezing. Seven fixes, nearly all one-to-three lines.
 
-| ID | Fix | Code | Finding | Read |
-|---|---|---|---|---|
-| **0a** | `throw err` at the end of `initialize()`'s catch, so a failed init actually reports failure. Gate the `webgpu:model-ready(true)` IPC on real readiness. | `inference-orchestrator.ts:81-92`; `CaptureApp.tsx:67-76`, `:461` | P0 — dead 3-strike guard → unbounded 15s/~2.5 GB reload loop | [`raw/08`](raw/08-memory-and-hangs.md) §P0#1 · confirmed [`raw/11`](raw/11-gpu-worker-lifecycle.md) "CLAIM A" · cluster **C0-a** |
-| **0b** | Track the pending `sendMessage` rejector; call it from `disposeSync()`. Clear `this.loading` there too. | `inference-orchestrator.ts:65-70`, `:73-77`, `:136-143`, `:145-175` | P0 — device loss during init wedges the app 15 min; recovery is self-disabled | [`raw/08`](raw/08-memory-and-hangs.md) §P0#2 · confirmed [`raw/11`](raw/11-gpu-worker-lifecycle.md) "CLAIM B" · cluster **C0-b** |
-| **1** | Guard `devicechange` on recording-active — abort with a distinct error instead of silently stopping the mic. | `AudioCapture.ts:361-371`, `:380-390` | P0 — headphone/Bluetooth/USB event truncates a live recording | [`raw/03`](raw/03-audio-capture.md) §P0 · cluster **C2** |
-| **3** | Register `globalShortcut` *before* awaiting engine init; handler shows "still starting" rather than no-op. | `main-simple.js:396-438` | P1 — hotkey not registered until GPU probing finishes | [`raw/01`](raw/01-main-process.md) §P1#1 · cluster **C1** cause 1 |
-| **4** | Add `did-fail-load` + a timeout to the `whenReady()` chain; surface an `error` tray state. | `main-simple.js:399-405` | P1 — page load failure hangs startup forever, silently | [`raw/01`](raw/01-main-process.md) §P1#2 · cluster **C1** cause 2 |
-| **5** | Apply the mute + short energy gate to the **warm** mic path (50–100 ms fallback, keeping most of the latency win). | `AudioCapture.ts:474-478`, `:298-303`; contrast the correct cold path at `:501-517` | P1 — "talk now" chirp fires with no proof audio is flowing | [`raw/03`](raw/03-audio-capture.md) §P1 · cluster **C2** |
-| **9** | Let `_restoreModelSelection()` win only when it agrees with `initialize()`'s live probe. | `engine-manager.js:152-193`; `webgpu-bridge-adapter.js:153-158` | P1 — stale saved preference routes to a dead engine while a working one sits idle | [`raw/06`](raw/06-stt-engines.md) §P1#2 · cluster **C1** cause 4 |
+| ID | Fix | Code | Finding | Read | Status |
+|---|---|---|---|---|---|
+| **0a** | `throw err` at the end of `initialize()`'s catch, so a failed init actually reports failure. Gate the `webgpu:model-ready(true)` IPC on real readiness. | `inference-orchestrator.ts:81-92`; `CaptureApp.tsx:67-76`, `:461` | P0 — dead 3-strike guard → unbounded 15s/~2.5 GB reload loop | [`raw/08`](raw/08-memory-and-hangs.md) §P0#1 · confirmed [`raw/11`](raw/11-gpu-worker-lifecycle.md) "CLAIM A" · cluster **C0-a** | ✅ |
+| **0b** | Track the pending `sendMessage` rejector; call it from `disposeSync()`. Clear `this.loading` there too. | `inference-orchestrator.ts:65-70`, `:73-77`, `:136-143`, `:145-175` | P0 — device loss during init wedges the app 15 min; recovery is self-disabled | [`raw/08`](raw/08-memory-and-hangs.md) §P0#2 · confirmed [`raw/11`](raw/11-gpu-worker-lifecycle.md) "CLAIM B" · cluster **C0-b** | ✅ |
+| **1** | Guard `devicechange` on recording-active — abort with a distinct error instead of silently stopping the mic. | `AudioCapture.ts:361-371`, `:380-390` | P0 — headphone/Bluetooth/USB event truncates a live recording | [`raw/03`](raw/03-audio-capture.md) §P0 · cluster **C2** | 🟩 |
+| **3** | Register `globalShortcut` *before* awaiting engine init; handler shows "still starting" rather than no-op. | `main-simple.js:396-438` | P1 — hotkey not registered until GPU probing finishes | [`raw/01`](raw/01-main-process.md) §P1#1 · cluster **C1** cause 1 | 🟩 |
+| **4** | Add `did-fail-load` + a timeout to the `whenReady()` chain; surface an `error` tray state. | `main-simple.js:399-405` | P1 — page load failure hangs startup forever, silently | [`raw/01`](raw/01-main-process.md) §P1#2 · cluster **C1** cause 2 | 🟩 |
+| **5** | Apply the mute + short energy gate to the **warm** mic path (50–100 ms fallback, keeping most of the latency win). | `AudioCapture.ts:474-478`, `:298-303`; contrast the correct cold path at `:501-517` | P1 — "talk now" chirp fires with no proof audio is flowing | [`raw/03`](raw/03-audio-capture.md) §P1 · cluster **C2** | 🟩 |
+| **9** | Let `_restoreModelSelection()` win only when it agrees with `initialize()`'s live probe. | `engine-manager.js:152-193`; `webgpu-bridge-adapter.js:153-158` | P1 — stale saved preference routes to a dead engine while a working one sits idle | [`raw/06`](raw/06-stt-engines.md) §P1#2 · cluster **C1** cause 4 | ✅ |
 
 **Related, worth doing in the same pass** (2 lines, prevents fix 4 from being needed in the field):
 gate dev-vs-prod asset loading on `app.isPackaged` instead of `NODE_ENV` — `main-simple.js:149-154`,
@@ -54,10 +70,10 @@ Land this for **correctness first**. The app currently hands the entire recordin
 call and never chunks; per production logs in `RELEASE-INSTABILITY-GAP-ANALYSIS.md`, decode collapses
 to empty above ~60–90 s. Parallelism is a follow-on, not the point of this phase.
 
-| ID | Fix | Code | Read |
-|---|---|---|---|
-| **0c** | Split audio into 30 s windows with 2–3 s overlap before `model.transcribe()`. Enable `returnTimestamps`. Merge with parakeet's own `LCSPTFAMerger`, wrapped in a per-chunk health gate. | `inference-worker.ts:125` (the one-shot call), `:126` (`returnTimestamps: false`) | [`raw/12`](raw/12-parallel-chunking-design.md) — execution architecture · [`raw/13`](raw/13-overlap-stitch-correctness.md) — merge algorithm + pseudocode + edge-case table |
-| **0e** | Add the `postMessage` transfer list; reuse `trimmed` on the retry instead of re-running `trimSilence(pcm)`. | `inference-orchestrator.ts:173`; `CaptureApp.tsx:12-22`, `:299-311` | [`raw/09`](raw/09-pcm-allocation-trace.md) — allocation ledger |
+| ID | Fix | Code | Read | Status |
+|---|---|---|---|---|
+| **0c** | Split audio into 30 s windows with 2–3 s overlap before `model.transcribe()`. Enable `returnTimestamps`. Merge with parakeet's own `LCSPTFAMerger`, wrapped in a per-chunk health gate. | `inference-worker.ts:125` (the one-shot call), `:126` (`returnTimestamps: false`) | [`raw/12`](raw/12-parallel-chunking-design.md) — execution architecture · [`raw/13`](raw/13-overlap-stitch-correctness.md) — merge algorithm + pseudocode + edge-case table | ✅ |
+| **0e** | Add the `postMessage` transfer list; reuse `trimmed` on the retry instead of re-running `trimSilence(pcm)`. | `inference-orchestrator.ts:173`; `CaptureApp.tsx:12-22`, `:299-311` | [`raw/09`](raw/09-pcm-allocation-trace.md) — allocation ledger | ✅ |
 
 **Library facts that shape this design** (all cited with excerpts in `raw/12`/`raw/13`):
 - `LCSPTFAMerger` already exists — `parakeet.js:1811-2014`, exported from `index.js:5`.
@@ -72,11 +88,11 @@ to empty above ~60–90 s. Parallelism is a follow-on, not the point of this pha
 
 ## Phase 3 — Speed (measure first)
 
-| ID | Fix | Code | Read |
-|---|---|---|---|
-| **2** | Inject COOP/COEP headers in the packaged app (`session.defaultSession.webRequest.onHeadersReceived`); assert `crossOriginIsolated === true` at runtime. | `vite.config.ts:54-66` (dev-only today) vs `main-simple.js:131-185` (nothing) | [`raw/04`](raw/04-webgpu-inference.md) §P1#1 · cluster **C3** |
-| — | **Turn on `enableProfiling` and measure the encoder/decoder split.** No defensible N can be chosen without this. | `inference-worker.ts:128` | [`raw/12`](raw/12-parallel-chunking-design.md) §5 |
-| — | Then: N independent workers, each with its own model instance. N=2 on 8 GB VRAM, N=3 on a 3090. | new | [`raw/12`](raw/12-parallel-chunking-design.md) §3–4 |
+| ID | Fix | Code | Read | Status |
+|---|---|---|---|---|
+| **2** | Inject COOP/COEP headers in the packaged app (`session.defaultSession.webRequest.onHeadersReceived`); assert `crossOriginIsolated === true` at runtime. | `vite.config.ts:54-66` (dev-only today) vs `main-simple.js:131-185` (nothing) | [`raw/04`](raw/04-webgpu-inference.md) §P1#1 · cluster **C3** | 🟩 |
+| — | **Turn on `enableProfiling` and measure the encoder/decoder split.** No defensible N can be chosen without this. | `inference-worker.ts:128` | [`raw/12`](raw/12-parallel-chunking-design.md) §5 | ⬜ |
+| — | Then: N independent workers, each with its own model instance. N=2 on 8 GB VRAM, N=3 on a 3090. | new | [`raw/12`](raw/12-parallel-chunking-design.md) §3–4 | ⬜ |
 
 **Why measure first:** the decoder-stage gain from parallel workers is real and OS-thread-backed. The
 GPU-encoder gain is **not verified** — a single 0.6B forward pass may already saturate the card, in
@@ -91,13 +107,13 @@ own WASM instance) — it's an independent win for the linear path. Verdict and 
 
 ## Phase 4 — Housekeeping (cheap, do when convenient)
 
-| ID | Fix | Code | Read |
-|---|---|---|---|
-| **0d** | Dispose the orchestrator when switching away from a WebGPU model — currently ~2.5 GB stays resident, idle, all session. | `engine-manager.js:312-346` | [`raw/11`](raw/11-gpu-worker-lifecycle.md) §"Switching away from WebGPU" |
-| **0f** | Cap/evict `%TEMP%\mvp-echo-audio\`; cap the diagnostics log; fix the orphan sweep's name/extension mismatch. | `main-simple.js:40-49` (sweep), diag dir writes | [`raw/10`](raw/10-retention-audit.md) F1, F2 |
-| **8** | Add `"typecheck": "tsc -b"` and run it before packaging. **Highest value-per-minute item in the whole review for a solo maintainer** — there are no tests and `tsc` never runs today, so type errors ship. | `package.json:7-15`, `tsconfig.json:11` | [`raw/07`](raw/07-build-packaging.md) §P2 "No type-checking" |
-| **12** | Make the logger async; rate-limit renderer console forwarding. | `logger.js:12-33`; `CaptureApp.tsx:151-163` | [`raw/01`](raw/01-main-process.md) §P2#1 |
-| **6, 7** | Slim the build: negate `dist/**` in the `files` glob, move `parakeet.js` to devDependencies, swap in an audio-only ffmpeg. 290 MB → ~90 MB. | `package.json:16-34` | [`raw/07`](raw/07-build-packaging.md) §P0, §P1#1–2 |
+| ID | Fix | Code | Read | Status |
+|---|---|---|---|---|
+| **0d** | Dispose the orchestrator when switching away from a WebGPU model — currently ~2.5 GB stays resident, idle, all session. | `engine-manager.js:312-346` | [`raw/11`](raw/11-gpu-worker-lifecycle.md) §"Switching away from WebGPU" | 🟩 |
+| **0f** | Cap/evict `%TEMP%\mvp-echo-audio\`; cap the diagnostics log; fix the orphan sweep's name/extension mismatch. | `main-simple.js:40-49` (sweep), diag dir writes | [`raw/10`](raw/10-retention-audit.md) F1, F2 | 🟩 |
+| **8** | Add `"typecheck": "tsc -b"` and run it before packaging. **Highest value-per-minute item in the whole review for a solo maintainer** — there are no tests and `tsc` never runs today, so type errors ship. | `package.json:7-15`, `tsconfig.json:11` | [`raw/07`](raw/07-build-packaging.md) §P2 "No type-checking" | ✅ |
+| **12** | Make the logger async; rate-limit renderer console forwarding. | `logger.js:12-33`; `CaptureApp.tsx:151-163` | [`raw/01`](raw/01-main-process.md) §P2#1 | 🟩 |
+| **6, 7** | Slim the build: negate `dist/**` in the `files` glob, move `parakeet.js` to devDependencies, swap in an audio-only ffmpeg. 290 MB → ~90 MB. | `package.json:16-34` | [`raw/07`](raw/07-build-packaging.md) §P0, §P1#1–2 | ⬜ |
 
 ---
 
