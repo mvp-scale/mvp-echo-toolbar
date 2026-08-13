@@ -1,6 +1,6 @@
 {
   "name": "mvp-echo-toolbar",
-  "version": "3.0.27",
+  "version": "3.0.28",
   "description": "MVP-Echo Toolbar - System Tray Voice-to-Text Transcription",
   "main": "app/main/main-simple.js",
   "scripts": {
@@ -30,7 +30,6 @@
   "dependencies": {
     "form-data": "^4.0.0",
     "node-fetch": "^2.7.0",
-    "parakeet.js": "^1.4.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -42,6 +41,7 @@
     "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^26.0.12",
+    "parakeet.js": "^1.4.4",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
@@ -61,8 +61,13 @@
     },
     "files": [
       "app/**/*",
-      "dist/**/*",
+      "dist/renderer/**/*",
+      "!dist/win-unpacked/**",
+      "!dist/*.exe",
+      "!dist/*.blockmap",
+      "!dist/builder-*.yml",
       "node_modules/**/*",
+      "!node_modules/parakeet.js/**",
       "package.json"
     ],
     "extraFiles": [
