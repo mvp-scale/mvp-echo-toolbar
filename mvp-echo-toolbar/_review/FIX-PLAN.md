@@ -243,15 +243,15 @@ that cannot be produced on a headless Linux box. See the manual-check list below
 | 9 | **0a** | 1 | `initialize()` re-throws; typed `AlreadyLoadingError` excluded from 3-strike count; gate `model-ready` IPC | T1 | LOW | H+S | `inference-orchestrator.ts:81-92`, `CaptureApp.tsx:67-76` |✅ |
 | 10 | **9** | 1 | Three-state hardware-only probe; `unknown` ⇒ trust saved pref; collapse 4 call sites → 1 | T2 | **MED** | H | `engine-manager.js:152-193`, `webgpu-bridge-adapter.js:79-95,153-158` | ✅ |
 | 11 | **0b** | 1 | Reject pending request on teardown **only when pending exists** + epoch guard | 0a, T1 | **MED (highest)** | H | `inference-orchestrator.ts:136-143,145-175` |✅ |
-| 12 | **0e** | 2 | `postMessage` transfer list; reuse `trimmed` on retry | T1 | LOW | H | `inference-orchestrator.ts:173`, `CaptureApp.tsx:299-311` | ⬜ |
-| 13 | **0c** | 2 | 30 s chunking + `LCSPTFAMerger` + per-chunk health gate + gap markers | 0e, T2 | MED | H | `inference-worker.ts:125-126`, new chunker | ⬜ |
-| 14 | **2** | 3 | COOP/COEP via `onHeadersReceived`; assert `crossOriginIsolated` | 4 | MED | W | `main-simple.js` | ⬜ |
+| 12 | **0e** | 2 | `postMessage` transfer list; reuse `trimmed` on retry | T1 | LOW | H | `inference-orchestrator.ts:173`, `CaptureApp.tsx:299-311` | ⬜ | ✅ |
+| 13 | **0c** | 2 | 30 s chunking + `LCSPTFAMerger` + per-chunk health gate + gap markers | 0e, T2 | MED | H | `inference-worker.ts:125-126`, new chunker | ⬜ | ✅ |
+| 14 | **2** | 3 | COOP/COEP via `onHeadersReceived`; assert `crossOriginIsolated` | 4 | MED | W | `main-simple.js` | ⬜ | 🟩 |
 | 15 | **P1** | 3 | Turn on `enableProfiling`; measure encoder/decoder split | 2 | LOW | W | `inference-worker.ts:128` | ⬜ |
 | 16 | **P2** | 3 | N parallel workers (N from P1 data, cap 2 @ 8 GB / 3 @ 24 GB) | P1, 0c | MED | W | new pool | ⬜ |
-| 17 | **0d** | 4 | Dispose orchestrator on switch away from WebGPU | — | LOW | S+W | `engine-manager.js:312-346` | ⬜ |
-| 18 | **0f** | 4 | Cap/evict diag WAV dir + diagnostics log; fix orphan sweep pattern | — | LOW | H | `main-simple.js:40-49` | ⬜ |
-| 19 | **12** | 4 | Async logger + rate-limit renderer console forwarding | — | LOW | S | `logger.js:12-33` | ⬜ |
-| 20 | **NAV** | 4 | `will-navigate` deny + `setWindowOpenHandler` deny (~3 lines) | — | LOW | S | `main-simple.js:135,199,308` | ⬜ |
+| 17 | **0d** | 4 | Dispose orchestrator on switch away from WebGPU | — | LOW | S+W | `engine-manager.js:312-346` | ⬜ | 🟩 |
+| 18 | **0f** | 4 | Cap/evict diag WAV dir + diagnostics log; fix orphan sweep pattern | — | LOW | H | `main-simple.js:40-49` | ⬜ | 🟩 |
+| 19 | **12** | 4 | Async logger + rate-limit renderer console forwarding | — | LOW | S | `logger.js:12-33` | ⬜ | 🟩 |
+| 20 | **NAV** | 4 | `will-navigate` deny + `setWindowOpenHandler` deny (~3 lines) | — | LOW | S | `main-simple.js:135,199,308` | ⬜ | ✅ |
 
 ### Known coverage gap (honest limit)
 
@@ -279,6 +279,9 @@ WebGPU unreachable. Each takes under a minute on the target machine.
 | 4 (**3b**) | `set NODE_ENV=development` then run the packaged exe | App still loads its bundled UI (does **not** try `localhost:5175` and render blank). |
 | 7 (**1**) | Start recording, then physically unplug the mic mid-recording | Warning tone, tray → **error**, log reads `capture lost mid-recording (mic-disconnected)`. Previously: silent truncation, indistinguishable from saying nothing. |
 | 6 (**5**) | With mic-hold on, record, wait ~30s, record again and speak immediately | The "talk now" tone lands ~50–70 ms after the keypress and the first word is captured. This is the mutation-uncovered path — worth checking by ear. |
+| 14 (**2**) | **On a CLEAN profile** (no cached model): first launch must still download the model | Model downloads and transcription works. This is the one change that could break a fresh install — COEP `credentialless` vs. HuggingFace. Worker logs `crossOriginIsolated=true`. Rollback: delete the `onHeadersReceived` block. |
+| 13 (**0c**) | Record ~2 minutes and stop | Non-empty transcript. Previously collapsed to empty above ~60–90s. |
+| 17 (**0d**) | Switch from the WebGPU model to a local model in Settings | Task Manager memory drops by ~2.5 GB. |
 | 5 (**4**) | After a forced load failure, press the hotkey | Tray **stays on error** and does not flip to "Starting up..." (regression guard for the fix-3/fix-4 interaction). |
 
 **Not scheduled** (explicit decisions, see "Deliberately skipped"): code signing · committed lockfile /
