@@ -9,6 +9,7 @@ export class FakeWorker {
   constructor() {
     this.listeners = [];
     this.posted = [];
+    this.transfers = [];
     this.terminated = false;
     /** Set by a test to auto-reply to a posted message. */
     this.onPost = null;
@@ -22,8 +23,16 @@ export class FakeWorker {
     if (type === 'message') this.listeners = this.listeners.filter((l) => l !== fn);
   }
 
-  postMessage(msg) {
+  postMessage(msg, transfer) {
     this.posted.push(msg);
+    this.transfers.push(transfer ?? []);
+    // Model transfer semantics: a transferred ArrayBuffer is detached in the
+    // sender. Tests assert on this to prove the PCM is moved, not cloned.
+    for (const t of transfer ?? []) {
+      if (typeof structuredClone === 'function' && t instanceof ArrayBuffer) {
+        try { structuredClone(t, { transfer: [t] }); } catch { /* already detached */ }
+      }
+    }
     if (this.onPost) this.onPost(msg, this);
   }
 

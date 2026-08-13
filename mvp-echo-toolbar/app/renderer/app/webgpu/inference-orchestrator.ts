@@ -153,10 +153,15 @@ export class InferenceOrchestrator {
       throw new Error('Model not loaded');
     }
 
+    // Transfer the PCM rather than letting structured clone copy it. At the
+    // 600s cap that is 38.4MB copied per transcription for no reason. Transfer
+    // detaches `pcm` in this thread — safe because CaptureApp passes a trimmed
+    // copy and retains the original separately for the diagnostics WAV.
     const result = await this.sendMessage(
       { type: 'transcribe', audio: pcm, sampleRate },
       'transcription-result',
-      120000
+      120000,
+      [pcm.buffer],
     );
 
     return {
@@ -216,7 +221,8 @@ export class InferenceOrchestrator {
   private sendMessage(
     message: Record<string, unknown>,
     responseType: string,
-    timeoutMs: number
+    timeoutMs: number,
+    transfer?: Transferable[]
   ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const worker = this.worker;
@@ -250,7 +256,7 @@ export class InferenceOrchestrator {
       this.pending = entry;
 
       worker.addEventListener('message', handler);
-      worker.postMessage(message);
+      worker.postMessage(message, transfer ?? []);
     });
   }
 }

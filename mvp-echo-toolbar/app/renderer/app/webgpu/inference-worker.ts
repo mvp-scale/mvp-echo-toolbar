@@ -14,6 +14,7 @@
  */
 
 import { fromHub } from 'parakeet.js';
+import { chunkPlanFor } from './chunk-plan';
 import type { ParakeetModel } from 'parakeet.js';
 
 let model: ParakeetModel | null = null;
@@ -122,14 +123,36 @@ async function transcribe(audio: Float32Array, sampleRate: number): Promise<void
   // RTF/console.table spam), which also drops its internal metrics. A plain
   // timer restores the processing-time the UI shows, with no logging flood.
   const t0 = performance.now();
-  const result = await model.transcribe(audio, sampleRate, {
-    returnTimestamps: false,  // unused downstream — saves decoder bookkeeping
-    returnConfidences: true,
-    enableProfiling: false,   // stop the per-transcription RTF/console.table spam
-  });
-  const elapsedMs = Math.round(performance.now() - t0);
 
-  const text = result.utterance_text || '';
+  // Long audio MUST be chunked. A single one-shot transcribe() collapses to an
+  // empty result somewhere above ~60-90s (see RELEASE-INSTABILITY-GAP-ANALYSIS.md),
+  // so every long dictation silently failed. transcribeLongAudio() splits into
+  // windows and merges them using the library's own pause-snapped word-timestamp
+  // logic, which is better tested than anything we'd hand-roll here.
+  //
+  // Note the library only auto-chunks above 180s, which is well past where the
+  // failure starts — so the window length is passed explicitly.
+  const plan = chunkPlanFor(audio.length, sampleRate);
+  let result: any;
+  let text: string;
+  if (plan.chunked) {
+    result = await model.transcribeLongAudio(audio, sampleRate, {
+      chunkLengthS: plan.chunkLengthS,
+      returnConfidences: true,
+      enableProfiling: false,
+    });
+    text = result.text || '';
+  } else {
+    // Short audio stays on the single-shot path: no windowing overhead, and
+    // this is the overwhelmingly common case for a push-to-talk toolbar.
+    result = await model.transcribe(audio, sampleRate, {
+      returnTimestamps: false,  // unused downstream — saves decoder bookkeeping
+      returnConfidences: true,
+      enableProfiling: false,   // stop the per-transcription RTF/console.table spam
+    });
+    text = result.utterance_text || '';
+  }
+  const elapsedMs = Math.round(performance.now() - t0);
   const metrics = (result as any).metrics || {};
   const scores = (result as any).confidence_scores;
   // Correct parakeet.js confidence keys (was reading non-existent keys → always undefined).
