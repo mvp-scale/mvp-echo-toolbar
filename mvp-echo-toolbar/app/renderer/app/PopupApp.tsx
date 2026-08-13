@@ -148,7 +148,6 @@ export default function PopupApp() {
   }, []);
 
   const modelDisplay = transcription.model?.split('/').pop() || '';
-  const langDisplay = '';
 
   const handleDebug = useCallback(() => {
     (window as any).electron?.ipcRenderer?.invoke('debug:open-devtools').catch(() => {});

@@ -99,3 +99,11 @@ mvp-echo-toolbar/mvp-sherpa-demo/
 .claude/skills/aoa-start/SKILL.md
 _remove/
 .aoa/
+
+# TypeScript build artifacts.
+# `tsc -b` emits these because tsconfig.node.json has no `noEmit` — the
+# typecheck script uses `--noEmit` to avoid producing them, but a stray
+# `tsc -b` (from an IDE or by hand) still can. See _review/FIX-PLAN.md Fix 8.
+*.tsbuildinfo
+mvp-echo-toolbar/vite.config.js
+mvp-echo-toolbar/vite.config.d.ts

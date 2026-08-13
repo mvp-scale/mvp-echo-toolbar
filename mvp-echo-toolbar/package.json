@@ -9,9 +9,10 @@
     "dev:electron": "NODE_ENV=development electron --no-sandbox --ozone-platform-hint=auto app/main/main-simple.js",
     "build": "vite build",
     "clean": "rm -rf dist",
-    "dist": "npm run clean && npm run build && electron-builder --win --publish=never",
+    "dist": "npm run clean && npm run typecheck && npm run build && electron-builder --win --publish=never",
     "start": "electron .",
-    "test": "echo \"No tests yet\""
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "voice-to-text",
