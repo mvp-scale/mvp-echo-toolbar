@@ -14,7 +14,7 @@
  */
 
 import { fromHub } from 'parakeet.js';
-import { chunkPlanFor } from './chunk-plan';
+import { chunkPlanFor, dedupeOverlappingWords, joinWords } from './chunk-plan';
 import type { ParakeetModel } from 'parakeet.js';
 
 let model: ParakeetModel | null = null;
@@ -147,12 +147,26 @@ async function transcribe(audio: Float32Array, sampleRate: number): Promise<void
   let result: any;
   let text: string;
   if (plan.chunked) {
+    // returnTimestamps gives us the word list, which we need because the
+    // library's merge duplicates its 10s window overlap verbatim at every seam
+    // (its dedup only compares adjacent words, so it cannot collapse a repeated
+    // multi-word span). We rebuild the text from de-duplicated words.
     result = await model.transcribeLongAudio(audio, sampleRate, {
       chunkLengthS: plan.chunkLengthS,
+      returnTimestamps: true,
       returnConfidences: true,
       enableProfiling: false,
     });
-    text = result.text || '';
+    const rawWords = Array.isArray(result.words) ? result.words : [];
+    const deduped = dedupeOverlappingWords(rawWords);
+    if (deduped.length !== rawWords.length) {
+      console.log(
+        `[ParakeetWorker] seam dedup: removed ${rawWords.length - deduped.length} duplicated word(s)`,
+      );
+    }
+    // Fall back to the library's own text if timestamps came back empty, so a
+    // missing word list degrades to the old behaviour rather than to silence.
+    text = deduped.length > 0 ? joinWords(deduped) : (result.text || '');
   } else {
     // Short audio stays on the single-shot path: no windowing overhead, and
     // this is the overwhelmingly common case for a push-to-talk toolbar.
