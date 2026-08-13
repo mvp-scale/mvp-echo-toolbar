@@ -237,9 +237,9 @@ that cannot be produced on a headless Linux box. See the manual-check list below
 | 3 | **T2** | 0 | Test seam: `node:test` runner + `require.cache` electron stub (zero new deps) | — | LOW | S | `test/helpers/electron-stub.js` | ✅ |
 | 4 | **3b** | 1 | `!app.isPackaged && NODE_ENV==='development'` asset gating | 8 | LOW | S | `main-simple.js:149,216,326` |✅ |
 | 5 | **4** | 1 | `did-fail-load` + 15 s bounded wait → error tray state, via existing crash budget | 3b | LOW | S+W | `main-simple.js:399-405` |🟩 |
-| 6 | **5** | 1 | Warm-mic gate (~50 ms energy / ~100–150 ms fallback) | T2 | LOW-MED | H | `AudioCapture.ts:467,474-478` |⬜ |
-| 7 | **1** | 1 | Defer `releaseMicStream()` while recording + wire `track.onended` to abort | 5 | LOW | S+W | `AudioCapture.ts:361-371,380-390` |✅ |
-| 8 | **3** | 1 | Register hotkey before engine init **+ `engineReadyRef` + new `starting` tray state/icon** | 4 | MED | S+H | `main-simple.js:396-438`, `tray-manager.js`, `icons/` |🟩 |
+| 6 | **5** | 1 | Warm-mic gate (~50 ms energy / ~100–150 ms fallback) | T2 | LOW-MED | H | `AudioCapture.ts:467,474-478` | 🟩 |
+| 7 | **1** | 1 | Defer `releaseMicStream()` while recording + wire `track.onended` to abort | 5 | LOW | S+W | `AudioCapture.ts:361-371,380-390` | 🟩 |
+| 8 | **3** | 1 | Register hotkey before engine init **+ `engineReadyRef` + `starting` tray state** (reuses `tray-processing.png`; no new icon asset — deviation from DoD, tooltip carries the distinction) | 4 | MED | S+H | `main-simple.js:396-438`, `tray-manager.js`, `icons/` | 🟩 |
 | 9 | **0a** | 1 | `initialize()` re-throws; typed `AlreadyLoadingError` excluded from 3-strike count; gate `model-ready` IPC | T1 | LOW | H+S | `inference-orchestrator.ts:81-92`, `CaptureApp.tsx:67-76` |✅ |
 | 10 | **9** | 1 | Three-state hardware-only probe; `unknown` ⇒ trust saved pref; collapse 4 call sites → 1 | T2 | **MED** | H | `engine-manager.js:152-193`, `webgpu-bridge-adapter.js:79-95,153-158` | ✅ |
 | 11 | **0b** | 1 | Reject pending request on teardown **only when pending exists** + epoch guard | 0a, T1 | **MED (highest)** | H | `inference-orchestrator.ts:136-143,145-175` |✅ |
@@ -253,6 +253,19 @@ that cannot be produced on a headless Linux box. See the manual-check list below
 | 19 | **12** | 4 | Async logger + rate-limit renderer console forwarding | — | LOW | S | `logger.js:12-33` | ⬜ |
 | 20 | **NAV** | 4 | `will-navigate` deny + `setWindowOpenHandler` deny (~3 lines) | — | LOW | S | `main-simple.js:135,199,308` | ⬜ |
 
+### Known coverage gap (honest limit)
+
+**Fix 5's *wiring* is static-only.** The tests cover the readiness-gate arithmetic and the
+warm/cold thresholds, but none drive `startRawRecording()` — that needs an `AudioContext` /
+`AudioWorkletNode` / `getUserMedia` fake that does not exist yet. Hand mutation testing confirms
+the gap: reverting the warm path to an ungated `fireCaptureReady('warm')` still passes all 24
+tests. Until that fake exists, Fix 5 rests on a static read plus the Windows check below.
+
+Other mutations were re-checked after the remediation pass and **are** caught: removing the
+rethrow, clearing `loading` in `disposeSync()`, deleting the supersession guard, collapsing
+`unknown` into `unavailable`, reverting `requestMicRelease`, and removing the remote-fallthrough
+clause.
+
 ### Windows manual checks (for rows marked 🟩)
 
 These cannot be produced on a headless Linux box — no `DISPLAY`, `chrome-sandbox` not setuid, and
@@ -264,6 +277,9 @@ WebGPU unreachable. Each takes under a minute on the target machine.
 | 8 (**3**) | Launch, then hit the hotkey immediately — before the tray settles | Tray shows **"Starting up..."**, nothing records, and the log reads `received before engine ready`. Previously: it would start a recording routed to the wrong adapter and fail silently. |
 | 8 (**3**) | Launch and watch the tray | Tooltip reads **"Starting up..."** then flips to **"Ready"**. Timestamps in the log show shortcut registration *before* `EngineManager initialized`. |
 | 4 (**3b**) | `set NODE_ENV=development` then run the packaged exe | App still loads its bundled UI (does **not** try `localhost:5175` and render blank). |
+| 7 (**1**) | Start recording, then physically unplug the mic mid-recording | Warning tone, tray → **error**, log reads `capture lost mid-recording (mic-disconnected)`. Previously: silent truncation, indistinguishable from saying nothing. |
+| 6 (**5**) | With mic-hold on, record, wait ~30s, record again and speak immediately | The "talk now" tone lands ~50–70 ms after the keypress and the first word is captured. This is the mutation-uncovered path — worth checking by ear. |
+| 5 (**4**) | After a forced load failure, press the hotkey | Tray **stays on error** and does not flip to "Starting up..." (regression guard for the fix-3/fix-4 interaction). |
 
 **Not scheduled** (explicit decisions, see "Deliberately skipped"): code signing · committed lockfile /
 `npm ci` · `sandbox: true` + CSP tightening · build slimming (6, 7) — fold into the next build change ·
