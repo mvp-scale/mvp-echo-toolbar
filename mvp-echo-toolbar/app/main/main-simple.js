@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
-const { log, clearLog, getLogPath } = require('./logger');
+const { log, clearLog, getLogPath, flushSync } = require('./logger');
 
 const engineManager = new EngineManager();
 const trayManager = new TrayManager();
@@ -193,6 +193,25 @@ function waitForFirstLoad(win, timeoutMs = 15000) {
 }
 
 /**
+ * Deny navigation and window.open for a window.
+ *
+ * The preload script stays attached to a webContents for its lifetime, not just
+ * the first load — so if one of these windows were ever navigated elsewhere,
+ * the whole IPC surface (config writes, clipboard, the mic pipeline) would come
+ * with it. Nothing here has a legitimate reason to navigate or open a window.
+ */
+function lockNavigation(win) {
+  win.webContents.on('will-navigate', (event, url) => {
+    log(`Blocked navigation attempt to ${url}`);
+    event.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    log(`Blocked window.open to ${url}`);
+    return { action: 'deny' };
+  });
+}
+
+/**
  * Create hidden window for audio capture
  * This window is never shown but keeps MediaRecorder/Web Audio API alive
  */
@@ -220,6 +239,8 @@ function createHiddenWindow() {
     const htmlPath = path.join(__dirname, '../../dist/renderer/index.html');
     hiddenWindow.loadFile(htmlPath);
   }
+
+  lockNavigation(hiddenWindow);
 
   hiddenWindow.on('closed', () => {
     hiddenWindow = null;
@@ -287,6 +308,8 @@ function createPopupWindow() {
     const htmlPath = path.join(__dirname, '../../dist/renderer/popup.html');
     popupWindow.loadFile(htmlPath);
   }
+
+  lockNavigation(popupWindow);
 
   // Hide on blur (click outside) — but not during countdown
   popupWindow.on('blur', () => {
@@ -398,6 +421,8 @@ function showWelcomeWindow() {
     welcomeWindow.loadFile(htmlPath);
   }
 
+  lockNavigation(welcomeWindow);
+
   welcomeWindow.once('ready-to-show', () => {
     welcomeWindow.show();
     welcomeWindow.focus();
@@ -419,6 +444,35 @@ app.whenReady().then(async () => {
   // parakeet model blob (cached in IndexedDB) from Chromium quota eviction —
   // without it, navigator.storage.persist() is denied and the cache can be
   // evicted under storage pressure, forcing a full re-download on a later launch.
+  // ── Cross-origin isolation ──
+  // Without COOP/COEP, SharedArrayBuffer is undefined and parakeet.js falls
+  // back to ONE WASM thread (backend.js:67-74). The decoder is FORCED onto WASM
+  // in every webgpu mode, so that penalty is paid on every transcription, in
+  // every packaged build, silently -- there is no error, just a permanently
+  // worse RTF. vite.config.ts sets these for the dev server only, which is why
+  // it never shows up while developing.
+  //
+  // 'credentialless' rather than 'require-corp': the model is fetched
+  // cross-origin from HuggingFace, and require-corp would reject those
+  // responses unless they carry CORP. credentialless permits them.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // Only our OWN documents get the isolation headers. Stamping them onto a
+    // cross-origin model download would be meaningless at best.
+    const isOwnDocument =
+      details.url.startsWith('file://') || details.url.startsWith('http://localhost:5175');
+    if (!isOwnDocument) {
+      callback({});
+      return;
+    }
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Cross-Origin-Opener-Policy': ['same-origin'],
+        'Cross-Origin-Embedder-Policy': ['credentialless'],
+      },
+    });
+  });
+
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'media' || permission === 'persistent-storage') {
       callback(true);
@@ -549,6 +603,8 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  // Logging is async now, so anything queued during shutdown would be lost.
+  flushSync();
 });
 
 app.on('before-quit', () => {
@@ -608,12 +664,38 @@ ipcMain.handle('diag:record', async (_event, line) => {
 // the ground-truth test for captured-fine vs sparse vs corrupted. Files land in a
 // subfolder next to the diagnostics log; only written when diagnostics are on.
 const diagAudioDir = path.join(os.tmpdir(), 'mvp-echo-audio');
+// One WAV per recording with no cap was the only genuinely unbounded growth in
+// the app: it survives restarts and the startup sweep never matched it (that
+// looks for 'mvp-echo-audio-*.webm' loose in the temp ROOT, not .wav files in
+// this subdirectory). Keep a rolling window of the most recent recordings —
+// those are the ones being diagnosed.
+const MAX_DIAG_AUDIO_FILES = 40;
+
+function pruneDiagAudio() {
+  try {
+    const files = fs.readdirSync(diagAudioDir)
+      .filter(f => f.endsWith('.wav'))
+      .map(f => {
+        const full = path.join(diagAudioDir, f);
+        return { full, mtime: fs.statSync(full).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime); // newest first
+    for (const stale of files.slice(MAX_DIAG_AUDIO_FILES)) {
+      try { fs.unlinkSync(stale.full); } catch (_e) { /* ignore */ }
+    }
+  } catch (_e) { /* ignore */ }
+}
+
 ipcMain.handle('diag:save-audio', async (_event, name, buf) => {
   if (!DIAG_ENABLED) return { success: false };
   try {
     if (!fs.existsSync(diagAudioDir)) fs.mkdirSync(diagAudioDir, { recursive: true });
     const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, '_');
-    fs.writeFileSync(path.join(diagAudioDir, safe), Buffer.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf));
+    const bytes = Buffer.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+    // Async: these are multi-MB WAVs and a sync write blocks the whole main
+    // process — tray, popup and every other IPC handler — for its duration.
+    await fs.promises.writeFile(path.join(diagAudioDir, safe), bytes);
+    pruneDiagAudio();
     return { success: true };
   } catch (e) {
     return { success: false, error: e && e.message };

@@ -47,6 +47,17 @@ self.onmessage = async (event: MessageEvent) => {
 async function init(backend: 'webgpu-hybrid' | 'wasm'): Promise<void> {
   console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend})...`);
 
+  // Self-check for the COOP/COEP fix. If this logs false in a packaged build,
+  // SharedArrayBuffer is unavailable and the WASM decoder is pinned to a single
+  // thread on EVERY transcription — the failure is otherwise completely silent,
+  // so it is worth one log line.
+  const isolated = (self as any).crossOriginIsolated === true;
+  console.log(
+    `[ParakeetWorker] crossOriginIsolated=${isolated} ` +
+    `sharedArrayBuffer=${typeof SharedArrayBuffer !== 'undefined'}` +
+    (isolated ? '' : ' — WASM decode will be single-threaded'),
+  );
+
   // The progress callback fires once per network read chunk (~tens of thousands
   // of times for the ~1.2GB model). Throttle to whole-percent transitions so it
   // doesn't flood the console/log with thousands of lines per download.
