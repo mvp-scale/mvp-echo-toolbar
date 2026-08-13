@@ -10,6 +10,11 @@ const path = require('path');
 // Tray states (ready tooltip is set dynamically in create())
 const STATES = {
   ready:      { icon: 'tray-ready.png',      tooltip: 'MVP-Echo - Ready (Ctrl+Alt+Z)' },
+  // Shown from launch until the engine finishes initializing. Reuses the
+  // processing icon (same "busy, don't press yet" meaning) so no new asset is
+  // needed; the tooltip carries the distinction. Before this state existed the
+  // tray showed "Ready" while the hotkey was still dead.
+  starting:   { icon: 'tray-processing.png', tooltip: 'MVP-Echo - Starting up...' },
   recording:  { icon: 'tray-recording.png',  tooltip: 'MVP-Echo - Recording...' },
   processing: { icon: 'tray-processing.png', tooltip: 'MVP-Echo - Processing...' },
   done:       { icon: 'tray-done.png',       tooltip: 'MVP-Echo - Copied!' },

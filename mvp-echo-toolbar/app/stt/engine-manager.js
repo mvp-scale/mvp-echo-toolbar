@@ -145,6 +145,21 @@ class EngineManager {
   }
 
   /**
+   * Give up on initialization and release anything awaiting readiness.
+   *
+   * Called when a precondition for initialize() can never be met -- e.g. the
+   * hidden renderer failed to load, so the GPU probe (which runs via
+   * executeJavaScript against it) can't happen. Without this, every IPC handler
+   * that awaits _readyPromise hangs forever and the popup/Settings never open.
+   *
+   * @param {string} reason - logged for diagnosis
+   */
+  abortInitialization(reason) {
+    log(`EngineManager: initialization aborted - ${reason}`);
+    this._resolveReady();
+  }
+
+  /**
    * Restore the persisted model selection from adapter configs.
    * Called once at the end of initialize() after adapter probing.
    *

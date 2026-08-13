@@ -120,8 +120,74 @@ let countdownActive = false;
 let rendererCrashCount = 0;
 const MAX_RENDERER_CRASHES = 3;
 
+/** True once EngineManager has finished initializing and the hotkey can record. */
+let engineReady = false;
+
 function getPreloadPath() {
   return path.resolve(__dirname, '../preload/preload.js');
+}
+
+/**
+ * Should windows load from the Vite dev server rather than the built bundle?
+ *
+ * Both conditions are required:
+ *   - NODE_ENV alone is an inheritable env var, so a PACKAGED exe launched from
+ *     a shell that exports NODE_ENV=development would try to reach a dev server
+ *     that isn't running and render a blank window with no error.
+ *   - app.isPackaged alone is also wrong: `npm start` runs UNPACKAGED against an
+ *     already-built dist/renderer, and would be misrouted to the dev server.
+ */
+function shouldUseDevServer() {
+  return !app.isPackaged && process.env.NODE_ENV === 'development';
+}
+
+/**
+ * Wait for a window's first load to settle, bounded.
+ *
+ * The previous version awaited a bare did-finish-load with no failure path and
+ * no timeout: if the renderer failed to load, startup hung forever, the engine
+ * was never initialized, and the tray sat looking healthy while recording was
+ * silently dead. Resolves with a status object rather than rejecting so the
+ * caller can branch explicitly.
+ *
+ * @returns {Promise<{ok: boolean, reason?: string}>}
+ */
+function waitForFirstLoad(win, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    if (!win || win.isDestroyed()) {
+      resolve({ ok: false, reason: 'window destroyed before load' });
+      return;
+    }
+    if (!win.webContents.isLoading()) {
+      resolve({ ok: true });
+      return;
+    }
+
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      win.webContents.removeListener('did-finish-load', onLoad);
+      win.webContents.removeListener('did-fail-load', onFail);
+      resolve(result);
+    };
+
+    const onLoad = () => finish({ ok: true });
+    const onFail = (_event, errorCode, errorDescription, _url, isMainFrame) => {
+      // Subframe failures don't stop the page. ERR_ABORTED (-3) is what a
+      // superseded navigation reports and is not a real failure either.
+      if (!isMainFrame || errorCode === -3) return;
+      finish({ ok: false, reason: `did-fail-load ${errorCode}: ${errorDescription}` });
+    };
+    const timer = setTimeout(
+      () => finish({ ok: false, reason: `no load event within ${timeoutMs}ms` }),
+      timeoutMs,
+    );
+
+    win.webContents.on('did-finish-load', onLoad);
+    win.webContents.on('did-fail-load', onFail);
+  });
 }
 
 /**
@@ -146,7 +212,7 @@ function createHiddenWindow() {
     },
   });
 
-  if (process.env.NODE_ENV === 'development') {
+  if (shouldUseDevServer()) {
     hiddenWindow.loadURL('http://localhost:5175/index.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/index.html');
@@ -213,7 +279,7 @@ function createPopupWindow() {
     },
   });
 
-  if (process.env.NODE_ENV === 'development') {
+  if (shouldUseDevServer()) {
     popupWindow.loadURL('http://localhost:5175/popup.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/popup.html');
@@ -323,7 +389,7 @@ function showWelcomeWindow() {
     },
   });
 
-  if (process.env.NODE_ENV === 'development') {
+  if (shouldUseDevServer()) {
     welcomeWindow.loadURL('http://localhost:5175/welcome.html');
   } else {
     const htmlPath = path.join(__dirname, '../../dist/renderer/welcome.html');
@@ -395,26 +461,28 @@ app.whenReady().then(async () => {
   // engineManager._readyPromise which resolves at the end of initialize())
   createHiddenWindow();
 
-  // Wait for the renderer to load before probing GPU via executeJavaScript.
-  await new Promise((resolve) => {
-    if (hiddenWindow.webContents.isLoading()) {
-      hiddenWindow.webContents.once('did-finish-load', resolve);
-    } else {
-      resolve();
-    }
-  });
+  // Show "starting" until the engine is genuinely ready. The tray used to read
+  // "Ready" during this whole window while the hotkey did nothing.
+  trayManager.setState('starting');
 
-  // Initialize engine manager (probes adapters, selects best one).
-  // Resolves the engine-ready promise so awaiting IPC handlers proceed.
-  const engineStatus = await engineManager.initializeAndSignalReady();
-  log('EngineManager initialized: ' + JSON.stringify(engineStatus));
-
-  log('MVP-Echo Toolbar: Engine ready');
-
-  // Register global shortcut (configurable)
+  // Register the global shortcut BEFORE awaiting the renderer load and engine
+  // init. Those can take seconds (GPU probe) or, on a failed load, never
+  // complete at all -- and the hotkey is the app's primary interaction, so its
+  // registration must not be hostage to them. Presses that arrive early are
+  // handled by the engineReady gate inside the handler.
   const ret = globalShortcut.register(appConfig.shortcut, () => {
     if (shortcutActive) {
       log('Global shortcut ignored (debounce active)');
+      return;
+    }
+
+    // Explicit readiness flag, not inferred state. Before the engine resolves,
+    // the renderer's selectedModel is still '' -- so it would NOT take its
+    // "model not ready" branch and would instead start a recording routed to
+    // the wrong (default) adapter, which then fails silently.
+    if (!engineReady) {
+      log(`Global ${shortcutLabel} received before engine ready - ignoring`);
+      trayManager.setState('starting');
       return;
     }
 
@@ -436,6 +504,30 @@ app.whenReady().then(async () => {
   } else {
     log(`Global shortcut ${shortcutLabel} registered successfully`);
   }
+
+  // Wait for the renderer to load before probing GPU via executeJavaScript.
+  // Bounded: a failed or hung load must surface, not wedge startup forever.
+  const loadResult = await waitForFirstLoad(hiddenWindow);
+  if (!loadResult.ok) {
+    rendererCrashCount++;
+    log(`CRITICAL: hidden capture window failed to load (${loadResult.reason}). ` +
+        `Recording is unavailable; engine init skipped. ` +
+        `(load failures this session: ${rendererCrashCount}/${MAX_RENDERER_CRASHES})`);
+    try { trayManager.setState('error'); } catch (_e) { /* ignore */ }
+    // Unblock IPC handlers awaiting readiness so the popup/Settings can still
+    // open and show an error rather than hanging on every invoke().
+    engineManager.abortInitialization(loadResult.reason);
+    return;
+  }
+
+  // Initialize engine manager (probes adapters, selects best one).
+  // Resolves the engine-ready promise so awaiting IPC handlers proceed.
+  const engineStatus = await engineManager.initializeAndSignalReady();
+  log('EngineManager initialized: ' + JSON.stringify(engineStatus));
+
+  engineReady = true;
+  trayManager.setState('ready');
+  log('MVP-Echo Toolbar: Engine ready');
 });
 
 // Tray app: window-all-closed does NOT quit
