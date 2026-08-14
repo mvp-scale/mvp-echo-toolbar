@@ -29,8 +29,11 @@ const COI_ENABLED = !(process.argv.includes('--no-coi') || !!process.env.MVP_NO_
 // transcription pipeline instead of the microphone. Deterministic: the same
 // bytes and the same model every run, so a difference in output is the code
 // change and not how the sentence was read.
-const REPLAY_ARG = process.argv.find((a) => a.startsWith('--replay='));
-const REPLAY_PATH = REPLAY_ARG ? REPLAY_ARG.slice('--replay='.length).replace(/^"|"$/g, '') : null;
+function parseReplayArg(argv) {
+  const arg = (argv || []).find((a) => typeof a === 'string' && a.startsWith('--replay='));
+  return arg ? arg.slice('--replay='.length).replace(/^"|"$/g, '') : null;
+}
+const REPLAY_PATH = parseReplayArg(process.argv);
 const diagPath = path.join(os.tmpdir(), 'mvp-echo-diagnostics.log');
 
 // ── Global crash safety ──
@@ -121,7 +124,16 @@ if (!gotTheLock) {
   return;
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  // A second launch carrying --replay is a test command, not a request to show
+  // the UI: forward it to the already-running instance instead of quitting
+  // silently. Without this, replay only ever worked on a cold start.
+  const replayPath = parseReplayArg(argv);
+  if (replayPath) {
+    log('MVP-Echo Toolbar: Second instance requested replay.');
+    triggerReplay(replayPath);
+    return;
+  }
   log('MVP-Echo Toolbar: Second instance detected, showing popup.');
   togglePopup();
 });
@@ -203,6 +215,27 @@ function waitForFirstLoad(win, timeoutMs = 15000) {
     win.webContents.on('did-finish-load', onLoad);
     win.webContents.on('did-fail-load', onFail);
   });
+}
+
+/**
+ * Read a WAV off disk and hand it to the capture window for transcription.
+ * The renderer waits for the model itself, so this does not need to.
+ */
+function triggerReplay(filePath) {
+  if (!hiddenWindow || hiddenWindow.isDestroyed()) {
+    log(`Replay FAILED: capture window not available`);
+    return;
+  }
+  try {
+    const bytes = fs.readFileSync(filePath);
+    log(`Replay: sending ${filePath} (${bytes.length} bytes) to the capture window`);
+    hiddenWindow.webContents.send(
+      'diag:replay-audio',
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    );
+  } catch (e) {
+    log(`Replay FAILED to read ${filePath}: ${e && e.message}`);
+  }
 }
 
 /**
@@ -618,16 +651,7 @@ app.whenReady().then(async () => {
   trayManager.setState('ready');
   log('MVP-Echo Toolbar: Engine ready');
 
-  if (REPLAY_PATH) {
-    try {
-      const bytes = fs.readFileSync(REPLAY_PATH);
-      log(`Replay: sending ${REPLAY_PATH} (${bytes.length} bytes) to the capture window`);
-      const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      hiddenWindow.webContents.send('diag:replay-audio', copy);
-    } catch (e) {
-      log(`Replay FAILED to read ${REPLAY_PATH}: ${e && e.message}`);
-    }
-  }
+  if (REPLAY_PATH) triggerReplay(REPLAY_PATH);
 });
 
 // Tray app: window-all-closed does NOT quit

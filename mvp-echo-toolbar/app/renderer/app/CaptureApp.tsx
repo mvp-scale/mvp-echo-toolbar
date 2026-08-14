@@ -150,9 +150,21 @@ export default function CaptureApp() {
         try {
           const { pcm, sampleRate } = decodeWav(buf);
           console.log(`CaptureApp: REPLAY ${pcm.length} samples (${(pcm.length / sampleRate).toFixed(1)}s @ ${sampleRate}Hz)`);
+
+          // The model finishes loading seconds after the engine reports ready,
+          // so a replay fired at startup would otherwise arrive too early and
+          // abort. Wait for it rather than making the caller time the launch.
           if (!orchestratorRef.current.isReady()) {
-            console.error('CaptureApp: REPLAY aborted — orchestrator not ready');
-            return;
+            console.log('CaptureApp: REPLAY waiting for the model to finish loading...');
+            const deadline = Date.now() + 180000;
+            while (!orchestratorRef.current.isReady() && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 250));
+            }
+            if (!orchestratorRef.current.isReady()) {
+              console.error('CaptureApp: REPLAY aborted — model never became ready');
+              return;
+            }
+            console.log('CaptureApp: REPLAY model ready, transcribing');
           }
           const t0 = Date.now();
           const result = await orchestratorRef.current.transcribe(trimSilence(pcm), sampleRate);
