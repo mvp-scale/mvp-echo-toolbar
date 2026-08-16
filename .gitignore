@@ -107,3 +107,8 @@ _remove/
 *.tsbuildinfo
 mvp-echo-toolbar/vite.config.js
 mvp-echo-toolbar/vite.config.d.ts
+
+# Byte-identical copy of app/preload/preload.js that the build emits at the
+# project root. Nothing loads it; getPreloadPath() resolves ../preload/preload.js
+# relative to app/main. Ignored so it can't be mistaken for the real file.
+mvp-echo-toolbar/preload.js
