@@ -47,7 +47,57 @@ optimise the machine already at 100x.
 
 ---
 
-## Next: migrate off Electron 28
+## Current work: branch `electron-43` — Electron 43 + a reliability overhaul
+
+_Session of 2026-08-16. Nothing merged to `dev` or `main`. Read
+`_review/RELIABILITY-PLAN.md` first — it is authoritative; this is the summary._
+
+### The headline
+
+`git diff --stat dev electron-43` at the start was **three files, zero application code**. Every
+defect found since exists identically on Electron 28. Electron 43 removed two crutches —
+`adapter.requestAdapterInfo()` and a permissive COEP posture for the module worker — that had been
+keeping the WebGPU path on the happy road. **The app was not regressing because of 43; 43 was the
+first time anyone saw what it does when its primary engine fails.**
+
+### State
+
+- **Tests 34 → 121**, `npm run typecheck` clean at every commit.
+- 27 of 31 planned items done, 2 dropped with reasons, 1 deferred, plus two bugs found in use.
+- **Phase 1 is verified on the XPS.** Everything after it is inspection + typecheck only.
+
+### What was found and fixed
+
+- `adapter.requestAdapterInfo()` was removed in Chrome 131. The probe let that decide availability,
+  so Electron 43 reported "no usable GPU on this system" about a working 3090. `webgpu.d.ts`
+  hand-declared the removed method, which is why `tsc` stayed green — deleted, along with the dead
+  `gpu-detector.ts`.
+- COEP blocks the Vite module worker under `file://` on Chromium 150. Cross-origin isolation is now
+  **off by default** (`--coi` re-enables). Measured: single-threaded decode is **17.3x realtime** on
+  the XPS, faster than the 12.6x recorded *with* threading — so the `app://` origin migration was
+  dropped entirely, and with it a 2,371 MB re-download for every existing user.
+- The CPU engine could never bootstrap its own bundled model, so a fresh install had no fallback at
+  all. Reachable on Electron 28, before the user touches anything.
+- "Which model is selected" lived in seven places that disagreed — captured live with three config
+  files holding three different ids at once. Now one `engine-state.json`.
+- Routing was decided twice, at record start and again at stop, so a mid-recording switch dispatched
+  audio to the wrong engine and lost it. Now frozen per recording.
+- A loading GPU model no longer kills the hotkey; it falls back to CPU for that recording.
+- The logger turned every Error into `{}`. A failed worker hung for 15 minutes with no event. Two of
+  three windows forwarded no console output at all.
+
+### Do this next
+
+1. Build from `electron-43` and work through **section 9 of the plan** — the six things only Windows
+   can confirm. Mid-recording switch and CPU fallback matter most.
+2. Untriaged: **onnxruntime-web is fetched from `cdn.jsdelivr.net` at runtime.** An offline,
+   privacy-first app should not be doing that. Not in the plan yet.
+3. `--sab` works on Chromium 150 (`SAB function | COI false | cores 16`) but should stay off — it
+   relaxes a Spectre mitigation to buy throughput measured as unnecessary.
+
+---
+
+## Historical: the original Electron 28 migration plan
 
 ### Why
 
@@ -163,8 +213,10 @@ them makes a regression impossible to attribute.
 
 ## Traps that cost time in the last session
 
-- **Worker `console.log` is NOT forwarded to the main log** — only the renderer's is. `[ParakeetWorker]`
-  lines appear in DevTools only. A verification line put in the worker is invisible in the log file.
+- ~~**Worker `console.log` is NOT forwarded to the main log**~~ — **fixed on `electron-43`.**
+  `forwardConsole()` now sends warnings and errors from all three windows to the log file, including
+  browser-generated ones (COEP violations, worker load failures) that no in-renderer shim can see.
+  Plain `console.log` from the worker is still DevTools-only; use `console.warn` to be sure.
 - **`CaptureApp` overrides `console.log` to be silent unless `--diag`.** `console.warn`/`error`
   always print. Use `console.warn` for anything that must be seen.
 - **WebGPU cannot measure available VRAM.** `maxBufferSize` is an API cap; an allocation probe
