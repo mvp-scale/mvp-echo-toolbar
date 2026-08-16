@@ -22,6 +22,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { log } = require('../main/logger');
+const { createState, restore, select, engineForModel } = require('./engine-state');
 
 const RemoteAdapter = require('./adapters/remote-adapter');
 const LocalSidecarAdapter = require('./adapters/local-sidecar-adapter');
@@ -133,6 +134,42 @@ class EngineManager {
   }
 
   /**
+   * Rebuild selection from the single record.
+   *
+   * Replaces a three-branch precedence puzzle over three independent config
+   * files — two of whose branches could outrank an explicit user choice — with:
+   * read one record, repair it, and demote only on a definitive negative.
+   *
+   * The GPU is probed lazily, only when something actually wants WebGPU, and
+   * 'unknown' is passed through as 'indeterminate' so a cold boot (where the
+   * renderer that answers the probe cannot be up yet) trusts the saved
+   * preference instead of disabling WebGPU every time.
+   */
+  async _restoreModelSelection() {
+    try {
+      const saved = this._loadEngineState() || this._migrateLegacyConfigs();
+
+      let gpu = 'indeterminate';
+      if (saved && engineForModel(saved.modelId) === 'webgpu') {
+        const probed = await this.webgpuAdapter.probeGpuCapability();
+        gpu = probed === 'available' ? 'usable'
+          : probed === 'unavailable' ? 'unusable'
+            : 'indeterminate';
+      }
+
+      const state = restore(saved, { gpu });
+      this._applyState(state);
+      if (state.reason) {
+        log(`EngineManager: ${state.reason} (selected ${state.modelId})`);
+      } else {
+        log('EngineManager: restored model selection:', state.modelId);
+      }
+    } catch (error) {
+      log('EngineManager: could not restore model selection:', error.message);
+    }
+  }
+
+  /**
    * Wrap initialize() so the ready promise resolves when it finishes,
    * regardless of which return path was taken.
    */
@@ -168,7 +205,78 @@ class EngineManager {
    *   2. Local sidecar adapter's saved activeModelId (from local-sidecar-config.json)
    *   3. Keep the default 'local-fast'
    */
-  async _restoreModelSelection() {
+  /** Absolute path of the single persisted record. */
+  _engineStatePath() {
+    return path.join(app.getPath('userData'), 'engine-state.json');
+  }
+
+  /** @returns {object|null} the persisted record, or null on first run. */
+  _loadEngineState() {
+    try {
+      const p = this._engineStatePath();
+      if (!fs.existsSync(p)) return null;
+      return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch (err) {
+      log('EngineManager: could not read engine-state.json:', err.message);
+      return null;
+    }
+  }
+
+  _saveEngineState(state) {
+    try {
+      fs.writeFileSync(this._engineStatePath(), JSON.stringify(state, null, 2));
+    } catch (err) {
+      log('EngineManager: could not write engine-state.json:', err.message);
+    }
+  }
+
+  /**
+   * First-run only: derive a record from the three legacy config files.
+   *
+   * Existing installs must not lose their selection just because the storage
+   * moved. This reproduces the OLD precedence deliberately — it is the best
+   * available guess at intent when there is no record of what came last. From
+   * the first `switchModel()` onwards the record is authoritative and this is
+   * never consulted again, which is what stops a stale entry outranking an
+   * explicit choice a second time.
+   */
+  _migrateLegacyConfigs() {
+    try {
+      const webgpuConfig = this.webgpuAdapter.getConfig();
+      if (webgpuConfig.activeModelId && webgpuConfig.isConfigured) {
+        return { modelId: webgpuConfig.activeModelId };
+      }
+      const remoteConfig = this.remoteAdapter.getConfig();
+      if (remoteConfig.selectedModel && remoteConfig.isConfigured) {
+        return { modelId: remoteConfig.selectedModel };
+      }
+      const localConfig = this.localSidecarAdapter.getConfig();
+      if (localConfig.activeModelId) {
+        return { modelId: localConfig.activeModelId };
+      }
+    } catch (err) {
+      log('EngineManager: legacy config migration failed:', err.message);
+    }
+    return null;
+  }
+
+  /** Point activeAdapter/selectedModelId at whatever the record says. */
+  _applyState(state) {
+    this.state = state;
+    this.selectedModelId = state.modelId;
+    if (state.engine === 'webgpu') {
+      this.activeAdapter = this.webgpuAdapter;
+      this.activeAdapterName = 'webgpu';
+    } else if (state.engine === 'local') {
+      this.activeAdapter = this.localSidecarAdapter;
+      this.activeAdapterName = 'local-sidecar';
+    } else {
+      this.activeAdapter = this.remoteAdapter;
+      this.activeAdapterName = 'remote';
+    }
+  }
+
+  async _restoreModelSelectionLegacy() {
     try {
       const remoteConfig = this.remoteAdapter.getConfig();
       const webgpuConfig = this.webgpuAdapter.getConfig();
@@ -375,12 +483,17 @@ class EngineManager {
    */
   async switchModel(modelId) {
     try {
+      // Record the choice FIRST, so "what the user picked" is committed before
+      // any adapter work. The engine is derived from the model id rather than
+      // set independently, so the pair cannot drift — that drift is how audio
+      // captured for one engine reached another.
+      const nextState = select(this.state || createState(), modelId);
+
       if (modelId.startsWith('webgpu-')) {
         // Switch to WebGPU adapter (on-device GPU)
         await this.webgpuAdapter.switchModel(modelId);
-        this.activeAdapter = this.webgpuAdapter;
-        this.activeAdapterName = 'webgpu';
-        this.selectedModelId = modelId;
+        this._applyState(nextState);
+        this._saveEngineState(nextState);
         log('EngineManager: Switched to WebGPU adapter, model:', modelId);
 
         // Notify hidden window to initialize the parakeet.js orchestrator
@@ -391,9 +504,8 @@ class EngineManager {
       } else if (modelId.startsWith('local-')) {
         // Switch to local adapter
         await this.localSidecarAdapter.switchModel(modelId);
-        this.activeAdapter = this.localSidecarAdapter;
-        this.activeAdapterName = 'local-sidecar';
-        this.selectedModelId = modelId;
+        this._applyState(nextState);
+        this._saveEngineState(nextState);
         log('EngineManager: Switched to local-sidecar adapter, model:', modelId);
         this._releaseWebGpuOrchestrator();
       } else {
@@ -403,9 +515,8 @@ class EngineManager {
         // here left the manager stranded on a broken adapter when the switch
         // failed, with the previously-working one deactivated.
         await this.remoteAdapter.switchModel(modelId);
-        this.activeAdapter = this.remoteAdapter;
-        this.activeAdapterName = 'remote';
-        this.selectedModelId = modelId;
+        this._applyState(nextState);
+        this._saveEngineState(nextState);
         log('EngineManager: Switched to remote adapter, model:', modelId);
         this._releaseWebGpuOrchestrator();
       }
