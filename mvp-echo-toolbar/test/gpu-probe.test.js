@@ -85,6 +85,21 @@ describe('GPU probe — metadata must not decide availability', () => {
     assert.strictEqual(r.adapterName, 'Unknown GPU', 'name degrades, availability does not');
   });
 
+  test('a masked device name still yields a useful label', async () => {
+    // Observed on the real machine: Chromium masks GPUAdapterInfo.device for
+    // privacy, so it came back empty while vendor and architecture were
+    // populated — and the probe reported the useless "Unknown GPU". Compose
+    // from what IS available rather than giving up.
+    const masked = { info: { device: '', vendor: 'nvidia', architecture: 'turing' }, limits };
+
+    const r = await runProbe({ gpu: { requestAdapter: async () => masked } });
+
+    assert.strictEqual(r.available, true);
+    assert.match(r.adapterName, /nvidia/i);
+    assert.match(r.adapterName, /turing/i);
+    assert.notStrictEqual(r.adapterName, 'Unknown GPU');
+  });
+
   test('an adapter with no metadata at all is still available', async () => {
     const r = await runProbe({ gpu: { requestAdapter: async () => ({ limits }) } });
 

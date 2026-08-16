@@ -66,9 +66,16 @@ const GPU_PROBE_SOURCE = `
     let maxBufferSize = null;
     try { maxBufferSize = adapter.limits.maxBufferSize; } catch (_e) { /* optional */ }
 
+    // Chromium masks GPUAdapterInfo.device for privacy on most platforms, so
+    // it is routinely empty while vendor and architecture are populated.
+    // Reporting "Unknown GPU" next to a perfectly good "nvidia / turing" is a
+    // self-inflicted loss of information — compose from whatever is present.
+    const composed = [info.vendor, info.architecture].filter(Boolean).join(' ');
+    const adapterName = info.device || info.description || composed || 'Unknown GPU';
+
     return {
       available: true,
-      adapterName: info.device || info.description || 'Unknown GPU',
+      adapterName,
       vendor: info.vendor || 'Unknown',
       architecture: info.architecture || '',
       maxBufferSize,
