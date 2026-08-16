@@ -109,7 +109,46 @@ trusting anything marked "done" that has only been typechecked.
 
 ### Do this next
 
-0. **The hosted endpoint needs an honest state model — start here.** Maintainer's own words:
+0. ✅ **DONE — the hosted endpoint has an honest state model.** Two commits; see below for what
+   is still unverified. The rule that came out of it, in the maintainer's words: *"if the user
+   clicks the GPU, the CPU, or the remote GPU model, that should be it. You shouldn't be
+   automatically switching. It's the automatic switching that causes the unknown behavior."*
+
+   - **A selection is committed and persisted the instant it is made**, before any adapter or
+     network call. Engine-side failure returns a `warning` against a selection that stands.
+   - **`applyGpu`/`restore` no longer rewrite `engine`/`modelId`.** A probe may set `status` and
+     `reason` only. Six existing tests asserted the old demotion was correct and now assert the
+     opposite.
+   - **`cloud:get-config` reads the remote adapter, not `activeAdapter`.** The fifth instance of
+     RC-1, and a destructive one: opening Settings on the CPU engine *erased* the saved endpoint.
+   - **`isConfigured` is gone** from the endpoint payload; `endpointStatusLabel()` reports only
+     what was observed — "Not tested" / "Reachable · N models" / "Key rejected" / the transport
+     error. Never "Connected", never "Authenticated".
+   - Endpoint saves 700 ms after typing stops, and editing the URL or key clears the probe result.
+
+   **The server is the constraint now, and it is a DEPLOYMENT problem, not a code one.**
+   `mvp-stt-docker` at v3.0.0 has everything the toolbar wants. The box at
+   `192.168.1.169:20300` is running **v1.0.0** — four independent signals agree: `openapi.json`
+   says 1.0.0 vs `bridge.py:142`'s `version="3.0.0"`; `POST /v1/models/switch` (bridge.py:175-205)
+   404s; `/health` returns `{"status":"ok"}` with no `engine` block; `/v1/models` omits `active`,
+   `label` and `group`. **Redeploy and model switching starts working with no client change.**
+
+   ⚠️ **That deployment has no working authentication.** `POST /v1/audio/transcriptions` returns
+   200 with no key and with a wrong key. The proxy IS in the request path (`BaseHTTP/0.6` fronting
+   `uvicorn`), and the repo's `auth-proxy.py` requires a Bearer key on everything except `/health`
+   — so the deployed proxy is stale too. Anyone who can reach that host can use the GPU. **Verify
+   after redeploying rather than assuming.** This is also why the toolbar cannot claim the key was
+   accepted: a 200 proves nothing when nothing checks. A 401 IS provable, so that path is built
+   and will start working by itself once the real proxy is running.
+
+   Also settled by reading the server: **Test Connection must never call `/v1/models/switch`.**
+   Only one model is resident at a time and switching unloads it / restarts the inference
+   subprocess (`managed_ws_adapter.py:410-411`). A "test" that evicted the loaded model would be
+   destructive.
+
+   <details><summary>Original problem statement (kept for context)</summary>
+
+   Maintainer's own words:
    *"Test connection seems to give a false impression that it's connected. There's both connected
    and authenticated, and connected gives the wrong definition."* He is right, and it is worse than
    naming: `remote-adapter.js` defines `isConfigured` as `!!endpointUrl`, so **a URL merely being
@@ -138,6 +177,8 @@ trusting anything marked "done" that has only been typechecked.
 
    Also verify **persistence and ordering** of the endpoint fields specifically: they are the one
    surface where the maintainer has doubts, and the one path never confirmed end to end.
+
+   </details>
 
 1. **Merge to `dev` and soak.** Verification is done; nothing is blocking. The plan's own advice is
    separate soaks for a platform bump and for behaviour changes, and this branch is both — so watch

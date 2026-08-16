@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { endpointStatusLabel, type EndpointProbe } from '../engine-status-label';
 
 // 'error' exists because a model card was previously incapable of expressing
 // failure: a rejected switch logged to a console nobody was reading and then
@@ -137,7 +138,10 @@ export default function SettingsPanel() {
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<ModelOption[]>(DEFAULT_MODELS);
   const [selectedModelId, setSelectedModelId] = useState('local-fast');
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'testing' | 'connected'>('disconnected');
+  // What the last Test Connection actually observed. `null` means never tested,
+  // which is a different thing from "not working" and is now shown as such.
+  const [endpointProbe, setEndpointProbe] = useState<EndpointProbe | null>(null);
+  const [testingEndpoint, setTestingEndpoint] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [gpuInfo, setGpuInfo] = useState<{ available: boolean; adapterName?: string; error?: string } | null>(null);
   const [micReadinessMode, setMicReadinessMode] = useState<MicReadinessMode>('keep-ready');
@@ -296,9 +300,9 @@ export default function SettingsPanel() {
           if (config.endpointUrl) setEndpointUrl(config.endpointUrl);
           if (config.apiKey) setApiKey(config.apiKey);
           if (config.selectedModel) setSelectedModelId(config.selectedModel);
-          if (config.isConfigured) {
-            setConnectionStatus('connected');
-          }
+          // Nothing here may set a connection state. Loading a saved URL tells
+          // you a string was saved, not that anything is reachable — treating
+          // those as the same fact is what turned the dot green on a typed URL.
         }
       } catch (e) {
         console.error('Failed to load cloud config:', e);
@@ -356,20 +360,40 @@ export default function SettingsPanel() {
 
   const handleTestConnection = useCallback(async () => {
     if (!endpointUrl) return;
-    setConnectionStatus('testing');
+    setTestingEndpoint(true);
 
     try {
       const ipc = ipcRef.current;
-      if (!ipc) { setConnectionStatus('disconnected'); return; }
+      if (!ipc) { setEndpointProbe({ ok: false, error: 'No IPC bridge' }); return; }
 
+      // Save first — testing a URL the adapter has not been given tests the
+      // previous one. The debounced autosave may not have fired yet.
       await ipc.invoke('cloud:configure', { endpointUrl, apiKey });
       const result = await ipc.invoke('cloud:test-connection');
-      setConnectionStatus(result.success ? 'connected' : 'disconnected');
-      if (result.success) await fetchModels();
-    } catch (_error) {
-      setConnectionStatus('disconnected');
+
+      setEndpointProbe({
+        ok: !!result?.success,
+        status: result?.status ?? null,
+        error: result?.error ?? null,
+        modelCount: result?.modelCount ?? null,
+      });
+      if (result?.success) await fetchModels();
+    } catch (error) {
+      setEndpointProbe({ ok: false, error: error instanceof Error ? error.message : 'Test failed' });
+    } finally {
+      setTestingEndpoint(false);
     }
   }, [endpointUrl, apiKey, fetchModels]);
+
+  // Editing the endpoint or key invalidates what the last test proved. Leaving
+  // a stale green dot above a changed URL is the same lie in slower motion.
+  useEffect(() => { setEndpointProbe(null); }, [endpointUrl, apiKey]);
+
+  const endpointStatus = endpointStatusLabel({
+    url: endpointUrl,
+    testing: testingEndpoint,
+    probe: endpointProbe,
+  });
 
   const handleMicReadinessMode = useCallback(async (mode: MicReadinessMode) => {
     setMicReadinessMode(mode);
@@ -551,29 +575,28 @@ export default function SettingsPanel() {
         {/* Connection Status + Test -- hidden when local/webgpu model is active */}
         {endpointFieldsVisible && (
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              {connectionStatus === 'testing' && (
-                <>
-                  <div className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></div>
-                  <span className="text-[9px] text-yellow-600 font-medium">Testing...</span>
-                </>
-              )}
-              {connectionStatus === 'connected' && (
-                <>
-                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                  <span className="text-[9px] text-green-600 font-medium">Connected</span>
-                </>
-              )}
-              {connectionStatus === 'disconnected' && (
-                <>
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
-                  <span className="text-[9px] text-gray-500 font-medium">Not configured</span>
-                </>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                endpointStatus.tone === 'ok' ? 'bg-green-500' :
+                endpointStatus.tone === 'busy' ? 'bg-yellow-500 animate-pulse' :
+                endpointStatus.tone === 'error' ? 'bg-red-500' :
+                'bg-gray-400'
+              }`} />
+              <span className={`text-[9px] font-medium truncate ${
+                endpointStatus.tone === 'ok' ? 'text-green-600' :
+                endpointStatus.tone === 'busy' ? 'text-yellow-600' :
+                endpointStatus.tone === 'error' ? 'text-red-500' :
+                'text-gray-500'
+              }`} title={endpointStatus.label}>
+                {endpointStatus.label}
+              </span>
+              {endpointStatus.detail && (
+                <span className="text-[8px] text-muted-foreground shrink-0">{endpointStatus.detail}</span>
               )}
             </div>
             <button
               onClick={handleTestConnection}
-              disabled={connectionStatus === 'testing'}
+              disabled={testingEndpoint}
               className="px-2 py-0.5 bg-primary text-primary-foreground text-[9px] font-semibold rounded hover:bg-primary/90 disabled:opacity-50"
             >
               Test Connection

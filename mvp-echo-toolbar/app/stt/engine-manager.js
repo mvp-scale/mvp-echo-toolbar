@@ -693,20 +693,31 @@ class EngineManager {
       return { success: true };
     });
 
+    // Reports what was OBSERVED, and nothing more. The renderer turns this into
+    // a label via endpointStatusLabel(); it must never have to guess.
     ipcMain.handle('cloud:test-connection', async () => {
       log('EngineManager: Testing connection...');
       const result = await this.remoteAdapter.isAvailable();
+
       if (!result.available) {
-        log('EngineManager: Connection test failed:', result.error);
-        return { success: false, error: result.error || 'Server not reachable' };
+        log(`EngineManager: connection test failed (status ${result.status ?? 'none'}): ${result.error}`);
+        return {
+          success: false,
+          status: result.status ?? null,
+          error: result.error || 'Server not reachable',
+          modelCount: null,
+        };
       }
 
-      const health = await this.remoteAdapter.getHealth();
+      const health = await this.remoteAdapter.getHealth().catch(() => null);
+      log(`EngineManager: connection test OK (${result.modelCount ?? '?'} model(s) offered)`);
 
       return {
         success: true,
-        device: 'cloud',
-        health: health,
+        status: result.status ?? 200,
+        error: null,
+        modelCount: result.modelCount ?? null,
+        health,
       };
     });
 

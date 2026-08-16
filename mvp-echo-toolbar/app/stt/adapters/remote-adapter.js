@@ -176,26 +176,39 @@ class RemoteAdapter {
         });
         clearTimeout(timeoutId);
 
-        if (response.ok) return { available: true };
-        if (response.status === 401 || response.status === 403) {
-          return { available: false, error: 'Invalid API key' };
+        // The status code is carried out so callers can tell a REJECTION from a
+        // failure to reach anything. A 200 here is not proof the key was
+        // accepted — a server that ignores keys answers 200 to everyone — but a
+        // 401/403 is definitive proof it was refused.
+        if (response.ok) {
+          let modelCount = null;
+          try {
+            const body = await response.json();
+            if (Array.isArray(body?.data)) modelCount = body.data.length;
+          } catch (_e) {
+            // A 200 with an unparseable body still means the host answered.
+          }
+          return { available: true, status: response.status, modelCount };
         }
-        return { available: false, error: `Server returned HTTP ${response.status}` };
+        if (response.status === 401 || response.status === 403) {
+          return { available: false, status: response.status, error: 'API key rejected' };
+        }
+        return { available: false, status: response.status, error: `Server returned HTTP ${response.status}` };
       } catch (fetchError) {
         clearTimeout(timeoutId);
         if (fetchError.name === 'AbortError') {
-          return { available: false, error: 'Connection timeout' };
+          return { available: false, status: null, error: 'Connection timeout' };
         }
         if (fetchError.code === 'ECONNREFUSED') {
-          return { available: false, error: 'Connection refused - server may be offline' };
+          return { available: false, status: null, error: 'Connection refused - server may be offline' };
         }
         if (fetchError.code === 'ENOTFOUND') {
-          return { available: false, error: 'Server not found - check the URL' };
+          return { available: false, status: null, error: 'Server not found - check the URL' };
         }
-        return { available: false, error: fetchError.message };
+        return { available: false, status: null, error: fetchError.message };
       }
     } catch (_error) {
-      return { available: false, error: _error.message };
+      return { available: false, status: null, error: _error.message };
     }
   }
 
@@ -249,9 +262,19 @@ class RemoteAdapter {
         // Models list is supplementary; health check still succeeds
       }
 
+      // Two health shapes are in the wild and both must read correctly.
+      //
+      //   older: {"status":"ok"}
+      //   newer: {"status":"ok","engine":{"state":"loaded","model_id":"…",…}}
+      //
+      // Keying only on the nested engine object reported a perfectly healthy
+      // older server as "degraded", because the key it looked for did not exist
+      // yet. Fall back to the top-level status when there is no engine block.
       const engineStatus = healthData.engine || {};
       const loadedModel = engineStatus.model_id || null;
-      const state = engineStatus.state === 'loaded' ? 'loaded' : 'degraded';
+      const state = engineStatus.state
+        ? (engineStatus.state === 'loaded' ? 'loaded' : 'degraded')
+        : (healthData.status === 'ok' ? 'loaded' : 'degraded');
 
       return {
         adapter: 'remote',
