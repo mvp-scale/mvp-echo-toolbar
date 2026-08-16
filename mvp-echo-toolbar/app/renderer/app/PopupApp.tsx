@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import TranscriptionDisplay from './components/TranscriptionDisplay';
 import SettingsPanel from './components/SettingsPanel';
 import StatusIndicator from './components/StatusIndicator';
+import type { EngineStateRecord } from '../../stt/capture-plan';
 
 interface TranscriptionData {
   text: string;
@@ -71,6 +72,18 @@ export default function PopupApp() {
   const [transcription, setTranscription] = useState<TranscriptionData>({ text: '' });
   const [showSettings, setShowSettings] = useState(false);
   const [countdown, setCountdown] = useState<CountdownData | null>(null);
+  const [engineState, setEngineState] = useState<EngineStateRecord | null>(null);
+
+  // The popup had NO state channel from main and fabricated everything it
+  // displayed. It now syncs once and follows every change.
+  useEffect(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) return;
+    const onState = (_e: unknown, s: EngineStateRecord) => setEngineState(s);
+    ipc.on?.('engine:state', onState);
+    ipc.invoke('engine:get-state').then(setEngineState).catch(() => {});
+    return () => ipc.removeListener?.('engine:state', onState);
+  }, []);
 
   // Load last transcription on mount
   useEffect(() => {
@@ -135,9 +148,11 @@ export default function PopupApp() {
 
   const handleCopy = useCallback(async () => {
     const api = (window as any).electronAPI;
-    if (api && transcription.text) {
-      await api.copyToClipboard(transcription.text);
-    }
+    if (!api || !transcription.text) return { success: false };
+    // Propagate the real answer. main verifies the write by reading the
+    // clipboard back; discarding that is what let the badge lie.
+    const result = await api.copyToClipboard(transcription.text);
+    return { success: result?.success !== false };
   }, [transcription.text]);
 
   const handleClose = useCallback(() => {
@@ -198,7 +213,7 @@ export default function PopupApp() {
       {/* Status bar — always pinned to bottom */}
       <div className="flex-shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border bg-muted/30 text-[10px]">
         <div className="flex items-center gap-2">
-          <StatusIndicator />
+          <StatusIndicator engineState={engineState} />
           {modelDisplay && <span className="text-muted-foreground">{modelDisplay}</span>}
         </div>
         <div className="flex items-center gap-1">

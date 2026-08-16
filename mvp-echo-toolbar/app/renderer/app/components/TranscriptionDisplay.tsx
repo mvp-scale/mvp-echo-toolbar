@@ -3,17 +3,27 @@ import { useState, useCallback } from 'react';
 interface Props {
   text: string;
   processingTime?: number;
-  onCopy: () => void;
+  /**
+   * Returns whether the clipboard write actually succeeded. main computes this
+   * (it reads the clipboard back), but the old `() => void` signature threw the
+   * answer away, so the badge said "Copied!" unconditionally -- including when
+   * nothing had been copied.
+   */
+  onCopy: () => Promise<{ success: boolean }> | void;
 }
 
 export default function TranscriptionDisplay({ text, processingTime, onCopy }: Props) {
   const [copied, setCopied] = useState(false);
 
-  const handleClick = useCallback(() => {
+  const [failed, setFailed] = useState(false);
+
+  const handleClick = useCallback(async () => {
     if (!text) return;
-    onCopy();
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    const result = await onCopy();
+    const ok = result ? result.success !== false : true;
+    setCopied(ok);
+    setFailed(!ok);
+    setTimeout(() => { setCopied(false); setFailed(false); }, 1500);
   }, [text, onCopy]);
 
   return (
@@ -34,6 +44,11 @@ export default function TranscriptionDisplay({ text, processingTime, onCopy }: P
             {copied && (
               <span className="text-[9px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
                 Copied!
+              </span>
+            )}
+            {failed && (
+              <span className="text-[9px] px-1.5 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">
+                Copy failed
               </span>
             )}
           </div>
