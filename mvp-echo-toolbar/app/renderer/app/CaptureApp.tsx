@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { planCapture, type CapturePlan, type EngineStateRecord } from '../../stt/capture-plan';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
@@ -36,7 +37,9 @@ export default function CaptureApp() {
   const isRecordingRef = useRef(false);
   const isProcessingRef = useRef(false);
   const isStartingRef = useRef(false); // guards the async start window (re-entrancy)
-  const selectedModelRef = useRef('');
+  const engineStateRef = useRef<EngineStateRecord | null>(null);
+  /** Routing frozen at record start; used verbatim at stop. */
+  const capturePlanRef = useRef<CapturePlan | null>(null);
   const selectedLanguageRef = useRef('');
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef(0);
@@ -93,18 +96,33 @@ export default function CaptureApp() {
     const ipc = (window as any).electron?.ipcRenderer;
     if (!ipc) return;
 
+    // Initial sync of the authoritative record, then live updates. The renderer
+    // no longer keeps its own idea of which model is selected — that copy could
+    // sit 42 seconds stale and is what dispatched a CPU recording to the GPU
+    // adapter.
+    const applyEngineState = (state: EngineStateRecord | null) => {
+      if (!state) return;
+      engineStateRef.current = state;
+      if (state.engine === 'webgpu' && !orchestratorRef.current.isReady()) {
+        initWebGpuOrchestrator();
+      }
+    };
+
+    // preload's on() returns nothing, so the handler is held for removeListener
+    // in cleanup rather than an unsubscribe closure.
+    const onEngineState = (_e: unknown, state: EngineStateRecord) => applyEngineState(state);
+    ipc.on?.('engine:state', onEngineState);
+
     const loadConfig = async () => {
       try {
+        applyEngineState(await ipc.invoke('engine:get-state'));
+        console.log(`CaptureApp: engine state, model=${engineStateRef.current?.modelId}`);
+      } catch (e) {
+        console.warn('CaptureApp: Failed to load engine state:', e);
+      }
+      try {
         const config = await ipc.invoke('cloud:get-config');
-        if (config) {
-          if (config.selectedModel) selectedModelRef.current = config.selectedModel;
-          if (config.language) selectedLanguageRef.current = config.language;
-        }
-        console.log(`CaptureApp: Config loaded, model=${selectedModelRef.current}`);
-        if (selectedModelRef.current.startsWith('webgpu-')) {
-          console.log('CaptureApp: Restored WebGPU model — auto-initializing orchestrator');
-          initWebGpuOrchestrator();
-        }
+        if (config?.language) selectedLanguageRef.current = config.language;
       } catch (e) {
         console.warn('CaptureApp: Failed to load config:', e);
       }
@@ -128,6 +146,7 @@ export default function CaptureApp() {
     loadConfig();
 
     return () => {
+      ipc.removeListener?.('engine:state', onEngineState);
       orchestratorRef.current.dispose();
     };
   }, [initWebGpuOrchestrator]);
@@ -400,8 +419,8 @@ export default function CaptureApp() {
               electronAPI.webgpuStoreTranscription({
                 text: result.text,
                 processingTime: result.processingTime,
-                engine: `webgpu (${selectedModelRef.current})`,
-                model: selectedModelRef.current,
+                engine: `webgpu (${capturePlanRef.current?.modelId ?? 'unknown'})`,
+                model: capturePlanRef.current?.modelId ?? 'unknown',
                 language: 'en',
               });
             } else {
@@ -420,20 +439,18 @@ export default function CaptureApp() {
           console.log(`CaptureApp: Got ${audioBuffer.byteLength} bytes`);
 
           if (audioBuffer.byteLength > 0) {
-            // Re-read config for model/language
-            try {
-              const ipc = (window as any).electron?.ipcRenderer;
-              if (ipc) {
-                const config = await ipc.invoke('cloud:get-config');
-                if (config?.selectedModel) selectedModelRef.current = config.selectedModel;
-                if (config?.language) selectedLanguageRef.current = config.language;
-              }
-            } catch (_e) { /* use cached */ }
+            // Dispatch under the plan this recording STARTED with. The previous
+            // version re-read config here, so a model switch during the
+            // recording sent audio captured for one engine to another, where it
+            // threw "transcribe() called on main-process adapter" and was lost.
+            // Observed with a 42-second gap between the two reads.
+            const plan = capturePlanRef.current;
+            const dispatchModel = plan?.modelId ?? 'local-fast';
 
-            console.log(`CaptureApp: Sending to engine (model=${selectedModelRef.current})`);
+            console.log(`CaptureApp: Sending to engine (model=${dispatchModel}, planned at record start)`);
             const audioArray = Array.from(new Uint8Array(audioBuffer));
             const result = await electronAPI.processAudio(audioArray, {
-              model: selectedModelRef.current,
+              model: dispatchModel,
               language: selectedLanguageRef.current,
             });
             if (isStale()) { console.warn('CaptureApp: stale transcription result ignored (run superseded)'); return; }
@@ -519,31 +536,26 @@ export default function CaptureApp() {
         // ── Stop Recording (manual) ──
         performStop(api);
       } else {
-        // If a WebGPU model is selected but its orchestrator isn't ready yet,
-        // don't silently downgrade to the webm/IPC path — ignore the press with
-        // a brief tray hint so the user knows the model is still loading. If the
-        // orchestrator is idle (e.g. torn down after a timeout-abort or a lost
-        // GPU device), kick off a fresh init so the NEXT press can record —
-        // bounded lazy recovery, no retry loop.
-        if (selectedModelRef.current.startsWith('webgpu-') && !orchestratorRef.current.isReady()) {
-          console.log('CaptureApp: Ignoring shortcut — WebGPU model not ready');
-          if (!orchestratorRef.current.isLoading()) {
-            // Bounded recovery: re-init at most once per 15s and give up after 3
-            // consecutive failures, so a reload that keeps failing on a memory-
-            // constrained machine can't thrash (the "memory tried-and-reused" loop).
-            const sinceLast = Date.now() - lastInitAtRef.current;
-            if (initFailRef.current >= 3) {
-              console.error('CaptureApp: orchestrator init failed 3× — not auto-retrying; app restart needed');
-            } else if (sinceLast > 15000) {
-              console.log('CaptureApp: orchestrator idle — re-initializing');
-              initWebGpuOrchestrator();
-            } else {
-              console.log(`CaptureApp: skipping re-init (cooldown, ${Math.round(sinceLast / 1000)}s since last attempt)`);
-            }
+        // A WebGPU model that isn't loaded yet no longer refuses the press.
+        // Ignoring it left the hotkey dead with a 1.5s tray blink and a console
+        // line silenced outside --diag, so on Electron 43 (where the worker was
+        // blocked and never became ready) the app was simply unusable. Now
+        // planCapture downgrades THIS recording to the CPU engine; the GPU
+        // selection is untouched and the next recording uses it.
+        //
+        // Recovery still runs, just without blocking the user meanwhile.
+        if (engineStateRef.current?.engine === 'webgpu' && !orchestratorRef.current.isReady()
+            && !orchestratorRef.current.isLoading()) {
+          // Bounded: re-init at most once per 15s, give up after 3 consecutive
+          // failures, so a reload that keeps failing on a memory-constrained
+          // machine can't thrash.
+          const sinceLast = Date.now() - lastInitAtRef.current;
+          if (initFailRef.current >= 3) {
+            console.error('CaptureApp: orchestrator init failed 3× — not auto-retrying; app restart needed');
+          } else if (sinceLast > 15000) {
+            console.log('CaptureApp: orchestrator idle — re-initializing');
+            initWebGpuOrchestrator();
           }
-          api.updateTrayState('error');
-          setTimeout(() => api.updateTrayState('ready'), 1500);
-          return;
         }
 
         // ── Start Recording ──
@@ -556,11 +568,18 @@ export default function CaptureApp() {
         // Start countdown interval
         startCountdownInterval();
 
-        // If orchestrator is loaded → raw PCM + local inference. Otherwise → MediaRecorder + IPC.
-        // Don't check model name here — orchestrator only loads for WebGPU models, so isReady() is sufficient.
-        const useRawPcm = orchestratorRef.current.isReady();
+        // Decide routing ONCE, here, and freeze it. Everything downstream reads
+        // this plan rather than re-deriving — re-deriving at stop is exactly what
+        // dispatched a CPU recording into the WebGPU adapter and lost the audio.
+        const plan = planCapture(
+          engineStateRef.current ?? { engine: 'local', modelId: 'local-fast' } as EngineStateRecord,
+          { orchestratorReady: orchestratorRef.current.isReady() },
+        );
+        capturePlanRef.current = plan;
+        const useRawPcm = plan.mode === 'raw-pcm';
         rawPcmActiveRef.current = useRawPcm;
-        console.log(`CaptureApp: Recording mode=${useRawPcm ? 'raw-pcm' : 'webm'}, orchestratorReady=${orchestratorRef.current.isReady()}, model=${selectedModelRef.current}`);
+        console.log(`CaptureApp: Recording mode=${plan.mode}, engine=${plan.engine}, model=${plan.modelId}${plan.reason ? ` (${plan.reason})` : ''}`);
+        if (plan.reason) console.warn(`CaptureApp: ${plan.reason}`);
         const startFn = useRawPcm
           ? audioCapture.current.startRawRecording()
           : audioCapture.current.startRecording();

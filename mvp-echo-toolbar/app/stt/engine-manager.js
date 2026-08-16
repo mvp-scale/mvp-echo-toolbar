@@ -260,10 +260,23 @@ class EngineManager {
     return null;
   }
 
+  /**
+   * Install the function that pushes the record to every renderer.
+   *
+   * Main→popup previously had no state channel at all, which is why the popup
+   * fabricated every status it displayed. One writer, broadcast on every write.
+   */
+  setStateBroadcaster(fn) {
+    this._broadcastState = fn;
+  }
+
   /** Point activeAdapter/selectedModelId at whatever the record says. */
   _applyState(state) {
     this.state = state;
     this.selectedModelId = state.modelId;
+    if (typeof this._broadcastState === 'function') {
+      try { this._broadcastState(state); } catch (err) { log('EngineManager: state broadcast failed:', err.message); }
+    }
     if (state.engine === 'webgpu') {
       this.activeAdapter = this.webgpuAdapter;
       this.activeAdapterName = 'webgpu';
@@ -635,6 +648,13 @@ class EngineManager {
     });
 
     // ── Engine operations ──
+
+    // Initial sync. The push channel ('engine:state') only fires on a change,
+    // so a window that opens later needs to be able to ask once.
+    ipcMain.handle('engine:get-state', async () => {
+      await this._readyPromise;
+      return this.state || null;
+    });
 
     ipcMain.handle('engine:status', async () => {
       return await this.getStatus();

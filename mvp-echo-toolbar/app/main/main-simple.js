@@ -715,6 +715,18 @@ app.whenReady().then(async () => {
 
   // Initialize engine manager (probes adapters, selects best one).
   // Resolves the engine-ready promise so awaiting IPC handlers proceed.
+  // Push the engine record to every window on every change. Previously the
+  // popup had no state channel at all and fabricated the status it displayed;
+  // the renderer kept its own copy of "which model is selected" that could sit
+  // 42 seconds stale. One writer in main, broadcast to all readers.
+  engineManager.setStateBroadcaster((state) => {
+    for (const win of [hiddenWindow, popupWindow, welcomeWindow]) {
+      if (win && !win.isDestroyed()) {
+        try { win.webContents.send('engine:state', state); } catch (_e) { /* window going away */ }
+      }
+    }
+  });
+
   const engineStatus = await engineManager.initializeAndSignalReady();
   log('EngineManager initialized: ' + JSON.stringify(engineStatus));
 
