@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard, protocol, net } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 
 const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
@@ -18,6 +19,30 @@ const logPath = getLogPath();
 // When on, the renderer streams one structured fingerprint line per recording to
 // a dedicated diagnostics file (separate from the general debug log).
 const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
+
+// ── Custom-scheme feasibility probe (--probe-scheme) ──
+//
+// Answers ONE question before anything is built on it: can a Web Worker fetch a
+// privileged custom scheme? parakeet's fromUrls() hands onnxruntime a URL string
+// and ORT fetches it from inside the worker, so a "no" here kills serving models
+// from disk outright — and it is cheaper to learn that from a 5 MB file than
+// from 300 lines and a 1.2 GB download.
+//
+// registerSchemesAsPrivileged MUST run before app-ready, hence the placement.
+// Registering the scheme is inert on its own: nothing requests model:// unless
+// the flag is passed.
+const PROBE_SCHEME = process.argv.includes('--probe-scheme');
+const MODEL_SCHEME = 'model';
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: MODEL_SCHEME,
+    // `stream` matters: the real payload is a 1.2 GB encoder, which must not be
+    // buffered whole. `supportFetchAPI` is what makes it reachable from fetch()
+    // at all, which is the thing under test.
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
+]);
 
 // ── Cross-origin isolation toggle ──
 // OFF by default since 3.1.0. On via --coi / MVP_COI=1.
@@ -558,6 +583,28 @@ function showWelcomeWindow() {
 // ── App Lifecycle ──
 
 app.whenReady().then(async () => {
+  // Serve model:// out of userData/models. Electron streams the file and
+  // handles ranges itself via net.fetch on a file:// URL, so this is the whole
+  // serving layer — no hand-rolled file server, no range logic.
+  const modelsDir = path.join(app.getPath('userData'), 'models');
+  protocol.handle(MODEL_SCHEME, (req) => {
+    // basename() confines this to modelsDir — model://x/../../secret must not resolve.
+    const name = path.basename(new URL(req.url).pathname);
+    const target = path.join(modelsDir, name);
+    if (!fs.existsSync(target)) return new Response('not found', { status: 404 });
+    return net.fetch(pathToFileURL(target).toString());
+  });
+
+  if (PROBE_SCHEME) {
+    try {
+      fs.mkdirSync(modelsDir, { recursive: true });
+      fs.writeFileSync(path.join(modelsDir, 'probe.bin'), Buffer.alloc(5 * 1024 * 1024, 7));
+      log(`PROBE: wrote 5MB probe.bin to ${modelsDir}, serving as model://models/probe.bin`);
+    } catch (e) {
+      log('PROBE: could not write probe file:', e);
+    }
+  }
+
   // Load user config (keybind, etc.)
   const appConfig = loadAppConfig();
   const shortcutLabel = shortcutDisplayLabel(appConfig.shortcut);
@@ -738,6 +785,10 @@ app.whenReady().then(async () => {
   engineReady = true;
   trayManager.setState('ready');
   log('MVP-Echo Toolbar: Engine ready');
+
+  if (PROBE_SCHEME && hiddenWindow && !hiddenWindow.isDestroyed()) {
+    hiddenWindow.webContents.send('probe:scheme', 'model://models/probe.bin');
+  }
 
   if (REPLAY_PATH) triggerReplay(REPLAY_PATH);
 });

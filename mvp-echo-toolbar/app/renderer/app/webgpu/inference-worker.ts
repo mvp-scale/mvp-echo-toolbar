@@ -35,6 +35,23 @@ self.onmessage = async (event: MessageEvent) => {
       case 'dispose':
         dispose();
         break;
+      // Feasibility probe for serving model files off a custom scheme.
+      // onnxruntime is handed a URL string and fetches it itself, from THIS
+      // worker context — so whether a Worker can fetch a privileged custom
+      // scheme decides whether the whole disk-cache approach is possible.
+      case 'probe-fetch': {
+        const started = Date.now();
+        const res = await fetch(msg.url);
+        const buf = await res.arrayBuffer();
+        self.postMessage({
+          type: 'probe-result',
+          ok: res.ok,
+          status: res.status,
+          bytes: buf.byteLength,
+          ms: Date.now() - started,
+        });
+        break;
+      }
     }
   } catch (err) {
     self.postMessage({
