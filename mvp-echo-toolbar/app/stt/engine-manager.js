@@ -233,10 +233,17 @@ class EngineManager {
   }
 
   _saveEngineState(state) {
+    const target = this._engineStatePath();
     try {
-      fs.writeFileSync(this._engineStatePath(), JSON.stringify(state, null, 2));
+      fs.writeFileSync(target, JSON.stringify(state, null, 2));
+      // Verify rather than assume. A write that neither throws nor produces a
+      // file is not something I was willing to keep reasoning about from a
+      // distance — two theories about where it went were both wrong, so the
+      // app now reports the resolved path and whether the file exists
+      // afterwards.
+      log(`EngineManager: wrote engine-state to ${target} (exists=${fs.existsSync(target)})`);
     } catch (err) {
-      log('EngineManager: could not write engine-state.json:', err.message);
+      log(`EngineManager: could not write engine-state.json to ${target}:`, err);
     }
   }
 

@@ -95,6 +95,11 @@ try {
 } catch (_e) { /* ignore */ }
 
 log(`MVP-Echo Toolbar: Starting, log file: ${logPath}`);
+// Print where config actually lands. engine-state.json was reported missing
+// from %APPDATA%\mvp-echo-toolbar while the legacy configs were being READ from
+// there successfully — a contradiction that no amount of reasoning at a
+// distance resolved, so the app now states the path it resolves.
+log(`MVP-Echo Toolbar: userData = ${app.getPath('userData')}`);
 
 // Diagnostics: announce status + start a fresh diagnostics file when enabled.
 if (DIAG_ENABLED) {
