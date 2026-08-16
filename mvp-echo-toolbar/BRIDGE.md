@@ -101,8 +101,43 @@ trusting anything marked "done" that has only been typechecked.
 - A loading GPU model no longer kills the hotkey; it falls back to CPU for that recording.
 - The logger turned every Error into `{}`. A failed worker hung for 15 minutes with no event. Two of
   three windows forwarded no console output at all.
+- **RC-1 appeared four separate times** — routing on "what is active" instead of "what this operation
+  is about". `processAudio` dispatch, the WebM→WAV conversion gate, the restore precedence, and
+  finally `cloud:configure`/`cloud:test-connection`, which sent the endpoint to the CPU sidecar
+  (whose `configure()` drops `endpointUrl`) while the log claimed otherwise. Expect more of this
+  shape wherever `this.activeAdapter` is still consulted.
 
 ### Do this next
+
+0. **The hosted endpoint needs an honest state model — start here.** Maintainer's own words:
+   *"Test connection seems to give a false impression that it's connected. There's both connected
+   and authenticated, and connected gives the wrong definition."* He is right, and it is worse than
+   naming: `remote-adapter.js` defines `isConfigured` as `!!endpointUrl`, so **a URL merely being
+   present renders a green "Connected" dot**. Nothing verifies the host answered, that the key was
+   accepted, or that the model is switchable.
+
+   At least four distinct facts are being collapsed into one word:
+
+   | Fact | How you learn it | Currently shown as |
+   |---|---|---|
+   | A URL has been entered | string is non-empty | "Connected" ❌ |
+   | The host is reachable | `/health` responds | — |
+   | The key is accepted | `/v1/models` returns 200 not 401 | — |
+   | A model can be switched | `/v1/models/switch` succeeds | — |
+
+   The plan already specifies the mechanism (§5 rule 4 and item 27): drop `isConfigured` entirely,
+   add a persisted `verifiedAt` set **only** by a successful test, and derive the label from
+   `status` + `endpoint.verifiedAt`. That was never implemented. Do it with the same discipline as
+   the rest: the derivation is a pure function, testable without a DOM, like
+   `engine-status-label.ts`.
+
+   Related and unfixed: **`SettingsPanel` saves config on every keystroke.** Typing an endpoint
+   produced `Configuring adapter: 1`, then `92.168.1.169:203001`, then the full URL. Wants a
+   debounce, and `verifiedAt` must be cleared whenever the URL or key changes — otherwise a stale
+   "verified" survives an edit and the dot lies again.
+
+   Also verify **persistence and ordering** of the endpoint fields specifically: they are the one
+   surface where the maintainer has doubts, and the one path never confirmed end to end.
 
 1. **Merge to `dev` and soak.** Verification is done; nothing is blocking. The plan's own advice is
    separate soaks for a platform bump and for behaviour changes, and this branch is both — so watch
