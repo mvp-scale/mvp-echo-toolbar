@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-type ModelState = 'loaded' | 'available' | 'switching' | 'downloading' | 'download';
+// 'error' exists because a model card was previously incapable of expressing
+// failure: a rejected switch logged to a console nobody was reading and then
+// silently re-fetched the list, so the card snapped back and the click looked
+// like it had done nothing at all.
+type ModelState = 'loaded' | 'available' | 'switching' | 'downloading' | 'download' | 'error';
 
 interface ModelOption {
   id: string;
@@ -11,6 +15,8 @@ interface ModelOption {
   group: 'gpu' | 'local' | 'webgpu';
   state: ModelState;
   note?: string;
+  /** Populated only when state === 'error'; shown to the user on the card. */
+  error?: string;
 }
 
 // Map server model IDs → client-side display properties
@@ -56,6 +62,7 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
   const isSwitching = model.state === 'switching';
   const isDownloading = model.state === 'downloading';
   const needsDownload = model.state === 'download';
+  const isError = model.state === 'error';
   const isBusy = isSwitching || isDownloading;
 
   return (
@@ -70,14 +77,21 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
         {isActive && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
         {isSwitching && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse shrink-0" />}
         {isDownloading && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />}
+        {isError && <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />}
         {(model.state === 'available' || needsDownload) && <span className="w-1.5 h-1.5 rounded-full border border-muted-foreground/40 shrink-0" />}
         <span className={`text-[10px] ${
           isSwitching ? 'text-orange-400 font-semibold' :
           isDownloading ? 'text-blue-500 font-semibold' :
+          isError ? 'text-red-400 font-semibold' :
           'text-foreground'
         }`}>
           {isSwitching ? 'Switching...' : isDownloading ? 'Downloading...' : model.label}
         </span>
+        {isError && model.error && (
+          <span className="text-[7px] text-red-400 px-1 py-0.5 truncate" title={model.error}>
+            {model.error}
+          </span>
+        )}
         {needsDownload && (
           <span className="text-[7px] bg-blue-50 text-blue-500 px-1 py-0.5 rounded font-medium">
             download
@@ -104,7 +118,13 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
 type MicReadinessMode = 'keep-ready' | 'release-each';
 
 export default function SettingsPanel() {
-  const [endpointUrl, setEndpointUrl] = useState('http://192.168.1.10:20300/v1/audio/transcriptions');
+  // Starts EMPTY. It used to be seeded with a real LAN address, so the field
+  // displayed a URL that had never been saved — the endpoint looked configured
+  // while the adapter had none, and selecting a hosted model failed with
+  // "Remote endpoint not configured" for reasons the UI actively contradicted.
+  // The literal survives as the placeholder at the input, which is where an
+  // example belongs.
+  const [endpointUrl, setEndpointUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<ModelOption[]>(DEFAULT_MODELS);
   const [selectedModelId, setSelectedModelId] = useState('local-fast');
@@ -195,7 +215,14 @@ export default function SettingsPanel() {
             : { id: m.id, label: m.label || m.id, quality: '80%', speed: '<2s', rating: 2.5, group: 'local' as const, state: m.state as ModelState };
         });
 
-      const gpuList = gpuFromServer.length > 0 ? gpuFromServer : DEFAULT_MODELS.filter(m => m.group === 'gpu');
+      // Hosted fallback cards carry placeholder ids ('gpu-english') that no
+      // server accepts — the real ids are the GPU_MODEL_MAP keys
+      // ('parakeet-tdt-0.6b-v2-int8'). They are shown so the feature is
+      // discoverable, but labelled, because selecting one can only fail until
+      // an endpoint is configured and a real list is fetched.
+      const gpuList = gpuFromServer.length > 0
+        ? gpuFromServer
+        : DEFAULT_MODELS.filter(m => m.group === 'gpu').map(m => ({ ...m, note: 'needs endpoint' }));
       const localList = localFromServer.length > 0 ? localFromServer : LOCAL_MODELS;
 
       setModels(reconcileLoadedState([...gpuList, ...webgpuFromServer, ...localList]));
@@ -203,6 +230,20 @@ export default function SettingsPanel() {
       console.error('Failed to fetch models:', e);
     }
   }, [reconcileLoadedState]);
+
+  /**
+   * Mark one card as failed, with the reason, then resync after a beat.
+   *
+   * The card has to hold the error long enough to be read — an immediate
+   * fetchModels() overwrites it and reproduces the original "nothing happened"
+   * behaviour that made a rejected switch indistinguishable from a dead button.
+   */
+  const showSwitchError = useCallback((modelId: string, message: string) => {
+    setModels(prev => prev.map(m =>
+      m.id === modelId ? { ...m, state: 'error' as ModelState, error: message } : m
+    ));
+    setTimeout(() => { fetchModels(); }, 6000);
+  }, [fetchModels]);
 
   // Detect WebGPU on mount
   useEffect(() => {
@@ -315,6 +356,21 @@ export default function SettingsPanel() {
   const handleSelectModel = useCallback(async (model: ModelOption) => {
     if (model.state === 'switching' || model.state === 'downloading') return;
 
+    // Cancel any in-flight WebGPU readiness poll BEFORE anything else.
+    //
+    // The poll closes over the model that started it, so a poll left running
+    // from a previous GPU selection would later call its own completeSwitch()
+    // and re-select that GPU model — silently undoing the choice just made.
+    // That is why switching from English GPU back to English CPU appeared to
+    // do nothing: the switch succeeded, then the orphaned poll reverted it a
+    // couple of seconds later. It was previously cleared only on unmount, on
+    // another WebGPU switch, and on its own completion — never when moving to
+    // a non-WebGPU model.
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
     const previousSelectedId = selectedModelId;
     const isWebGpu = model.group === 'webgpu';
 
@@ -389,14 +445,18 @@ export default function SettingsPanel() {
           ipc.invoke('cloud:configure', { model: model.id }).catch(() => {});
         }
       } else {
+        // Show WHY on the card. Re-fetching alone snapped the card back with no
+        // explanation, which is why "clicking the hosted model does nothing"
+        // was indistinguishable from a dead button. The most common cause is a
+        // hosted model selected with no endpoint saved.
         console.error('Model switch failed:', result.error);
-        await fetchModels();
+        showSwitchError(model.id, result.error || 'Switch failed');
       }
     } catch (e) {
       console.error('Model switch error:', e);
-      await fetchModels();
+      showSwitchError(model.id, e instanceof Error ? e.message : 'Switch failed');
     }
-  }, [selectedModelId, fetchModels]);
+  }, [selectedModelId, fetchModels, showSwitchError]);
 
   return (
     <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[400px] overflow-y-auto">
