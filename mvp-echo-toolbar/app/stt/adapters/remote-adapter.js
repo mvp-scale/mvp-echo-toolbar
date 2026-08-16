@@ -320,7 +320,21 @@ class RemoteAdapter {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || `Model switch failed: HTTP ${response.status}`);
+
+      // Tell "this server has no switch route" apart from "this server refused
+      // that model". Both are 404, but only the second is about the user's
+      // choice. FastAPI answers an unrouted path with exactly {"detail":"Not
+      // Found"}, whereas the bridge's own model rejection carries a message.
+      // Older deployments have no /v1/models/switch at all and serve a single
+      // model, so switching is not a thing to fail at — there is nothing to
+      // switch between.
+      if (response.status === 404 && body.detail === 'Not Found' && !body.error) {
+        const err = new Error('This server does not support switching models');
+        err.unsupported = true;
+        throw err;
+      }
+
+      throw new Error(body.error || body.detail || `Model switch failed: HTTP ${response.status}`);
     }
 
     // Update local config to track the newly selected model

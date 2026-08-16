@@ -604,7 +604,20 @@ class EngineManager {
     // Keep the adapter's own notion of the model in step with the selection
     // even when the server has no switch route to accept it.
     this.remoteAdapter.configure({ model: modelId });
-    await this.remoteAdapter.switchModel(modelId);
+
+    try {
+      await this.remoteAdapter.switchModel(modelId);
+    } catch (error) {
+      // A server that cannot switch models is not a problem with the model the
+      // user picked — single-model deployments serve it regardless, and the
+      // transcription request names the model anyway. Warning about it would
+      // put a red flag on a selection that works perfectly.
+      if (error.unsupported) {
+        log(`EngineManager: ${error.message}; ${modelId} stands as the selection`);
+        return;
+      }
+      throw error;
+    }
   }
 
   /**
