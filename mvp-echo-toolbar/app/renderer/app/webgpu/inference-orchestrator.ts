@@ -54,10 +54,19 @@ export class InferenceOrchestrator {
    */
   private teardownEpoch = 0;
 
-  constructor(createWorker?: WorkerFactory) {
+  /**
+   * How long init may go with NO progress before it is declared hung.
+   *
+   * Deliberately a STALL window, not a total budget — see sendMessage().
+   * Injectable so the rule can be tested without waiting three minutes.
+   */
+  private readonly initStallMs: number;
+
+  constructor(createWorker?: WorkerFactory, { initStallMs = 180000 }: { initStallMs?: number } = {}) {
     this.createWorker =
       createWorker ??
       (() => new Worker(new URL('./inference-worker.ts', import.meta.url), { type: 'module' }));
+    this.initStallMs = initStallMs;
   }
 
   isReady(): boolean {
@@ -144,12 +153,11 @@ export class InferenceOrchestrator {
       await this.sendMessage(
         { type: 'init', backend },
         'ready',
-        // 3 min. The old 900_000ms was not a timeout, it was a hang: 15 minutes
-        // of `loading === true` with recovery disabled behind !isLoading().
-        // A stalled ~1.2GB download is better surfaced and retried than waited
-        // out, and a worker that fails to load now rejects immediately via the
-        // 'error' listener above rather than running the clock out.
-        180000
+        // 3 min WITHOUT PROGRESS. The old 900_000ms was not a timeout, it was a
+        // hang: 15 minutes of `loading === true` with recovery disabled behind
+        // !isLoading(). But replacing it with a 3-minute TOTAL budget made a
+        // first-run download impossible — see sendMessage().
+        this.initStallMs
       );
 
       this.modelReady = true;
@@ -258,16 +266,38 @@ export class InferenceOrchestrator {
       const worker = this.worker;
       if (!worker) { reject(new Error('Worker not available')); return; }
 
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error(`Worker timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+      /**
+       * The timeout measures SILENCE, not elapsed time, and every progress
+       * message rearms it.
+       *
+       * As a total budget this made the first-run model download impossible.
+       * The encoder falls back to fp32 when `shader-f16` is unavailable, so the
+       * payload is 2,322 MB; finishing inside 180s demands 12.9 MB/s. Observed
+       * on a real first run at ~7 MB/s: the download reached 53% at the
+       * deadline, the worker was disposed, CaptureApp re-initialised, and the
+       * download restarted from 0% — forever, never once completing, while the
+       * log showed steady healthy progress the whole time.
+       *
+       * "Nothing has happened for three minutes" is the condition actually
+       * worth acting on. A genuine hang still trips it, because a hung worker
+       * sends no progress either.
+       */
+      let timeout: ReturnType<typeof setTimeout>;
+      const arm = () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Worker sent nothing for ${timeoutMs}ms`));
+        }, timeoutMs);
+      };
+      arm();
 
       const handler = (event: MessageEvent) => {
         const data = event.data;
         if (data.type === responseType) { cleanup(); resolve(data); }
         else if (data.type === 'error') { cleanup(); reject(new Error(data.message)); }
         else if (data.type === 'download-progress') {
+          arm();
           console.log(`[Download] ${data.file}: ${(data.loaded / 1024 / 1024).toFixed(1)}/${(data.total / 1024 / 1024).toFixed(1)} MB (${data.pct}%)`);
         }
       };

@@ -26,13 +26,13 @@ const { InferenceOrchestrator, AlreadyLoadingError } = await import(
 );
 
 /** Orchestrator wired to a FakeWorker, with the worker exposed to the test. */
-function makeOrchestrator() {
+function makeOrchestrator(initStallMs) {
   const workers = [];
   const orch = new InferenceOrchestrator(() => {
     const w = new FakeWorker();
     workers.push(w);
     return w;
-  });
+  }, initStallMs === undefined ? undefined : { initStallMs });
   return { orch, workers, latest: () => workers[workers.length - 1] };
 }
 
@@ -251,5 +251,65 @@ describe('Fix 0b — teardown must settle the in-flight request', () => {
 
     orch.dispose();
     await second.catch(() => {});
+  });
+});
+
+// ── The first-run download must be able to outlast the timeout ─────────────
+//
+// Found on a real first run (2026-08-16). The init timeout was a TOTAL budget
+// of 180s. The encoder falls back to fp32 without `shader-f16`, so the payload
+// is 2,322 MB — finishing in time demands 12.9 MB/s. At the observed ~7 MB/s
+// the download hit 53%, the worker was disposed, CaptureApp re-initialised, and
+// it restarted from 0%. Forever. The log showed healthy progress throughout:
+//
+//   21:00:49 [Download] encoder-model.onnx.data: 1219.4/2322.6 MB (53%)
+//   21:00:49 Init failed — disposing worker: Worker timed out after 180000ms
+//   21:01:17 [Download] encoder-model.onnx.data: 0.1/2322.6 MB (0%)
+//
+// The timeout now measures silence, so progress keeps it alive.
+
+describe('init timeout is a stall window, not a total budget', () => {
+  test('a slow but progressing download is NOT killed', async () => {
+    const { orch, latest } = makeOrchestrator(60);
+
+    const init = orch.initialize('webgpu-hybrid');
+    await flush();
+    const w = latest();
+
+    // Six progress ticks, each arriving just before the 60ms window expires.
+    // Total elapsed (~240ms) is far beyond the window; no single gap is.
+    for (let pct = 10; pct <= 60; pct += 10) {
+      await new Promise((r) => setTimeout(r, 40));
+      w.emit({ type: 'download-progress', file: 'encoder-model.onnx.data', loaded: pct, total: 100, pct });
+    }
+    w.emit({ type: 'ready' });
+
+    await init;
+    assert.strictEqual(orch.isReady(), true, 'a download making steady progress must be allowed to finish');
+    assert.strictEqual(w.terminated, false, 'and the worker must not be torn down under it');
+  });
+
+  test('but genuine silence still trips it', async () => {
+    const { orch, latest } = makeOrchestrator(60);
+
+    const init = orch.initialize('webgpu-hybrid');
+    await flush();
+
+    await assert.rejects(init, /sent nothing for 60ms/,
+      'a worker that reports nothing at all is hung and must still be caught');
+    assert.strictEqual(latest().terminated, true, 'and it must be disposed for a clean retry');
+  });
+
+  test('silence AFTER progress trips it too', async () => {
+    // A download that genuinely stalls mid-flight must not be kept alive by the
+    // progress it already made.
+    const { orch, latest } = makeOrchestrator(60);
+
+    const init = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emit({ type: 'download-progress', file: 'x', loaded: 50, total: 100, pct: 50 });
+
+    await assert.rejects(init, /sent nothing for 60ms/);
+    assert.strictEqual(latest().terminated, true);
   });
 });
