@@ -19,6 +19,63 @@ const fs = require('fs');
 const { WebGpuModelManager, MODEL_ID } = require('../webgpu-model-manager');
 const { log } = require('../../main/logger');
 
+/**
+ * The in-page WebGPU probe, injected into the hidden renderer via
+ * executeJavaScript. Kept as an exported constant so it can be evaluated
+ * against fake adapters in tests — a probe that only exists as a string
+ * argument is untestable, which is why an API removal reached production.
+ *
+ * Two rules encoded here, both learned the hard way:
+ *
+ * 1. HAVING AN ADAPTER IS THE AVAILABILITY ANSWER. Adapter metadata is
+ *    cosmetic. `requestAdapterInfo()` was removed in Chrome 131 and `.info`
+ *    did not exist before Chrome 127, so on any given Chromium exactly one of
+ *    them works. Letting a metadata failure decide availability is what made
+ *    Electron 43 report "no usable GPU on this system" on a working 3090.
+ *
+ * 2. AN EXCEPTION IS INDETERMINATE, NOT A HARDWARE VERDICT. Only "no
+ *    navigator.gpu" and "no adapter returned" are determinate negatives.
+ *    Anything thrown means we failed to ASK, and the caller must not cache
+ *    that or act on it as "this machine has no GPU".
+ */
+const GPU_PROBE_SOURCE = `
+  (async () => {
+    if (!navigator.gpu) {
+      return { available: false, error: 'WebGPU not supported in this browser' };
+    }
+    let adapter;
+    try {
+      adapter = await navigator.gpu.requestAdapter();
+    } catch (err) {
+      return { available: false, indeterminate: true, error: 'requestAdapter threw: ' + err.message };
+    }
+    if (!adapter) {
+      return { available: false, error: 'No GPU adapter found' };
+    }
+
+    // Best-effort metadata. Never allowed to affect \`available\`.
+    let info = {};
+    try {
+      if (adapter.info) {
+        info = adapter.info;
+      } else if (typeof adapter.requestAdapterInfo === 'function') {
+        info = await adapter.requestAdapterInfo();
+      }
+    } catch (_e) { /* metadata only — an unknown name is not a missing GPU */ }
+
+    let maxBufferSize = null;
+    try { maxBufferSize = adapter.limits.maxBufferSize; } catch (_e) { /* optional */ }
+
+    return {
+      available: true,
+      adapterName: info.device || info.description || 'Unknown GPU',
+      vendor: info.vendor || 'Unknown',
+      architecture: info.architecture || '',
+      maxBufferSize,
+    };
+  })()
+`;
+
 class WebGpuBridgeAdapter {
   constructor() {
     this.modelManager = new WebGpuModelManager();
@@ -200,6 +257,7 @@ class WebGpuBridgeAdapter {
   /**
    * Probe WebGPU availability by asking the renderer process.
    * Returns cached result on subsequent calls.
+   * @see GPU_PROBE_SOURCE for the code that actually runs in the renderer.
    * @returns {Promise<{available: boolean, adapterName?: string, vendor?: string, error?: string}>}
    */
   async _probeGpu() {
@@ -212,32 +270,15 @@ class WebGpuBridgeAdapter {
     }
 
     try {
-      // Ask the renderer to check navigator.gpu
-      const result = await hidden.webContents.executeJavaScript(`
-        (async () => {
-          if (!navigator.gpu) {
-            return { available: false, error: 'WebGPU not supported in this browser' };
-          }
-          try {
-            const adapter = await navigator.gpu.requestAdapter();
-            if (!adapter) {
-              return { available: false, error: 'No GPU adapter found' };
-            }
-            const info = await adapter.requestAdapterInfo();
-            return {
-              available: true,
-              adapterName: info.device || 'Unknown GPU',
-              vendor: info.vendor || 'Unknown',
-              architecture: info.architecture || '',
-              maxBufferSize: adapter.limits.maxBufferSize,
-            };
-          } catch (err) {
-            return { available: false, error: err.message };
-          }
-        })()
-      `);
+      const result = await hidden.webContents.executeJavaScript(GPU_PROBE_SOURCE);
 
-      this._gpuCapability = result;
+      // Only a DETERMINATE answer may be cached. An indeterminate probe that
+      // got cached here was the whole failure: a TypeError from a removed API
+      // became a permanent "no GPU" for the rest of the process, and that is
+      // the one value allowed to override an explicit user choice.
+      if (!result.indeterminate) {
+        this._gpuCapability = result;
+      }
       log('WebGpuBridgeAdapter: GPU probe result:', JSON.stringify(result));
       return result;
     } catch (err) {
@@ -267,3 +308,4 @@ class WebGpuBridgeAdapter {
 }
 
 module.exports = WebGpuBridgeAdapter;
+module.exports.GPU_PROBE_SOURCE = GPU_PROBE_SOURCE;

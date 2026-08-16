@@ -20,9 +20,39 @@ const logPath = getLogPath();
 const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
 
 // ── Cross-origin isolation toggle ──
-// ON by default (it is the fix). Off via --no-coi / MVP_NO_COI=1 so a single
-// build can be tested both ways -- see the COI block in whenReady().
-const COI_ENABLED = !(process.argv.includes('--no-coi') || !!process.env.MVP_NO_COI);
+// OFF by default since 3.1.0. On via --coi / MVP_COI=1.
+//
+// Isolation genuinely works on file:// under Chromium 120 (measured:
+// crossOriginIsolated true, SharedArrayBuffer live, 16 cores), and it bought
+// multi-threaded WASM decode. But Chromium 150 enforces COEP's
+// "worker initialization" check on the module worker, and under file:// the
+// document and the worker chunk are separate opaque origins -- so the worker is
+// blocked, the orchestrator never becomes ready, and the hotkey dies. On
+// Electron 43 you can have a working worker or 16-thread decode, not both,
+// until the renderer moves off file:// to a real origin (plan phase 3).
+//
+// Off is the correct default meanwhile: a slower transcription beats an app
+// that cannot record. Every release before 3.0.28 already decoded
+// single-threaded, and typical recordings are 1-8s where the difference is tens
+// of milliseconds. Nothing in app/ reads crossOriginIsolated or
+// SharedArrayBuffer, and parakeet's threading fallback is a warning, not a
+// crash.
+const COI_ENABLED = process.argv.includes('--coi') || !!process.env.MVP_COI;
+
+// ── SharedArrayBuffer switch (experimental, plan item 14) ──
+// Chromium can expose SharedArrayBuffer without cross-origin isolation. With
+// COEP off there is no worker block left to lift, and parakeet gates its
+// threaded path on SharedArrayBuffer existing rather than on
+// crossOriginIsolated -- so this may restore multi-threaded decode with no
+// origin change at all.
+//
+// Flag-gated rather than on by default: it relaxes a Spectre mitigation, and
+// whether Chromium 150 still honours the switch is unverified. Turn it on with
+// --sab / MVP_SAB=1, measure, then decide.
+const SAB_SWITCH = process.argv.includes('--sab') || !!process.env.MVP_SAB;
+if (SAB_SWITCH) {
+  app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
+}
 
 // ── Replay mode ──
 // --replay=<path-to.wav> pushes a saved recording through the real
@@ -565,9 +595,9 @@ app.whenReady().then(async () => {
         },
       });
     });
-    log('MVP-Echo Toolbar: cross-origin isolation ON (multi-threaded WASM decode)');
+    log(`MVP-Echo Toolbar: cross-origin isolation ON via --coi (multi-threaded WASM decode; on Chromium 150 this blocks the module worker)${SAB_SWITCH ? ' [+SharedArrayBuffer switch]' : ''}`);
   } else {
-    log('MVP-Echo Toolbar: cross-origin isolation DISABLED via --no-coi (decode will be single-threaded)');
+    log(`MVP-Echo Toolbar: cross-origin isolation OFF (default since 3.1.0; decode single-threaded unless the SAB switch works)${SAB_SWITCH ? ' [+SharedArrayBuffer switch]' : ''}`);
   }
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

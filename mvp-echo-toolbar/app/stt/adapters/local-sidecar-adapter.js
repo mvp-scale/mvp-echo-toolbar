@@ -7,7 +7,7 @@ const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
-const { LocalModelManager } = require('../local-model-manager');
+const { LocalModelManager, MODEL_ID } = require('../local-model-manager');
 const { log } = require('../../main/logger');
 
 class LocalSidecarAdapter {
@@ -39,6 +39,28 @@ class LocalSidecarAdapter {
     }
   }
 
+  /**
+   * Adopt the pre-baked model when the user has never chosen one.
+   *
+   * `activeModelId` starts null and only switchModel()/configure() set it, so
+   * on a fresh profile this adapter reported itself unavailable while its own
+   * model sat on disk inside the bundle. That removed the bottom rung of the
+   * fallback ladder: EngineManager falls through webgpu -> remote -> local ->
+   * remote-as-fallback, so a machine with no usable GPU skipped the ready CPU
+   * engine and landed on an unconfigured remote adapter.
+   *
+   * Deliberately never overwrites an existing choice, and requires the files
+   * to actually be present — this can only turn a false negative into a true
+   * positive, never make a working configuration worse.
+   */
+  _ensureActiveModel() {
+    if (this.activeModelId) return;
+    if (!this.modelManager.isModelDownloaded(MODEL_ID)) return;
+    this.activeModelId = MODEL_ID;
+    this._saveConfig();
+    log('LocalSidecarAdapter: adopted pre-baked model', MODEL_ID);
+  }
+
   // ── Engine Port: transcribe ──
 
   async transcribe(audioFilePath, _options = {}) {
@@ -46,6 +68,7 @@ class LocalSidecarAdapter {
     if (!binaryPath) {
       throw new Error('sherpa-onnx binary not found');
     }
+    this._ensureActiveModel();
     if (!this.activeModelId || !this.modelManager.isModelDownloaded(this.activeModelId)) {
       throw new Error('No local model selected or downloaded');
     }
@@ -148,6 +171,7 @@ class LocalSidecarAdapter {
     if (!hasBinary) {
       return { available: false, error: 'sherpa-onnx binary not found' };
     }
+    this._ensureActiveModel();
     const hasActiveModel = this.activeModelId && this.modelManager.isModelDownloaded(this.activeModelId);
     if (!hasActiveModel) {
       return { available: false, error: 'No local model downloaded' };
