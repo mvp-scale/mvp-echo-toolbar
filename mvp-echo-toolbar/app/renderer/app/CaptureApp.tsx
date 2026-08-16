@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { planCapture, type CapturePlan, type EngineStateRecord } from '../../stt/capture-plan';
+import { createTrayFlasher } from './tray-flash';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
@@ -49,6 +50,17 @@ export default function CaptureApp() {
   const initFailRef = useRef(0);         // consecutive orchestrator init failures (bounds re-init thrash)
   const lastInitAtRef = useRef(0);       // timestamp of last init attempt (re-init cooldown)
   const recCountRef = useRef(0);         // recording counter for diagnostics line numbering
+
+  /**
+   * Tray changes with a guarded revert. Six unguarded copies of
+   * setTimeout(() => updateTrayState("ready"), 3000) used to race each other,
+   * so a revert from one recording cleared a newer recording's state. Keyed on
+   * the same generation counter that already guards transcription results.
+   */
+  const trayFlashRef = useRef(createTrayFlasher({
+    setState: (s: string) => (window as any).electronAPI?.updateTrayState(s),
+    generation: () => requestGenRef.current,
+  }));
 
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -406,13 +418,12 @@ export default function CaptureApp() {
               const copied = await electronAPI.copyToClipboard(result.text);
               if (copied?.success) {
                 playCompletionSound();
-                electronAPI.updateTrayState('done');
+                trayFlashRef.current('done');
                 ilog(`✓ ${result.text.trim().length} chars · rec ${recordedSec.toFixed(1)}s · proc ${(result.processingTime / 1000).toFixed(1)}s · copied`);
               } else {
                 console.error('CaptureApp: clipboard write NOT verified — no bell');
                 playWarningSound(); // distinct cue: transcribed but not copied
-                electronAPI.updateTrayState('error');
-                setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+                trayFlashRef.current('error');
                 ilog(`⚠ ${result.text.trim().length} chars · rec ${recordedSec.toFixed(1)}s · clipboard write FAILED`);
               }
               // Store regardless so the popup has the text for manual copy.
@@ -457,19 +468,17 @@ export default function CaptureApp() {
 
             if (result.success === false) {
               console.error('CaptureApp: Transcription failed:', result.error);
-              electronAPI.updateTrayState('error');
-              setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+              trayFlashRef.current('error');
             } else if (result.text?.trim()) {
               // Bell only on a verified clipboard write (see WebGPU path above).
               const copied = await electronAPI.copyToClipboard(result.text);
               if (copied?.success) {
                 playCompletionSound();
-                electronAPI.updateTrayState('done');
+                trayFlashRef.current('done');
               } else {
                 console.error('CaptureApp: clipboard write NOT verified — no bell');
                 playWarningSound();
-                electronAPI.updateTrayState('error');
-                setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+                trayFlashRef.current('error');
               }
             } else {
               electronAPI.updateTrayState('ready');
@@ -484,8 +493,7 @@ export default function CaptureApp() {
         // timeout — by then this run is stale and may have been replaced by a
         // newer recording, so don't stomp its tray state.
         if (!isStale()) {
-          electronAPI.updateTrayState('error');
-          setTimeout(() => electronAPI.updateTrayState('ready'), 3000);
+          trayFlashRef.current('error');
         }
       } finally {
         clearTimeout(safetyTimeout);
@@ -512,8 +520,7 @@ export default function CaptureApp() {
       playWarningSound();      // distinct from the completion bell
       ilog('✗ microphone disconnected — recording lost');
       resetState(api);
-      api.updateTrayState('error');
-      setTimeout(() => api.updateTrayState('ready'), 3000);
+      trayFlashRef.current('error');
     };
 
     const unsubscribe = api.onGlobalShortcutToggle(() => {
@@ -602,8 +609,7 @@ export default function CaptureApp() {
             rawPcmActiveRef.current = false;
             clearCountdown();
             audioCapture.current.cleanup(); // tear down any half-opened stream/context
-            api.updateTrayState('error');
-            setTimeout(() => api.updateTrayState('ready'), 3000);
+            trayFlashRef.current('error');
           })
           .finally(() => {
             // Clear the guard + watchdog whether start succeeded or failed — no lockout.

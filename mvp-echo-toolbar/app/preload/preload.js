@@ -102,6 +102,12 @@ contextBridge.exposeInMainWorld('electron', {
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args);
       }
+      // Fail loudly. With no else branch this fell off the end and resolved to
+      // undefined, which every consumer reads as "no config yet" — so a typo'd
+      // or newly added channel looked like an empty response instead of a
+      // mistake. test/ipc-contract.test.js keeps the allowlist in sync with the
+      // registered handlers, so reaching this is a genuine bug, not a config gap.
+      throw new Error(`IPC channel not allowed: ${channel}`);
     },
     on: (channel, callback) => {
       ipcRenderer.on(channel, callback);
