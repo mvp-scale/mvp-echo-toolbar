@@ -333,9 +333,19 @@ honoured.
   `nvidia/turing`. Chromium exposes only the discrete GPU to WebGPU here, so watcher and compute
   share a device and recovery works. Passing `powerPreference` at both sites remains cheap
   defensive hygiene, but it is not a live bug.
-- `shader-f16` is false on all three adapters, so it is a driver/Chromium limitation rather than
-  adapter selection. Electron 28 ships Chromium ~120, well past `shader-f16` support, so the
-  2019-era NVIDIA driver is the likely gate — Turing supports 16-bit shader ops in hardware.
+- **`shader-f16` is blocked by ELECTRON, not the hardware or the driver.** Same machine, same
+  driver (`32.0.16.1047`, May 2026 — current, not old as first assumed): Microsoft Edge reports
+  `shader-f16: true` and **18** WebGPU features; Electron 28 reports `false` and **7**. Electron 28
+  ships Chromium ~120 (late 2023). VRAM confirmed at exactly 4096 MB from the registry.
+
+  This makes an **Electron upgrade** the unlock for two separate blocked items:
+  - `shader-f16` → fp16 encoder, 2363 MB → 1182 MB (58% → 29% of a 4 GB card)
+  - `timestamp-query` → real GPU-side profiling, which is exactly what Phase 3's parallel-worker
+    decision was blocked on ("no N without measuring the encoder/decoder split")
+
+  Cost/risk: Electron 28 → current is many majors. This project has **no native modules**
+  (parakeet.js is pure JS + wasm), so it is mostly a version bump plus deprecated-API fixes and a
+  full retest — moderate, not large. Should be its own change with its own soak, never bundled.
 
 Healthy on that machine: `crossOriginIsolated: true`, 16 WASM threads, `persisted: true`, and
 `storageUsed` 2371 MB — exactly the fp32 encoder + decoder + vocab, so no duplicate blobs.
