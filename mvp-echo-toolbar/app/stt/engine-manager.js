@@ -159,6 +159,16 @@ class EngineManager {
 
       const state = restore(saved, { gpu });
       this._applyState(state);
+
+      // Persist immediately. Applying in memory only meant engine-state.json
+      // was never created until the user happened to switch models, so
+      // migration re-ran on EVERY boot using the legacy precedence — which
+      // reads the stale webgpu config first. An existing install where the user
+      // had chosen CPU would be silently moved to GPU on upgrade and stay there.
+      // Writing here makes migration happen exactly once, which is the whole
+      // point of having one record.
+      this._saveEngineState(state);
+
       if (state.reason) {
         log(`EngineManager: ${state.reason} (selected ${state.modelId})`);
       } else {

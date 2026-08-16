@@ -78,6 +78,15 @@ function makeManager({
   mgr.activeAdapter = mgr.remoteAdapter;
   mgr._cleanupOrphanedTempFiles = () => {};
 
+  // Isolate persistence per manager. _restoreModelSelection now WRITES the
+  // record (so migration happens exactly once rather than on every boot), and
+  // without this each test would leave a real engine-state.json in the stub's
+  // userData for the next one to read — these tests are about selection logic,
+  // not I/O.
+  let persisted = null;
+  mgr._loadEngineState = () => persisted;
+  mgr._saveEngineState = (s) => { persisted = s; };
+
   return mgr;
 }
 

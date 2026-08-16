@@ -233,3 +233,46 @@ describe('WebM to WAV conversion must follow the dispatch, not the selection', (
     assert.strictEqual(mgr._needsWavConversion(undefined), true);
   });
 });
+
+describe('the migrated record must be persisted, not just applied', () => {
+  // Found on Windows: engine-state.json did not exist after many launches.
+  // _restoreModelSelection applied the migrated record in memory and never
+  // saved it, so migration re-ran on EVERY boot using the old precedence —
+  // which reads the stale webgpu config first. An existing user who had chosen
+  // CPU would therefore be silently moved to GPU on upgrade, and stay there
+  // until they manually switched models. The original bug, via the upgrade path.
+  test('a migration writes the record so it happens exactly once', async () => {
+    const store = { value: null };
+    const mgr = makeManager({ gpuHardware: true, store, staleWebgpuModel: WEBGPU_MODEL });
+
+    await mgr.initialize();
+
+    assert.ok(store.value, 'the migrated record must be saved on first run');
+    assert.strictEqual(store.value.modelId, WEBGPU_MODEL);
+  });
+
+  test('the second launch reads the record and does NOT re-migrate', async () => {
+    const store = { value: null };
+
+    const first = makeManager({ gpuHardware: true, store, staleWebgpuModel: WEBGPU_MODEL });
+    await first.initialize();
+    await first.switchModel('local-fast');
+
+    // Legacy config still names WebGPU — as it does on the real machine, since
+    // nothing ever clears it. The saved record must win.
+    const second = makeManager({ gpuHardware: true, store, staleWebgpuModel: WEBGPU_MODEL });
+    await second.initialize();
+
+    assert.strictEqual(second.selectedModelId, 'local-fast',
+      'once migrated, the stale legacy config must never be consulted again');
+  });
+
+  test('a restore with no legacy config at all still persists the default', async () => {
+    const store = { value: null };
+    const mgr = makeManager({ gpuHardware: true, store });
+
+    await mgr.initialize();
+
+    assert.ok(store.value, 'even the default should be written, so boot is deterministic');
+  });
+});
