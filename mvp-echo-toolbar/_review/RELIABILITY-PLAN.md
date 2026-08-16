@@ -587,6 +587,16 @@ verified on a build.
 5. Leaf items with local tests: 20 (tray generations), 28 (cache relocation).
 6. Item 30 (`app://` origin) is **dropped** — see §7. Item 31 last.
 
+### The gate is three commands, not two
+
+`npm run typecheck && npm test && npm run build`
+
+Learned the hard way. `capture-plan` was CommonJS with a hand-written `.d.ts`: typecheck passed
+because TypeScript read the declaration, the tests passed because they used `require()`, and the CI
+build failed because Rollup cannot see a named export off `module.exports = {...}`. **Two green
+checks that agree with each other can still be blind to the same thing.** `npm run dist` runs all
+three, so anything less than all three is not the real gate.
+
 ### Rules held to for the duration
 
 No production code without a failing test first; watch every test fail and
