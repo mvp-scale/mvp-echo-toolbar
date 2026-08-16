@@ -8,9 +8,13 @@
 -->
 # MVP-Echo Toolbar — Reliability & Electron 43 Decision Document
 
-> **Status: the COEP decision is settled (2026-08-16).** Ship Electron 43 with cross-origin
-> isolation **off by default** (one line at `main-simple.js:25`). §4 below has been rewritten —
-> its original premise was refuted by measurement on the real machine. See §7 for what changed.
+> **Status (2026-08-16): phases 1 and 2+3 are implemented on branch `electron-43`.**
+> 27 of 31 items done, 2 dropped with reasons (28, 30), 1 deferred (31), and one extra bug found
+> and fixed that was not in the original list. Tests **34 → 120**, typecheck clean at every commit.
+> Phase 1 is verified on real Windows hardware; the later work is not yet — see "Still unverified".
+>
+> The COEP decision is settled: ship Electron 43 with cross-origin isolation **off by default**
+> (`main-simple.js:25`). §4's original premise was refuted by measurement; §7 logs every correction.
 
 ## Phase order
 
@@ -674,14 +678,55 @@ Phase numbers refer to the table at the top.
 26. Countdown handler can wait forever for a window
 27. Hardcoded LAN endpoint in the settings field (was F3)
 
-**Phase 3 — structural** *(internal order matters — 28 must come before 30)*
-28. Move the model cache out of browser storage into content-hashed files
-29. One authoritative record of which engine is selected — replaces the seven that disagree
-30. Move to an `app://` origin and turn isolation back on
-31. Keep the CPU model loaded between transcriptions (~1.5 s tax per call)
+**Phase 3 — structural**
+28. ~~Move the model cache out of browser storage~~ — **DROPPED**, see below
+29. ✅ One authoritative record of which engine is selected — replaces the seven that disagreed
+30. ~~Move to an `app://` origin and turn isolation back on~~ — **DROPPED**, threading measured irrelevant
+31. Keep the CPU model loaded between transcriptions (~1.5 s tax per call) — **still deferred**
+
+### Why 28 is dropped
+
+Its entire stated rationale was to precede item 30: while the cache lives in browser storage it is
+welded to the origin, so an origin change would cost every user a 2,371 MB re-download. Item 30 is
+dropped, so that reason no longer exists.
+
+What remains is eviction risk, and the app already calls `navigator.storage.persist()` — the machine
+under test reports `persistent=true` with a healthy 2,371 MB cache. So the residual benefit is small
+while the change is large and carries exactly the migration hazard that produced the v3.0.23
+re-download bug. Doing a risky 2.4 GB migration for a reason that has evaporated is the kind of
+unexamined momentum this document exists to prevent. Revisit only if eviction is actually observed.
+
+### Why 31 stays deferred
+
+Unchanged from the original reasoning, and §6 item 5 is still unsettled: nobody has established
+whether the sidecar's 1.485 s "recognizer created" is model loading or process + DLL startup. If it
+is the latter, a warm process buys less than the lifecycle surface it adds — crash, restart, zombie,
+quit-cleanup, stdin protocol — on an app that has just been stabilised. It is a performance issue,
+not a correctness one, and measured CPU throughput is RTF 0.035.
 
 ---
 
 **31 items — 27 fixes, 4 already committed.** Ten ship with Electron 43; the rest are independent.
 Everything from 15 down exists identically on Electron 28: it is not migration damage, it is what the
 app has always done when its primary engine fails.
+
+---
+
+## 9. Still unverified — the Windows list
+
+Tier 3 from §6b. Named explicitly rather than implied to be covered. Phase 1 (items 5–14) is
+confirmed on the XPS; everything below landed after that build.
+
+1. **A model switch mid-recording no longer loses the audio.** Start a recording, switch model in
+   Settings while it runs, stop. The transcript must arrive, routed by the engine selected at START.
+2. **The CPU fallback fires.** Select English GPU on a cold cache and press the hotkey before the
+   model finishes loading. It must record and transcribe on CPU, log the reason, and leave the GPU
+   selection intact — the old build refused the press entirely.
+3. **CPU selection survives a restart** with a working GPU present. This is the reported bug; there
+   is now a round-trip test, but the persisted `engine-state.json` path is untested on Windows.
+4. **The popup shows real status**, not a hardcoded "Ready" — including an honest error while an
+   engine is unusable.
+5. **Legacy config migration.** An existing install must not lose its selection when the three old
+   config files are superseded by `engine-state.json` on first run.
+6. **Tray reverts no longer stomp a newer recording.** Trigger an error, immediately start another
+   recording, and confirm the tray stays on `recording` past the 3-second mark.
