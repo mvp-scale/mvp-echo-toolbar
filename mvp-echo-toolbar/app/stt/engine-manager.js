@@ -138,7 +138,9 @@ class EngineManager {
    *
    * Replaces a three-branch precedence puzzle over three independent config
    * files — two of whose branches could outrank an explicit user choice — with:
-   * read one record, repair it, and demote only on a definitive negative.
+   * read one record, repair the engine/model pair, and describe whether it can
+   * run. A restart never changes which engine you are on; if the hardware for
+   * your selection has gone away, the record says so and the UI shows it.
    *
    * The GPU is probed lazily, only when something actually wants WebGPU, and
    * 'unknown' is passed through as 'indeterminate' so a cold boot (where the
@@ -336,12 +338,47 @@ class EngineManager {
    */
   configureEndpoint(config) {
     log('EngineManager: Configuring remote endpoint:', config.endpointUrl || '(no URL)');
-    this.remoteAdapter.configure(config);
+    // Transport only. A `model` arriving here is the same conflation in the
+    // other direction — SettingsPanel used to post one after every switch, so
+    // picking the CPU engine wrote "local-fast" into the hosted endpoint's
+    // config file. Which model is selected belongs to the record.
+    this.remoteAdapter.configure({
+      endpointUrl: config.endpointUrl,
+      apiKey: config.apiKey,
+      language: config.language,
+    });
   }
 
   /** Probe the remote endpoint specifically — never whatever is active. */
   async testConnection() {
     return this.remoteAdapter.isAvailable();
+  }
+
+  /**
+   * The endpoint form's view of the world.
+   *
+   * Same rule as configureEndpoint: this question is ABOUT the remote endpoint,
+   * so it is answered by the remote adapter. It used to return
+   * `this.activeAdapter.getConfig()`, so with the CPU engine selected — the
+   * default — Settings received the local sidecar's config, which has no
+   * `endpointUrl`. The field rendered empty, and the panel's save-on-change
+   * effect then wrote that empty value straight back to disk. Opening Settings
+   * deleted the endpoint. See test/endpoint-config.test.js.
+   *
+   * `isConfigured` is deliberately absent. It meant three different things
+   * across the three adapters, and the local one's ("a local model is set")
+   * is what lit a green "Connected" dot above an empty endpoint box. Whether an
+   * endpoint works is a question only a request to it can answer.
+   */
+  getCloudConfig() {
+    const remote = this.remoteAdapter.getConfig();
+    return {
+      endpointUrl: remote.endpointUrl ?? null,
+      apiKey: remote.apiKey ?? null,
+      language: remote.language ?? null,
+      selectedModel: this.selectedModelId,
+      endpoint: (this.state && this.state.endpoint) || { url: null, verifiedAt: null },
+    };
   }
 
   /** Point activeAdapter/selectedModelId at whatever the record says. */
@@ -360,78 +397,6 @@ class EngineManager {
     } else {
       this.activeAdapter = this.remoteAdapter;
       this.activeAdapterName = 'remote';
-    }
-  }
-
-  async _restoreModelSelectionLegacy() {
-    try {
-      const remoteConfig = this.remoteAdapter.getConfig();
-      const webgpuConfig = this.webgpuAdapter.getConfig();
-
-      // A saved WebGPU preference can arrive through EITHER the webgpu adapter's
-      // own config or the remote adapter's persisted selectedModel (which stores
-      // a bare model id and is matched on the "webgpu-" prefix below). Both doors
-      // must respect the same capability check, so resolve it once here.
-      // Probed lazily -- only when something actually asks for WebGPU.
-      const remoteWantsWebgpu = !!remoteConfig.selectedModel
-        && remoteConfig.isConfigured
-        && String(remoteConfig.selectedModel).startsWith('webgpu-');
-      const wantsWebgpu = (webgpuConfig.activeModelId && webgpuConfig.isConfigured) || remoteWantsWebgpu;
-      const gpuUsable = wantsWebgpu
-        ? (await this.webgpuAdapter.probeGpuCapability()) !== 'unavailable'
-        : false;
-
-      if (webgpuConfig.activeModelId && webgpuConfig.isConfigured) {
-        // Gate on HARDWARE capability only -- deliberately not isAvailable().
-        //
-        // isAvailable() also requires the model to be warm in the renderer,
-        // which cannot be true yet at this point: the renderer only reports it
-        // after reading this very selection back via cloud:get-config. Gating
-        // on it would disable WebGPU on every cold boot.
-        //
-        // 'unknown' (renderer not up yet) therefore means "trust the saved
-        // preference". Only a definitive 'unavailable' -- a probe that ran and
-        // found no usable GPU -- overrides the user's choice.
-        if (gpuUsable) {
-          this.selectedModelId = webgpuConfig.activeModelId;
-          this.activeAdapter = this.webgpuAdapter;
-          this.activeAdapterName = 'webgpu';
-          log('EngineManager: Restored WebGPU model selection:', this.selectedModelId);
-          return;
-        }
-        log('EngineManager: Ignoring saved WebGPU preference -- no usable GPU on this system');
-      }
-
-      // Skip the remote-config branch when it names a WebGPU model we've just
-      // established this machine can't run -- otherwise the prefix match below
-      // would reactivate the adapter the check above deliberately rejected.
-      if (remoteConfig.selectedModel && remoteConfig.isConfigured && !(remoteWantsWebgpu && !gpuUsable)) {
-        this.selectedModelId = remoteConfig.selectedModel;
-        // Ensure the correct adapter is active for the restored model
-        if (this.selectedModelId.startsWith('local-')) {
-          this.activeAdapter = this.localSidecarAdapter;
-          this.activeAdapterName = 'local-sidecar';
-        } else if (this.selectedModelId.startsWith('webgpu-')) {
-          this.activeAdapter = this.webgpuAdapter;
-          this.activeAdapterName = 'webgpu';
-        } else {
-          this.activeAdapter = this.remoteAdapter;
-          this.activeAdapterName = 'remote';
-        }
-        log('EngineManager: Restored model selection:', this.selectedModelId);
-        return;
-      }
-
-      const localConfig = this.localSidecarAdapter.getConfig();
-      if (localConfig.activeModelId) {
-        this.selectedModelId = localConfig.activeModelId;
-        this.activeAdapter = this.localSidecarAdapter;
-        this.activeAdapterName = 'local-sidecar';
-        log('EngineManager: Restored local model selection:', this.selectedModelId);
-        return;
-      }
-    } catch (error) {
-      log('EngineManager: Could not restore model selection:', error.message);
     }
   }
 
@@ -568,57 +533,78 @@ class EngineManager {
   }
 
   /**
-   * Switch model, crossing adapter boundaries if needed.
+   * Select a model. The most recent selection is THE selection.
    *
-   * - local-* models → activate LocalSidecarAdapter
-   * - gpu-* models   → activate RemoteAdapter, delegate model switch to server
+   * The choice is committed and persisted immediately, before any adapter or
+   * network work, and nothing that happens afterwards can undo it.
+   *
+   * It used to run the engine-side switch FIRST and record the choice only if
+   * that succeeded. So against a server with no `/v1/models/switch` route —
+   * MVP-Bridge 1.0.0 returns 404, and its own `openapi.json` lists only
+   * `/health`, `/v1/models` and `/v1/audio/transcriptions` — clicking the
+   * hosted model did nothing whatsoever: no selection, no error the user could
+   * see, and the app quietly still on the previous engine. The same shape lost
+   * a WebGPU selection whenever the orchestrator was slow to start.
+   *
+   * Engine-side work can still fail. That is a `warning` reported against a
+   * selection that stands, not a reason to overrule the person who clicked.
    *
    * @param {string} modelId
-   * @returns {Promise<{success: boolean, error?: string}>}
+   * @returns {Promise<{success: boolean, modelId?: string, warning?: string, error?: string}>}
    */
   async switchModel(modelId) {
+    let nextState;
     try {
-      // Record the choice FIRST, so "what the user picked" is committed before
-      // any adapter work. The engine is derived from the model id rather than
-      // set independently, so the pair cannot drift — that drift is how audio
-      // captured for one engine reached another.
-      const nextState = select(this.state || createState(), modelId);
-
-      if (modelId.startsWith('webgpu-')) {
-        // Switch to WebGPU adapter (on-device GPU)
-        await this.webgpuAdapter.switchModel(modelId);
-        this._applyState(nextState);
-        this._saveEngineState(nextState);
-        log('EngineManager: Switched to WebGPU adapter, model:', modelId);
-
-        // Notify hidden window to initialize the parakeet.js orchestrator
-        const hidden = this._getHiddenWindow();
-        if (hidden && !hidden.isDestroyed()) {
-          hidden.webContents.send('webgpu:init-orchestrator');
-        }
-      } else if (modelId.startsWith('local-')) {
-        // Switch to local adapter
-        await this.localSidecarAdapter.switchModel(modelId);
-        this._applyState(nextState);
-        this._saveEngineState(nextState);
-        log('EngineManager: Switched to local-sidecar adapter, model:', modelId);
-        this._releaseWebGpuOrchestrator();
-      } else {
-        // Switch to remote adapter + delegate model switch to server.
-        // Await BEFORE committing: the webgpu/local branches above only
-        // reassign after a successful switch, and doing it the other way round
-        // here left the manager stranded on a broken adapter when the switch
-        // failed, with the previously-working one deactivated.
-        await this.remoteAdapter.switchModel(modelId);
-        this._applyState(nextState);
-        this._saveEngineState(nextState);
-        log('EngineManager: Switched to remote adapter, model:', modelId);
-        this._releaseWebGpuOrchestrator();
-      }
-      return { success: true };
+      nextState = select(this.state || createState(), modelId);
     } catch (error) {
+      // Only an impossible engine/model pair reaches here, which is a
+      // programming error rather than anything the user did.
+      log('EngineManager: refusing an invalid selection:', error.message);
       return { success: false, error: error.message };
     }
+
+    this._applyState(nextState);
+    this._saveEngineState(nextState);
+    log(`EngineManager: selected ${modelId} (engine ${nextState.engine})`);
+
+    try {
+      await this._activateSelection(nextState);
+      return { success: true, modelId };
+    } catch (error) {
+      log(`EngineManager: ${modelId} is selected, but the engine reported: ${error.message}`);
+      return { success: true, modelId, warning: error.message };
+    }
+  }
+
+  /**
+   * Do the engine-side work a selection implies, after it has been committed.
+   *
+   * Throwing from here means "the selection is recorded but something about it
+   * is not working" — never "the selection did not happen".
+   */
+  async _activateSelection({ engine, modelId }) {
+    if (engine === 'webgpu') {
+      await this.webgpuAdapter.switchModel(modelId);
+      const hidden = this._getHiddenWindow();
+      if (hidden && !hidden.isDestroyed()) {
+        hidden.webContents.send('webgpu:init-orchestrator');
+      }
+      return;
+    }
+
+    // Moving off the GPU releases its orchestrator regardless of what follows —
+    // the user is not on WebGPU any more, whether or not the new engine works.
+    this._releaseWebGpuOrchestrator();
+
+    if (engine === 'local') {
+      await this.localSidecarAdapter.switchModel(modelId);
+      return;
+    }
+
+    // Keep the adapter's own notion of the model in step with the selection
+    // even when the server has no switch route to accept it.
+    this.remoteAdapter.configure({ model: modelId });
+    await this.remoteAdapter.switchModel(modelId);
   }
 
   /**
@@ -699,11 +685,7 @@ class EngineManager {
       // Wait for initialize() to finish restoring selectedModelId so the
       // renderer's startup config-load doesn't see stale defaults.
       await this._readyPromise;
-      const adapterConfig = this.activeAdapter.getConfig();
-      return {
-        ...adapterConfig,
-        selectedModel: this.selectedModelId,
-      };
+      return this.getCloudConfig();
     });
 
     ipcMain.handle('cloud:configure', async (_event, config) => {

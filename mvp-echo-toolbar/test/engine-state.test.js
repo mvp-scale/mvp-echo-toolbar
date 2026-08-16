@@ -113,7 +113,14 @@ describe('select — an explicit choice is authoritative', () => {
   });
 });
 
-describe('applyGpu — only a definitive negative may override the user', () => {
+describe('applyGpu — a probe reports, it never re-selects', () => {
+  // The rule, stated once: the most recent thing the user clicked IS the
+  // selection. A capability probe may explain that the selection cannot run
+  // right now; it may not quietly move them somewhere else. Automatic
+  // switching is what made the app's behaviour unpredictable — you could not
+  // tell what engine you were on, because something other than your last
+  // click had decided it.
+
   test('indeterminate never overrides an explicit choice', () => {
     // A TypeError from a removed API is "we could not ask", not "no GPU".
     const chosen = select(createState(), 'webgpu-parakeet-0.6b');
@@ -123,21 +130,25 @@ describe('applyGpu — only a definitive negative may override the user', () => 
     assert.strictEqual(after.engine, 'webgpu');
   });
 
-  test('a definitive unusable GPU demotes to local, and records why', () => {
+  test('an unusable GPU keeps the selection and explains itself', () => {
     const chosen = select(createState(), 'webgpu-parakeet-0.6b');
     const after = applyGpu(chosen, 'unusable');
 
-    assert.strictEqual(after.engine, 'local');
-    assert.match(after.reason, /gpu/i, 'the demotion must explain itself');
+    assert.strictEqual(after.engine, 'webgpu',
+      'a failed probe may not rewrite what the user chose');
+    assert.strictEqual(after.modelId, 'webgpu-parakeet-0.6b');
+    assert.strictEqual(after.status, 'unusable');
+    assert.match(after.reason, /gpu/i, 'it must say why it cannot run');
   });
 
-  test('a demotion remembers the original choice so it can be restored', () => {
+  test('a GPU that comes back clears the problem, leaving the selection alone', () => {
     const chosen = select(createState(), 'webgpu-parakeet-0.6b');
-    const demoted = applyGpu(chosen, 'unusable');
-    const recovered = applyGpu(demoted, 'usable');
+    const broken = applyGpu(chosen, 'unusable');
+    const recovered = applyGpu(broken, 'usable');
 
-    assert.strictEqual(recovered.modelId, 'webgpu-parakeet-0.6b',
-      'a GPU that comes back should restore the choice the user actually made');
+    assert.strictEqual(recovered.modelId, 'webgpu-parakeet-0.6b');
+    assert.strictEqual(recovered.status, 'unknown', 'readiness is reported separately');
+    assert.strictEqual(recovered.reason, null);
   });
 
   test('a usable GPU does not disturb a deliberate local choice', () => {
@@ -184,13 +195,18 @@ describe('restore — one door, not three', () => {
     assert.strictEqual(s.modelId, 'webgpu-parakeet-0.6b');
   });
 
-  test('a saved GPU choice is demoted when the GPU is definitively absent', () => {
+  test('a saved GPU choice is KEPT when the GPU is definitively absent, and flagged', () => {
+    // A restart must never be the moment the app changes engines behind your
+    // back. If the GPU is genuinely gone the selection stands and the record
+    // says it cannot run, so the UI can tell you rather than pretend.
     const saved = { rev: 9, engine: 'webgpu', modelId: 'webgpu-parakeet-0.6b' };
 
     const s = restore(saved, { gpu: 'unusable' });
 
-    assert.strictEqual(s.engine, 'local');
-    assert.ok(s.reason);
+    assert.strictEqual(s.engine, 'webgpu');
+    assert.strictEqual(s.modelId, 'webgpu-parakeet-0.6b');
+    assert.strictEqual(s.status, 'unusable');
+    assert.ok(s.reason, 'the record must carry a reason the user can read');
   });
 });
 

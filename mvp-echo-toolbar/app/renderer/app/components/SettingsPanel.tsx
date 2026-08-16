@@ -87,8 +87,14 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
         }`}>
           {isSwitching ? 'Switching...' : isDownloading ? 'Downloading...' : model.label}
         </span>
-        {isError && model.error && (
-          <span className="text-[7px] text-red-400 px-1 py-0.5 truncate" title={model.error}>
+        {/* Shown on a SELECTED card too, not just a failed one. A hosted model
+            whose server has no /v1/models/switch route is still your selection;
+            the 404 is a note attached to it, not a reason to undo the click. */}
+        {model.error && (
+          <span
+            className={`text-[7px] px-1 py-0.5 truncate ${isError ? 'text-red-400' : 'text-amber-400'}`}
+            title={model.error}
+          >
             {model.error}
           </span>
         )}
@@ -117,6 +123,9 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
 
 type MicReadinessMode = 'keep-ready' | 'release-each';
 
+/** Long enough to cover normal typing, short enough to feel like autosave. */
+const SAVE_DEBOUNCE_MS = 700;
+
 export default function SettingsPanel() {
   // Starts EMPTY. It used to be seeded with a real LAN address, so the field
   // displayed a URL that had never been saved — the endpoint looked configured
@@ -135,6 +144,8 @@ export default function SettingsPanel() {
   const [micIdleReleaseMs, setMicIdleReleaseMs] = useState<number>(30000);
   const ipcRef = useRef<any>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Set by the input handlers, so loading config cannot look like an edit. */
+  const dirtyRef = useRef(false);
   // Mirror selectedModelId so fetchModels can reconcile state without
   // becoming stale or triggering re-renders via dependency churn.
   const selectedModelIdRef = useRef(selectedModelId);
@@ -318,16 +329,29 @@ export default function SettingsPanel() {
     });
   }, [selectedModelId, reconcileLoadedState]);
 
-  // Save config when endpoint/apiKey change
+  // Save the endpoint after typing stops — not on every keystroke.
+  //
+  // This fired once per character. Typing an endpoint produced a series of
+  // configure calls against partial values: "1", then "92.168.1.169:203001",
+  // then eventually the real URL. Each one was persisted, so the saved endpoint
+  // spent most of its life being a prefix of what the user meant, and any
+  // verification of it would have to be invalidated by every keystroke too.
+  //
+  // `dirtyRef` gates on an actual user edit rather than on `configLoaded`. The
+  // mount-time write it prevents is the one that used to erase the endpoint
+  // outright, back when cloud:get-config returned the wrong adapter's config
+  // and the fields were therefore blank.
   useEffect(() => {
-    if (!configLoaded) return;
+    if (!configLoaded || !dirtyRef.current) return;
     const ipc = ipcRef.current;
     if (!ipc) return;
 
-    ipc.invoke('cloud:configure', {
-      endpointUrl,
-      apiKey,
-    }).catch((err: Error) => console.warn('Failed to save cloud config:', err));
+    const timer = setTimeout(() => {
+      ipc.invoke('cloud:configure', { endpointUrl, apiKey })
+        .catch((err: Error) => console.warn('Failed to save cloud config:', err));
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
   }, [configLoaded, endpointUrl, apiKey]);
 
   const handleTestConnection = useCallback(async () => {
@@ -405,13 +429,18 @@ export default function SettingsPanel() {
 
     const ipc = ipcRef.current;
 
-    const completeSwitch = () => {
+    /**
+     * Commit the click. `warning` is a problem WITH the selection, not a
+     * failure OF it — the card stays selected and carries the note.
+     */
+    const completeSwitch = (warning?: string) => {
       setModels(prev => prev.map(m => ({
         ...m,
         state: m.id === model.id ? 'loaded' as ModelState :
                (m.state === 'switching' || m.state === 'downloading') ? 'available' as ModelState :
                m.state === 'loaded' ? 'available' as ModelState :
-               m.state
+               m.state,
+        error: m.id === model.id ? warning : undefined,
       })));
       setSelectedModelId(model.id);
     };
@@ -426,10 +455,16 @@ export default function SettingsPanel() {
       const result = await ipc.invoke('engine:switch-model', model.id);
       if (result.success) {
         if (isWebGpu) {
-          // WebGPU: switch succeeded but model still downloading in renderer.
+          // WebGPU: selection recorded, model still downloading in renderer.
           // Set selectedModelId so CaptureApp picks it up and starts the orchestrator.
+          //
+          // The `cloud:configure({model})` that used to follow is gone. It sent
+          // a local GPU model id down the ENDPOINT config channel, which set the
+          // remote adapter's selectedModel to "webgpu-parakeet-0.6b" and
+          // persisted it in toolbar-endpoint-config.json — one of the three
+          // config files that ended up disagreeing about the selection. Main
+          // keeps each adapter in step with the record now.
           setSelectedModelId(model.id);
-          ipc.invoke('cloud:configure', { model: model.id }).catch(() => {});
 
           // Poll until the model is ready (orchestrator loaded in hidden window).
           // Tracked in pollRef so it's cleared on unmount, and capped so a
@@ -458,16 +493,19 @@ export default function SettingsPanel() {
             }
           }, 2000);
         } else {
-          completeSwitch();
-          ipc.invoke('cloud:configure', { model: model.id }).catch(() => {});
+          // result.warning means the selection was recorded but the engine
+          // reported a problem — a server with no switch route, say. The card
+          // shows selected, with the reason next to it.
+          completeSwitch(result.warning);
+          if (result.warning) console.warn('Selected, with a warning:', result.warning);
         }
       } else {
-        // Show WHY on the card. Re-fetching alone snapped the card back with no
-        // explanation, which is why "clicking the hosted model does nothing"
-        // was indistinguishable from a dead button. The most common cause is a
-        // hosted model selected with no endpoint saved.
-        console.error('Model switch failed:', result.error);
-        showSwitchError(model.id, result.error || 'Switch failed');
+        // Only a structurally impossible selection reaches here now. Show WHY
+        // on the card: re-fetching alone snapped it back with no explanation,
+        // which is what made "clicking the model does nothing" indistinguishable
+        // from a dead button.
+        console.error('Model selection rejected:', result.error);
+        showSwitchError(model.id, result.error || 'Selection rejected');
       }
     } catch (e) {
       console.error('Model switch error:', e);
@@ -487,7 +525,7 @@ export default function SettingsPanel() {
             <input
               type="text"
               value={endpointUrl}
-              onChange={(e) => setEndpointUrl(e.target.value)}
+              onChange={(e) => { dirtyRef.current = true; setEndpointUrl(e.target.value); }}
               placeholder="http://192.168.1.10:20300/v1/audio/transcriptions"
               className="w-full px-2 py-1 text-[10px] bg-background border border-border rounded font-mono"
             />
@@ -503,7 +541,7 @@ export default function SettingsPanel() {
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => { dirtyRef.current = true; setApiKey(e.target.value); }}
               placeholder="sk-..."
               className="w-full px-2 py-1 text-[10px] bg-background border border-border rounded"
             />

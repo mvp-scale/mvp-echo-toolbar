@@ -61,6 +61,7 @@ function makeManager({
     isAvailable: async () => ({ available: false, error: 'not configured' }),
     getConfig: () => ({ selectedModel: null, isConfigured: false }),
     getHealth: async () => ({ adapter: 'remote', state: 'unavailable' }),
+    configure: () => {},
     // Mirrors the real adapter, which throws when no endpoint is saved. A fake
     // that silently succeeded made the rejection test pass vacuously.
     switchModel: async () => { throw new Error('Remote endpoint not configured.'); },
@@ -129,7 +130,11 @@ describe('one record — an explicit choice cannot be outranked', () => {
     assert.strictEqual(restarted.selectedModelId, 'local-fast');
   });
 
-  test('a saved GPU choice is demoted when the GPU is definitively absent', async () => {
+  test('a saved GPU choice is kept when the GPU is definitively absent', async () => {
+    // Previously this demoted to the CPU engine. That was the automatic
+    // switching: you picked GPU, and a restart on a machine whose probe failed
+    // put you on CPU with nothing on screen saying so. Now the selection stands
+    // and the record carries the reason it cannot run.
     const store = { value: null };
 
     const first = makeManager({ gpuHardware: true, store });
@@ -139,8 +144,11 @@ describe('one record — an explicit choice cannot be outranked', () => {
     const onWeakMachine = makeManager({ gpuHardware: false, store });
     await onWeakMachine.initialize();
 
-    assert.strictEqual(onWeakMachine.activeAdapterName, 'local-sidecar',
-      'a definitive negative may override; that part of Fix 9 still holds');
+    assert.strictEqual(onWeakMachine.selectedModelId, WEBGPU_MODEL,
+      'a restart must not silently move the user to another engine');
+    assert.strictEqual(onWeakMachine.activeAdapterName, 'webgpu');
+    assert.strictEqual(onWeakMachine.state.status, 'unusable');
+    assert.ok(onWeakMachine.state.reason, 'the UI needs something to show the user');
   });
 
   test('the active adapter always matches the selected model', async () => {
@@ -159,16 +167,38 @@ describe('one record — an explicit choice cannot be outranked', () => {
     }
   });
 
-  test('switching to a model rejects if the adapter cannot run it', async () => {
-    const mgr = makeManager({ gpuHardware: true });
+  test('a failed server call does not throw the selection away', async () => {
+    // The fake remote adapter throws, exactly as the real one does against a
+    // server with no /v1/models/switch route — MVP-Bridge 1.0.0 returns 404 for
+    // it, and its own openapi.json lists only /health, /v1/models and
+    // /v1/audio/transcriptions. Committing the selection only AFTER that call
+    // succeeded meant clicking the hosted model appeared to do nothing at all.
+    const store = { value: null };
+    const mgr = makeManager({ gpuHardware: true, store });
     await mgr.initialize();
 
-    const result = await mgr.switchModel('definitely-not-a-real-model-id');
+    const result = await mgr.switchModel('parakeet-tdt-0.6b-v2-int8');
 
-    // Remote is the catch-all engine, and it is not configured here, so this
-    // must fail loudly rather than leave the manager on a broken adapter.
-    assert.strictEqual(result.success, false);
-    assert.ok(result.error, 'a failed switch must say why');
+    assert.strictEqual(mgr.selectedModelId, 'parakeet-tdt-0.6b-v2-int8',
+      'the click IS the selection; a server refusing to switch does not undo it');
+    assert.strictEqual(mgr.activeAdapterName, 'remote');
+    assert.strictEqual(store.value.modelId, 'parakeet-tdt-0.6b-v2-int8',
+      'and it is persisted immediately, not on success of a network call');
+    assert.ok(result.warning, 'but the failure must be reported, never swallowed');
+  });
+
+  test('a hosted selection survives a restart even when the switch call failed', async () => {
+    const store = { value: null };
+
+    const first = makeManager({ gpuHardware: true, store });
+    await first.initialize();
+    await first.switchModel('parakeet-tdt-0.6b-v2-int8');
+
+    const second = makeManager({ gpuHardware: true, store });
+    await second.initialize();
+
+    assert.strictEqual(second.selectedModelId, 'parakeet-tdt-0.6b-v2-int8');
+    assert.strictEqual(second.activeAdapterName, 'remote');
   });
 });
 

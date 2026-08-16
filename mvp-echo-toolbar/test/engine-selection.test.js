@@ -1,6 +1,5 @@
 /**
- * Fix 9 — engine selection must not let a stale saved preference override a
- * definitive live probe, WITHOUT breaking the cold-boot case.
+ * Fix 9 — a live probe must not be confused with a selection.
  *
  * See _review/FIX-PLAN.md (DoD v2, Fix 9) and _review/recon/E-engine-selection.md.
  *
@@ -13,8 +12,16 @@
  *      initialize() finishing. Closed cycle.
  *
  * So "defer to isAvailable()" is the WRONG fix — it would disable WebGPU on
- * every cold boot. Selection must key on hardware only, treating "not yet
+ * every cold boot. Capability must key on hardware only, treating "not yet
  * knowable" as "trust the saved preference".
+ *
+ * REVISED 2026-08-16. Two of these tests originally asserted that a definitive
+ * "no GPU" should switch the user to the CPU engine. That was the automatic
+ * switching: the engine you were on got decided by whatever probed last rather
+ * than by what you last clicked, and nothing on screen said so. A probe may now
+ * only set `status`/`reason`. The user is not left with a dead hotkey by this —
+ * `planCapture` still records that individual clip on CPU and reports why,
+ * without rewriting the selection.
  */
 
 const { test, describe, beforeEach } = require('node:test');
@@ -91,10 +98,11 @@ function makeManager({
 }
 
 describe('Fix 9 — engine selection vs. stale WebGPU preference', () => {
-  test('does NOT select WebGPU when the GPU is definitively absent', async () => {
-    // The bug: a saved webgpu preference from a prior session overrides a live
-    // probe that correctly says this machine has no usable GPU, leaving the
-    // user with a dead hotkey while a working local engine sits idle.
+  test('KEEPS a saved WebGPU selection when the GPU is absent, and flags why', async () => {
+    // The original bug was that the user was left with a dead hotkey and no
+    // explanation. The answer to that is the explanation, not a silent move to
+    // another engine — which is its own, worse, version of "the app did
+    // something I did not ask for and did not mention".
     const mgr = makeManager({
       gpuHardware: false,
       modelWarm: false,
@@ -104,16 +112,11 @@ describe('Fix 9 — engine selection vs. stale WebGPU preference', () => {
 
     await mgr.initialize();
 
-    assert.notStrictEqual(
-      mgr.activeAdapterName,
-      'webgpu',
-      'must not activate WebGPU when the GPU is definitively unavailable',
-    );
-    assert.strictEqual(mgr.activeAdapterName, 'local-sidecar');
-    assert.ok(
-      !String(mgr.selectedModelId).startsWith('webgpu-'),
-      `selectedModelId should not be a webgpu model, got "${mgr.selectedModelId}"`,
-    );
+    assert.strictEqual(mgr.selectedModelId, WEBGPU_MODEL,
+      'the last selection stands; the probe does not get a vote on it');
+    assert.strictEqual(mgr.activeAdapterName, 'webgpu');
+    assert.strictEqual(mgr.state.status, 'unusable');
+    assert.ok(mgr.state.reason, 'and the record must say why, so the UI can too');
   });
 
   test('DOES restore WebGPU on cold boot when the GPU is present but the model is not yet warm', async () => {
@@ -150,11 +153,12 @@ describe('Fix 9 — engine selection vs. stale WebGPU preference', () => {
     assert.strictEqual(mgr.selectedModelId, WEBGPU_MODEL);
   });
 
-  test('does NOT select WebGPU via the remote-config fallthrough when the GPU is absent', async () => {
-    // Second door into the same bug: even with the webgpu-config branch gated,
-    // the remote adapter's persisted selectedModel can itself be a "webgpu-*"
-    // id, and that branch activates the WebGPU adapter on a plain string
-    // prefix with no capability check at all.
+  test('a webgpu id arriving through the legacy remote config is still just a selection', async () => {
+    // There used to be two independent doors into the WebGPU adapter — the
+    // webgpu config and a "webgpu-" prefix on the remote adapter's saved model
+    // — reached by different precedence rules. With one record there is one
+    // door, and what comes through it is a selection to be honoured and
+    // described, whatever the hardware says.
     const mgr = makeManager({
       gpuHardware: false,
       modelWarm: false,
@@ -165,11 +169,9 @@ describe('Fix 9 — engine selection vs. stale WebGPU preference', () => {
 
     await mgr.initialize();
 
-    assert.notStrictEqual(
-      mgr.activeAdapterName,
-      'webgpu',
-      'the remote-config fallthrough must respect the GPU probe too',
-    );
+    assert.strictEqual(mgr.selectedModelId, WEBGPU_MODEL);
+    assert.strictEqual(mgr.state.status, 'unusable');
+    assert.ok(mgr.state.reason);
   });
 
   test('falls through to local when there is no saved WebGPU preference at all', async () => {

@@ -61,17 +61,17 @@ function createState(overrides = {}) {
     reason: null,
     gpu: 'indeterminate',
     endpoint: { url: null, verifiedAt: null },
-    /**
-     * The last model the user explicitly chose, retained across a demotion so a
-     * GPU that comes back restores their actual preference instead of silently
-     * stranding them on the fallback.
-     */
-    preferredModelId: null,
     ...overrides,
   };
 }
 
-/** Status derived from the choice and the observed capability. */
+/**
+ * Derive `status`/`reason` from the choice and the observed capability.
+ *
+ * This is the ONLY thing a capability may change. It answers "can the thing you
+ * picked run right now", never "what are you running" — that question has
+ * exactly one answer, the last model you clicked.
+ */
 function withStatus(state) {
   if (state.engine === 'webgpu' && state.gpu === 'unusable') {
     return { ...state, status: 'unusable', reason: 'GPU unavailable on this system' };
@@ -82,10 +82,9 @@ function withStatus(state) {
 /**
  * Record an explicit user choice. This is the only authoritative write.
  *
- * Selecting always sets engine and modelId together, so the pair cannot drift,
- * and always records the choice as `preferredModelId`. An engine that cannot
- * currently run is still selectable — refusing the selection is what let a
- * capability probe override a person.
+ * Selecting always sets engine and modelId together, so the pair cannot drift.
+ * An engine that cannot currently run is still selectable — refusing the
+ * selection is what let a capability probe override a person.
  */
 function select(state, modelId) {
   const engine = engineForModel(modelId);
@@ -95,37 +94,28 @@ function select(state, modelId) {
     rev: state.rev + 1,
     engine,
     modelId,
-    preferredModelId: modelId,
   });
 }
 
 /**
  * Fold in an observed GPU capability.
  *
- * Only `'unusable'` — a probe that ran and found nothing — may override a
- * choice. `'indeterminate'` means we failed to ASK, which is not a fact about
- * the hardware, and treating it as one is what reported "no usable GPU on this
- * system" about a working 3090.
+ * It sets `gpu`, and through withStatus it may set `status`/`reason`. It does
+ * NOT touch `engine` or `modelId` — a probe is not a selection.
+ *
+ * This used to rewrite a WebGPU choice to the CPU default whenever the probe
+ * came back 'unusable', and rewrite it back again if the GPU returned. That is
+ * the automatic switching that made the app unpredictable: the engine you were
+ * on was decided by whatever probed last rather than by what you clicked, and
+ * nothing on screen distinguished the two. Now an unusable GPU produces a
+ * visible reason on the selection you actually made.
+ *
+ * `'indeterminate'` still means we failed to ASK, which is not a fact about the
+ * hardware — treating it as one is what reported "no usable GPU on this system"
+ * about a working 3090.
  */
 function applyGpu(state, gpu) {
-  const next = { ...state, rev: state.rev + 1, gpu };
-
-  if (gpu === 'unusable' && next.engine === 'webgpu') {
-    return {
-      ...next,
-      engine: 'local',
-      modelId: DEFAULT_MODEL,
-      status: 'unusable',
-      reason: 'GPU unavailable on this system; using the CPU engine',
-    };
-  }
-
-  const preferred = next.preferredModelId;
-  if (gpu === 'usable' && preferred && engineForModel(preferred) === 'webgpu' && next.engine !== 'webgpu') {
-    return { ...next, engine: 'webgpu', modelId: preferred, status: 'unknown', reason: null };
-  }
-
-  return next;
+  return withStatus({ ...state, rev: state.rev + 1, gpu });
 }
 
 /**
@@ -133,7 +123,12 @@ function applyGpu(state, gpu) {
  *
  * One door. The old three-branch precedence puzzle over three config files —
  * with two stale doors that outranked an explicit choice — collapses to: read,
- * repair, and only demote on a definitive negative.
+ * repair the pair, and describe whether it can run.
+ *
+ * A restart is never allowed to be the moment the app changes engines on you.
+ * Whatever you selected last is what you get back, even if the hardware to run
+ * it has since gone away; in that case the record says so and the UI can tell
+ * you, which is the honest version of what a silent demotion was hiding.
  */
 function restore(saved, { gpu = 'indeterminate' } = {}) {
   const base = (!saved || typeof saved.modelId !== 'string')
@@ -144,20 +139,9 @@ function restore(saved, { gpu = 'indeterminate' } = {}) {
       // routing, so a record whose engine disagrees is corrected, not honoured.
       engine: engineForModel(saved.modelId),
       gpu,
-      preferredModelId: saved.modelId,
     });
 
-  if (base.engine === 'webgpu' && gpu === 'unusable') {
-    return {
-      ...base,
-      engine: 'local',
-      modelId: DEFAULT_MODEL,
-      status: 'unusable',
-      reason: 'GPU unavailable on this system; using the CPU engine',
-    };
-  }
-
-  return base;
+  return withStatus(base);
 }
 
 /**
