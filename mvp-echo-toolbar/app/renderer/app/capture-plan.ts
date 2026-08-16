@@ -51,7 +51,15 @@ export interface CapturePlan {
   readonly mode: 'raw-pcm' | 'webm';
   /** What the user actually chose — unchanged by a fallback. */
   readonly selectedModelId: string;
-  /** Non-null only when this recording was downgraded; shown to the user. */
+  /**
+   * True when the chosen engine cannot serve this recording yet.
+   *
+   * The caller must NOT record. It must show `reason` and leave the selection
+   * alone. Substituting a different engine here is the exact behaviour this
+   * field exists to prevent.
+   */
+  readonly blocked: boolean;
+  /** Why this recording cannot proceed, or null. Shown to the user. */
   readonly reason: string | null;
 }
 
@@ -62,22 +70,27 @@ export function planCapture(
   const selectedModelId = state.modelId;
 
   // The WebGPU path needs its worker warm, because inference runs in the
-  // renderer against raw PCM. If it is not warm we do NOT refuse the press:
-  // a dead hotkey is a worse failure than a slower transcript, and refusing
-  // silently is how it went unnoticed for a release. Fall back to the bundled
-  // CPU engine for THIS recording only.
+  // renderer against raw PCM. If it is not warm, the recording does NOT happen.
+  //
+  // This used to silently transcribe on the CPU engine instead. That is the
+  // automatic switching the maintainer ruled out, and it was the worst instance
+  // of it: you selected GPU, the app reported GPU, and every word went through
+  // a different engine while a 2.3GB download ran in the background. "You have
+  // to wait and download the GPU, not automatically convert it and say GPU but
+  // yet use CPU."
+  //
+  // Waiting is the honest behaviour. If the user wants the CPU engine, that is
+  // one click, and it is their click to make.
   if (state.engine === 'webgpu' && !(orchestratorReady && state.status === 'ready')) {
-    const reason = state.gpu === 'unusable'
-      ? 'GPU unavailable — recorded on the CPU engine'
-      : 'GPU model still loading — recorded on the CPU engine';
     return Object.freeze({
-      engine: 'local' as const,
-      modelId: FALLBACK_MODEL,
-      mode: 'webm' as const,
-      // Deliberately unchanged: falling back for one recording must not rewrite
-      // what the user chose. The next recording uses the GPU.
+      engine: state.engine,
+      modelId: state.modelId,
+      mode: 'raw-pcm' as const,
       selectedModelId,
-      reason,
+      blocked: true,
+      reason: state.gpu === 'unusable'
+        ? 'GPU unavailable — select the CPU engine in Settings to record'
+        : 'GPU model still loading — it will be ready shortly',
     });
   }
 
@@ -88,6 +101,7 @@ export function planCapture(
     // process goes as webm, which is what those adapters accept.
     mode: (state.engine === 'webgpu' ? 'raw-pcm' : 'webm') as 'raw-pcm' | 'webm',
     selectedModelId,
+    blocked: false,
     reason: null,
   });
 }

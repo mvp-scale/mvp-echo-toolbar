@@ -62,6 +62,19 @@ export default function CaptureApp() {
     generation: () => requestGenRef.current,
   }));
 
+  /**
+   * Tell main what the orchestrator's readiness ACTUALLY is, right now.
+   *
+   * Always sends the observed value rather than a hardcoded `true`, so every
+   * caller is safe to invoke on any path — success, failure, dispose. A claim
+   * that can only ever be raised and never lowered is not a status, it is an
+   * advertisement.
+   */
+  const reportReadiness = useCallback(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    ipc?.invoke('webgpu:model-ready', orchestratorRef.current.isReady());
+  }, []);
+
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
     if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
@@ -83,11 +96,7 @@ export default function CaptureApp() {
       initFailRef.current = 0; // success resets the failure/backoff counter
       console.log('CaptureApp: WebGPU orchestrator ready');
 
-      // Only claim readiness to main when it is genuinely true. This used to
-      // fire unconditionally — and because initialize() swallowed failures, a
-      // failed load still reported "model loaded" (visible in Settings).
-      const ipc = (window as any).electron?.ipcRenderer;
-      if (ipc && orchestratorRef.current.isReady()) ipc.invoke('webgpu:model-ready', true);
+      reportReadiness();
     } catch (e) {
       // A duplicate/concurrent init request is not a model-load failure —
       // it must not consume one of the three strikes below.
@@ -97,6 +106,13 @@ export default function CaptureApp() {
       }
       initFailRef.current += 1;
       console.warn(`CaptureApp: WebGPU orchestrator init failed (attempt ${initFailRef.current}):`, e);
+      // RETRACT the readiness claim. Without this the record kept `status:
+      // 'ready'` from a PREVIOUS successful load after the worker had been torn
+      // down, so Settings showed a green "loaded" GPU card and the popup said
+      // Ready while nothing was resident on the GPU at all. Readiness was
+      // reported in exactly one direction — true on success, never false on
+      // failure — so it could only ever become more optimistic.
+      reportReadiness();
     }
   }, []);
 
@@ -213,9 +229,21 @@ export default function CaptureApp() {
     // un-revoked model blob) stayed resident and idle for the whole session.
     const unsubDispose = api.onWebgpuDisposeOrchestrator?.(() => {
       console.log('CaptureApp: Received webgpu:dispose-orchestrator from main');
+      // Never tear down a download in progress.
+      //
+      // Main sends this whenever the selection moves off WebGPU, to free the
+      // ~2.5GB a LOADED model holds. But an init still running is not holding a
+      // loaded model — it is holding a partial download that nothing resumes,
+      // so disposing it discards every byte fetched so far. Switching to the
+      // hosted model at 58% therefore threw away 1.3GB, and switching back
+      // started again from zero. Let it finish; it is then cached and the next
+      // GPU selection is instant.
+      if (orchestratorRef.current.isLoading()) {
+        console.warn('CaptureApp: ignoring dispose — model download in flight, letting it finish');
+        return;
+      }
       orchestratorRef.current.dispose();
-      const ipc = (window as any).electron?.ipcRenderer;
-      if (ipc) ipc.invoke('webgpu:model-ready', false);
+      reportReadiness();
     });
 
     return () => {
@@ -582,11 +610,21 @@ export default function CaptureApp() {
           engineStateRef.current ?? { engine: 'local', modelId: 'local-fast' } as EngineStateRecord,
           { orchestratorReady: orchestratorRef.current.isReady() },
         );
+        // The chosen engine is not ready. Do NOT record on a different one.
+        // Say so and stop — the selection is the user's and stays untouched.
+        if (plan.blocked) {
+          console.warn(`CaptureApp: not recording — ${plan.reason}`);
+          isRecordingRef.current = false;
+          isStartingRef.current = false;
+          clearCountdown();
+          trayFlashRef.current('error');
+          return;
+        }
+
         capturePlanRef.current = plan;
         const useRawPcm = plan.mode === 'raw-pcm';
         rawPcmActiveRef.current = useRawPcm;
-        console.log(`CaptureApp: Recording mode=${plan.mode}, engine=${plan.engine}, model=${plan.modelId}${plan.reason ? ` (${plan.reason})` : ''}`);
-        if (plan.reason) console.warn(`CaptureApp: ${plan.reason}`);
+        console.log(`CaptureApp: Recording mode=${plan.mode}, engine=${plan.engine}, model=${plan.modelId}`);
         const startFn = useRawPcm
           ? audioCapture.current.startRawRecording()
           : audioCapture.current.startRecording();

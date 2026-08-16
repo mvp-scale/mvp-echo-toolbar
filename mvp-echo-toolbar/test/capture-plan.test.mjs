@@ -64,53 +64,73 @@ describe('planCapture — routing frozen at record start', () => {
   });
 });
 
-describe('planCapture — GPU selected but not ready falls back to CPU', () => {
-  // The chosen behaviour: never block, never lose speech. The GPU selection is
-  // left intact so the next recording uses it.
+describe('planCapture — GPU selected but not ready BLOCKS, it does not substitute', () => {
+  // Reversed 2026-08-16, on the maintainer's instruction, after watching it
+  // happen: "You have to wait and download the GPU, not automatically convert
+  // it and say GPU but yet use CPU."
+  //
+  // These tests previously asserted the substitution was correct, on the theory
+  // that a dead hotkey is worse than a slower transcript. In practice the app
+  // reported GPU on the tray and in Settings while every word went through the
+  // CPU engine, and nothing on screen said otherwise. Silently using an engine
+  // the user did not choose is the failure; refusing and saying why is not.
 
-  test('falls back to the CPU engine rather than refusing the press', () => {
+  test('it does NOT substitute the CPU engine', () => {
     const state = { ...select(createState(), WEBGPU), status: 'loading' };
 
     const plan = planCapture(state, { orchestratorReady: false });
 
-    assert.strictEqual(plan.engine, 'local', 'a dead hotkey is worse than a slower transcript');
-    assert.strictEqual(plan.mode, 'webm');
+    assert.strictEqual(plan.blocked, true, 'the press must not produce a recording');
+    assert.strictEqual(plan.engine, 'webgpu', 'and the engine reported must be the one chosen');
+    assert.notStrictEqual(plan.modelId, 'local-fast');
   });
 
-  test('the fallback explains itself, so the tray and log can say why', () => {
+  test('it explains itself, so the tray and log can say why', () => {
     const state = { ...select(createState(), WEBGPU), status: 'loading' };
 
     const plan = planCapture(state, { orchestratorReady: false });
 
-    assert.ok(plan.reason, 'a silent downgrade is how this went unnoticed for a release');
+    assert.ok(plan.reason, 'refusing without a reason is just a dead hotkey');
     assert.match(plan.reason, /gpu|load|ready/i);
   });
 
-  test('the GPU selection is NOT altered by the fallback', () => {
+  test('the GPU selection is NOT altered', () => {
     const state = { ...select(createState(), WEBGPU), status: 'loading' };
 
     const plan = planCapture(state, { orchestratorReady: false });
 
     assert.strictEqual(plan.selectedModelId, WEBGPU,
-      'falling back for one recording must not rewrite what the user chose');
+      'being unable to record must not rewrite what the user chose');
   });
 
-  test('no fallback once the orchestrator reports ready', () => {
+  test('it proceeds normally once the orchestrator reports ready', () => {
     const state = { ...select(createState(), WEBGPU), status: 'ready' };
 
     const plan = planCapture(state, { orchestratorReady: true });
 
     assert.strictEqual(plan.engine, 'webgpu');
+    assert.strictEqual(plan.blocked, false);
     assert.strictEqual(plan.reason, null);
   });
 
-  test('a definitively unusable GPU also falls back, without a dead hotkey', () => {
+  test('a definitively unusable GPU blocks too, and points at the fix', () => {
     const state = { ...select(createState({ gpu: 'unusable' }), WEBGPU) };
 
     const plan = planCapture(state, { orchestratorReady: false });
 
+    assert.strictEqual(plan.blocked, true);
+    assert.strictEqual(plan.engine, 'webgpu', 'still not silently moved elsewhere');
+    assert.match(plan.reason, /settings|cpu/i,
+      'a blocked press must tell the user what THEY can do about it');
+  });
+
+  test('a non-GPU selection is never blocked by orchestrator readiness', () => {
+    const state = { ...select(createState(), 'local-fast'), status: 'ready' };
+
+    const plan = planCapture(state, { orchestratorReady: false });
+
+    assert.strictEqual(plan.blocked, false);
     assert.strictEqual(plan.engine, 'local');
-    assert.ok(plan.reason);
   });
 });
 
