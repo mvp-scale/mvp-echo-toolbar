@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { planCapture, type CapturePlan, type EngineStateRecord } from '../../stt/capture-plan';
+import { planCapture, type CapturePlan, type EngineStateRecord } from './capture-plan';
 import { createTrayFlasher } from './tray-flash';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';

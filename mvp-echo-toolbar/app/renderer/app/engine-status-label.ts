@@ -10,7 +10,7 @@
  * Pure, so the rules are testable without a DOM.
  */
 
-import type { EngineStateRecord } from '../../stt/capture-plan';
+import type { EngineStateRecord } from './capture-plan';
 
 export type StatusTone = 'ok' | 'busy' | 'error' | 'idle';
 

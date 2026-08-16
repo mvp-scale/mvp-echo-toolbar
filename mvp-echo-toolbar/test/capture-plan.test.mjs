@@ -22,11 +22,15 @@
  * fact that it was not testable before is why it was not correct.
  */
 
-const { test, describe } = require('node:test');
-const assert = require('node:assert');
+import { test, describe } from 'node:test';
+import assert from 'node:assert';
+import { createRequire } from 'node:module';
 
-const { planCapture } = require('../app/stt/capture-plan');
-const { createState, select } = require('../app/stt/engine-state');
+import { planCapture, FALLBACK_MODEL } from '../app/renderer/app/capture-plan.ts';
+
+// engine-state is CommonJS because the main process requires it.
+const require = createRequire(import.meta.url);
+const { createState, select, DEFAULT_MODEL } = require('../app/stt/engine-state');
 
 const WEBGPU = 'webgpu-parakeet-0.6b';
 
@@ -139,5 +143,15 @@ describe('planCapture — the plan is immutable and self-contained', () => {
     const plan = planCapture(state, { orchestratorReady: false });
 
     assert.ok(Object.isFrozen(plan));
+  });
+});
+
+describe('capture-plan / engine-state must agree on the fallback model', () => {
+  test('FALLBACK_MODEL equals engine-state DEFAULT_MODEL', () => {
+    // The constant is duplicated deliberately: engine-state is CommonJS (main
+    // requires it) and importing it into this ESM renderer module reintroduces
+    // the Rollup named-export problem that broke `vite build`. This test is what
+    // makes the duplication safe.
+    assert.strictEqual(FALLBACK_MODEL, DEFAULT_MODEL);
   });
 });

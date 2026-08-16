@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import TranscriptionDisplay from './components/TranscriptionDisplay';
 import SettingsPanel from './components/SettingsPanel';
 import StatusIndicator from './components/StatusIndicator';
-import type { EngineStateRecord } from '../../stt/capture-plan';
+import type { EngineStateRecord } from './capture-plan';
 
 interface TranscriptionData {
   text: string;

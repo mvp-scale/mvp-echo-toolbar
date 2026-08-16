@@ -9,7 +9,7 @@
  */
 
 import { statusLabel } from '../engine-status-label';
-import type { EngineStateRecord } from '../../../stt/capture-plan';
+import type { EngineStateRecord } from '../capture-plan';
 
 const TONE_STYLES: Record<string, { dot: string; text: string }> = {
   ok: { dot: 'bg-green-500', text: 'text-green-600' },
