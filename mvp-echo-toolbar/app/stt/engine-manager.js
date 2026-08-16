@@ -322,6 +322,28 @@ class EngineManager {
     return this._adapterForModel(modelId) === this.localSidecarAdapter;
   }
 
+  /**
+   * Endpoint and API-key config belongs to the REMOTE adapter, always.
+   *
+   * cloud:configure used to call this.activeAdapter.configure(). With the CPU
+   * engine active that reached LocalSidecarAdapter, whose configure() reads only
+   * activeModelId and silently drops endpointUrl — so the log said
+   * "Configuring adapter: http://…" while the remote adapter still had nothing,
+   * and selecting a hosted model failed with "Remote endpoint not configured"
+   * for reasons the log actively contradicted. Same class as processAudio
+   * routing on the active adapter: route by what the operation is ABOUT, not by
+   * what happens to be selected.
+   */
+  configureEndpoint(config) {
+    log('EngineManager: Configuring remote endpoint:', config.endpointUrl || '(no URL)');
+    this.remoteAdapter.configure(config);
+  }
+
+  /** Probe the remote endpoint specifically — never whatever is active. */
+  async testConnection() {
+    return this.remoteAdapter.isAvailable();
+  }
+
   /** Point activeAdapter/selectedModelId at whatever the record says. */
   _applyState(state) {
     this.state = state;
@@ -685,20 +707,19 @@ class EngineManager {
     });
 
     ipcMain.handle('cloud:configure', async (_event, config) => {
-      log('EngineManager: Configuring adapter:', config.endpointUrl || '(no URL)');
-      this.activeAdapter.configure(config);
+      this.configureEndpoint(config);
       return { success: true };
     });
 
     ipcMain.handle('cloud:test-connection', async () => {
       log('EngineManager: Testing connection...');
-      const result = await this.activeAdapter.isAvailable();
+      const result = await this.remoteAdapter.isAvailable();
       if (!result.available) {
         log('EngineManager: Connection test failed:', result.error);
         return { success: false, error: result.error || 'Server not reachable' };
       }
 
-      const health = await this.activeAdapter.getHealth();
+      const health = await this.remoteAdapter.getHealth();
 
       return {
         success: true,

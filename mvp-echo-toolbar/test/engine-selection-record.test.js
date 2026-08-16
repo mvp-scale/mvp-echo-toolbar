@@ -276,3 +276,38 @@ describe('the migrated record must be persisted, not just applied', () => {
     assert.ok(store.value, 'even the default should be written, so boot is deterministic');
   });
 });
+
+describe('endpoint config and connection tests belong to the REMOTE adapter', () => {
+  // Found on Windows: the endpoint was configured, the log confirmed the URL,
+  // and switching to a hosted model still failed with "Remote endpoint not
+  // configured". cloud:configure called this.activeAdapter.configure() — which
+  // was the local sidecar, whose configure() reads only activeModelId and drops
+  // endpointUrl. The remote adapter never received it. cloud:test-connection had
+  // the same bug, so "Test Connection" was testing the CPU engine and would
+  // report success regardless of the endpoint.
+  test('configureEndpoint always reaches the remote adapter, whatever is active', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel('local-fast');           // active adapter is now local
+    let received = null;
+    mgr.remoteAdapter.configure = (c) => { received = c; };
+
+    mgr.configureEndpoint({ endpointUrl: 'http://192.168.1.169:20300/v1/audio/transcriptions' });
+
+    assert.ok(received, 'the remote adapter must receive endpoint config');
+    assert.match(received.endpointUrl, /192\.168\.1\.169/);
+  });
+
+  test('testConnection probes the remote adapter, not whatever is active', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel('local-fast');
+    let probed = false;
+    mgr.remoteAdapter.isAvailable = async () => { probed = true; return { available: true }; };
+
+    await mgr.testConnection();
+
+    assert.strictEqual(probed, true,
+      'testing the ACTIVE adapter reports the CPU engine is fine and tells the user nothing');
+  });
+});
