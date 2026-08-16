@@ -300,6 +300,33 @@ WebGPU unreachable. Each takes under a minute on the target machine.
 | 17 (**0d**) | Switch from the WebGPU model to a local model in Settings | Task Manager memory drops by ~2.5 GB. |
 | 5 (**4**) | After a forced load failure, press the hotkey | Tray **stays on error** and does not flip to "Starting up..." (regression guard for the fix-3/fix-4 interaction). |
 
+### Scheduled next: low-VRAM / broad-GPU support (after the 3.0.28 soak)
+
+Goal: run well on any WebGPU device with enough RAM — confirmed working on a GTX 1650 (4 GB)
+as well as a 3090, so this is optimization, not repair.
+
+The driver is `hub.js:425-429`: `encoderQuant` defaults to `int8`, WebGPU rejects int8, and the
+fallback is **fp32 — the heaviest option**. `inference-worker.ts` only sets `decoderQuant`, so we
+never expressed a preference. The fallback only triggers on `int8`; asking for `fp16` explicitly is
+honoured.
+
+| Encoder | Size | Note |
+|---|---|---|
+| fp32 (`.onnx` + `.onnx.data`) | **2363 MB** | current — ~60% of a 4 GB card |
+| fp16 | **1182 MB** | ~30%. Needs the WebGPU `shader-f16` feature |
+| int8 | 622 MB | rejected by the WebGPU EP |
+
+| # | Item | Why |
+|---|---|---|
+| V1 | Request `encoderQuant: 'fp16'` | One line, halves model residency |
+| V2 | Fallback chain `fp16 → fp32 → wasm/int8` | Some GPUs lack `shader-f16`; today it is fp32 or nothing |
+| V3 | Fix `estimatedVram` (`gpu-detector.ts:38-48`) | Derived from `adapter.limits.maxBufferSize`, an API cap — not a memory measurement. Settings gates the model download on it |
+| V4 | Bump `MODEL_CACHE_VERSION` when quant changes | Different quant = different files; the key tracks model identity only, so the old 2.4 GB would linger in IndexedDB forever |
+
+**Verification:** `--replay` on a fixed recording gives before/after transcript *and* timing per
+quant, on each machine. Check `shader-f16` support first:
+`(await navigator.gpu.requestAdapter()).features.has('shader-f16')`
+
 **Not scheduled** (explicit decisions, see "Deliberately skipped"): code signing · committed lockfile /
 `npm ci` · `sandbox: true` + CSP tightening · build slimming (6, 7) — fold into the next build change ·
 Fix 10 (progress UI + warm-up fallback) — revisit after Phase 3 · ~50 assorted P2/P3s.
