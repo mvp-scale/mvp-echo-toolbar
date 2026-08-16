@@ -334,7 +334,7 @@ honoured.
   share a device and recovery works. Passing `powerPreference` at both sites remains cheap
   defensive hygiene, but it is not a live bug.
 - **`shader-f16` is blocked by ELECTRON, not the hardware or the driver.** Same machine, same
-  driver (`32.0.16.1047`, May 2026 — current, not old as first assumed): Microsoft Edge reports
+  driver (`32.0.16.1047`, May 2026 — current, not old as first assumed): Edge AND Chrome both report
   `shader-f16: true` and **18** WebGPU features; Electron 28 reports `false` and **7**. Electron 28
   ships Chromium ~120 (late 2023). VRAM confirmed at exactly 4096 MB from the registry.
 
