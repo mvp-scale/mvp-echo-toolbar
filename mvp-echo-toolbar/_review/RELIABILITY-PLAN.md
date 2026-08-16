@@ -752,9 +752,25 @@ endpoint form being unreachable by construction. The pure logic had 132 tests an
 seams between the pieces had none. That is exactly what §6b predicted, and it is the strongest
 argument in this document for the Tier-3 list being run rather than assumed.
 
-### Not yet exercised
+### Verified after the persistence fix (2026-08-16)
 
-- Legacy config migration on a real existing install (three old config files → `engine-state.json`).
+| Check | Result |
+|---|---|
+| `engine-state.json` is written on first boot | ✅ `exists=true` at `%APPDATA%\mvp-echo-toolbar` |
+| Legacy config migration on a real install | ✅ migrates once, then the record wins |
+| **CPU choice survives a restart** | ✅ `restored model selection: local-fast` |
+| CPU fallback converts WebM→WAV correctly | ✅ transcribes while WebGPU is still the selection |
+
+The reported bug is closed end to end: an explicit CPU choice now survives a
+restart on a machine with a working GPU and a stale `webgpu-adapter-config.json`.
+
+**Process note.** Three verification rounds were spent debugging code that was not
+running, because every build produced an identically named exe and a stale
+download was indistinguishable from a fresh one. The artifact now carries the
+commit sha. The lesson generalises: when evidence contradicts the code twice,
+suspect the binary before the third theory.
+
+### Not yet exercised
 - Tray revert generation guard: trigger an error, immediately record again, confirm the tray stays
   on `recording` past the 3-second mark.
 - Model **download** progress is still invisible to the user. Every run so far has loaded from cache,
