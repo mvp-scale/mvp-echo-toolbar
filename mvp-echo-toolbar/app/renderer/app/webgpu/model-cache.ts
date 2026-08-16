@@ -12,11 +12,27 @@
 const DB_NAME = 'parakeet-cache-db';
 const STORE_NAME = 'file-store';
 const VERSION_KEY = 'mvp-echo:cache-version';
-// Cache identity is the MODEL, not the app. Bump this ONLY when the actual model
-// or parakeet.js storage format changes — NEVER on an app-version bump. Legacy
-// values were app versions (e.g. "3.0.22") with no "model:" prefix; they migrate
-// silently (the model is unchanged), so updating the app never re-downloads.
-const MODEL_CACHE_VERSION = 'model:parakeet-tdt-0.6b-v2:1';
+
+/** Which encoder file this machine can run. Decided by capability, never assumed. */
+export type EncoderVariant = 'fp32' | 'fp16';
+
+/**
+ * Cache identity is the MODEL and the ENCODER VARIANT — not the app.
+ *
+ * Bump only when the model or parakeet.js's storage format changes, NEVER on an
+ * app-version bump. Legacy values were app versions ("3.0.22") with no "model:"
+ * prefix; they migrate silently, so updating the app never re-downloads.
+ *
+ * fp32 deliberately keeps the ORIGINAL key. Machines that cannot run fp16 —
+ * older GPUs, missing shader-f16 — must not be made to re-fetch 2.3GB for a
+ * feature they will never use. Only a machine actually switching to fp16 sees a
+ * key change, and that change is what evicts the fp32 blobs it just stopped
+ * needing. Nothing accumulates: at most one encoder is resident per machine.
+ */
+export const CACHE_KEYS: Record<EncoderVariant, string> = {
+  fp32: 'model:parakeet-tdt-0.6b-v2:1',
+  fp16: 'model:parakeet-tdt-0.6b-v2:fp16:1',
+};
 
 async function requestPersistence(): Promise<boolean> {
   if (!navigator.storage?.persist) return false;
@@ -68,7 +84,8 @@ export interface CachePrepResult {
  * cache ONLY when the MODEL identity changes — not on app-version bumps, which
  * previously forced a needless ~1.2GB re-download on every update.
  */
-export async function prepareModelCache(): Promise<CachePrepResult> {
+export async function prepareModelCache(variant: EncoderVariant = 'fp32'): Promise<CachePrepResult> {
+  const MODEL_CACHE_VERSION = CACHE_KEYS[variant] ?? CACHE_KEYS.fp32;
   const persistent = await requestPersistence();
   const previousVersion = localStorage.getItem(VERSION_KEY);
   let cleared = false;

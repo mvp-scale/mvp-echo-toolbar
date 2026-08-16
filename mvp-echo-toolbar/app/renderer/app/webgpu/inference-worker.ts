@@ -27,7 +27,7 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     switch (msg.type) {
       case 'init':
-        await init(msg.backend || 'wasm');
+        await init(msg.backend || 'wasm', msg.encoderQuant || 'fp32');
         break;
       case 'transcribe':
         await transcribe(msg.audio, msg.sampleRate);
@@ -44,8 +44,11 @@ self.onmessage = async (event: MessageEvent) => {
   }
 };
 
-async function init(backend: 'webgpu-hybrid' | 'wasm'): Promise<void> {
-  console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend})...`);
+async function init(
+  backend: 'webgpu-hybrid' | 'wasm',
+  encoderQuant: 'fp32' | 'fp16' = 'fp32',
+): Promise<void> {
+  console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend}, encoder=${encoderQuant})...`);
 
   // Self-check for the COOP/COEP fix. If this logs false in a packaged build,
   // SharedArrayBuffer is unavailable and the WASM decoder is pinned to a single
@@ -65,11 +68,24 @@ async function init(backend: 'webgpu-hybrid' | 'wasm'): Promise<void> {
   let lastFile = '';
   model = await fromHub('parakeet-tdt-0.6b-v2', {
     backend,
+    /**
+     * Ask for the encoder this machine can actually run.
+     *
+     * This was previously left unset, which was silently expensive: the library
+     * default is 'int8', WebGPU cannot execute int8, so hub.js:426 forced it all
+     * the way to fp32 — logging "Forcing encoder to fp32 on WebGPU (int8
+     * unsupported)" and stepping straight past the fp16 build that would have
+     * worked. Every WebGPU machine downloaded 2,362 MB (a 39.8 MB graph plus a
+     * 2,322 MB weights sidecar) when 1,182 MB in a single self-contained file
+     * would have done.
+     *
+     * The caller decides from `adapter.features.has('shader-f16')` on THIS
+     * machine, so a GPU without it still gets fp32 and still works.
+     */
+    encoderQuant,
     // Pin the decoder (which always runs on WASM in webgpu mode) to int8 — its
     // low-memory quant. This matches the current library default; making it
     // explicit guards against a future default change silently bloating load.
-    // Note: the encoder is force-loaded as fp32 on any webgpu backend by
-    // parakeet.js itself, so no encoderQuant is set (it would be ignored).
     decoderQuant: 'int8',
     verbose: false,
     progress: (p: { loaded: number; total: number; file: string }) => {

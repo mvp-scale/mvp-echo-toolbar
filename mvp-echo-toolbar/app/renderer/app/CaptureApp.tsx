@@ -28,6 +28,9 @@ const MAX_RECORDING_S = 600;    // Server limit (10 min)
 const COUNTDOWN_START_S = 540;  // Show countdown at 9 min (1 min warning)
 const AUTO_STOP_S = 590;        // Auto-stop at 9:50 (10s buffer)
 
+/** Set only when a machine that ADVERTISED shader-f16 then failed to compile it. */
+const FP16_FAILED_KEY = 'mvp-echo:fp16-unusable';
+
 /**
  * CaptureApp - Hidden window component for audio capture
  * No visible DOM. All logic runs in useEffect.
@@ -78,22 +81,45 @@ export default function CaptureApp() {
   const initWebGpuOrchestrator = useCallback(async () => {
     const api = (window as any).electronAPI;
     if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
+    // Declared out here so the catch can record which variant failed.
+    let encoderQuant: 'fp32' | 'fp16' = 'fp32';
     try {
       let backend: 'webgpu-hybrid' | 'wasm' = 'wasm';
+      // Which encoder this machine downloads is a CAPABILITY question, answered
+      // here, on this machine, every launch — never a build-time constant.
+      //
+      //   shader-f16 present -> encoder-model.fp16.onnx      1,182 MB, self-contained
+      //   absent             -> encoder-model.onnx + .data   2,362 MB
+      //
+      // fp16 also halves resident VRAM, which is what makes a 4GB card viable at
+      // all. It is NOT assumed from having a GPU: plenty of adapters expose
+      // WebGPU without shader-f16, and Electron 28 reported false on hardware
+      // where Chrome reported true.
       if ((navigator as any).gpu) {
         try {
           const adapter = await (navigator as any).gpu.requestAdapter();
-          if (adapter) backend = 'webgpu-hybrid';
+          if (adapter) {
+            backend = 'webgpu-hybrid';
+            // One bad experience is enough: if fp16 was requested here before and
+            // the session failed to compile, this machine stays on fp32 rather
+            // than re-testing the same failure on every launch.
+            const fp16Broken = localStorage.getItem(FP16_FAILED_KEY) === '1';
+            if (adapter.features?.has?.('shader-f16') && !fp16Broken) encoderQuant = 'fp16';
+            else if (fp16Broken) console.warn('CaptureApp: fp16 previously failed on this machine — using fp32');
+          }
         } catch { /* wasm fallback */ }
       }
       let appVersion: string | undefined;
       try {
         appVersion = await api?.getAppVersion?.();
       } catch { /* cache versioning is best-effort */ }
-      console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, v=${appVersion ?? 'unknown'})...`);
+      console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, encoder=${encoderQuant}, v=${appVersion ?? 'unknown'})...`);
       lastInitAtRef.current = Date.now();
-      await orchestratorRef.current.initialize(backend, appVersion);
+      await orchestratorRef.current.initialize(backend, appVersion, encoderQuant);
       initFailRef.current = 0; // success resets the failure/backoff counter
+      // fp16 proved itself on this machine — clear any old failure marker so a
+      // one-off failure (a driver since updated) is not remembered forever.
+      if (encoderQuant === 'fp16') localStorage.removeItem(FP16_FAILED_KEY);
       console.log('CaptureApp: WebGPU orchestrator ready');
 
       reportReadiness();
@@ -106,6 +132,15 @@ export default function CaptureApp() {
       }
       initFailRef.current += 1;
       console.warn(`CaptureApp: WebGPU orchestrator init failed (attempt ${initFailRef.current}):`, e);
+      // A capability check said fp16 was supported and the session still would
+      // not compile. Record it so the next attempt uses fp32 instead of
+      // repeating a failure this machine has already demonstrated. The check is
+      // reliable enough that this should be rare; remembering costs one flag and
+      // is the difference between recovering and looping.
+      if (encoderQuant === 'fp16') {
+        localStorage.setItem(FP16_FAILED_KEY, '1');
+        console.warn('CaptureApp: marking fp16 unusable on this machine — next attempt will use fp32');
+      }
       // RETRACT the readiness claim. Without this the record kept `status:
       // 'ready'` from a PREVIOUS successful load after the worker had been torn
       // down, so Settings showed a green "loaded" GPU card and the popup said

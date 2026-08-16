@@ -87,7 +87,9 @@ export class InferenceOrchestrator {
    */
   async initialize(
     backend: 'webgpu-hybrid' | 'wasm' = 'wasm',
-    appVersion?: string
+    appVersion?: string,
+    /** Which encoder this machine can run. Decided by the caller's capability probe. */
+    encoderQuant: 'fp32' | 'fp16' = 'fp32'
   ): Promise<void> {
     if (this.loading) throw new AlreadyLoadingError();
     if (this.modelReady) return;
@@ -99,7 +101,9 @@ export class InferenceOrchestrator {
       // Always prep the cache: requests persistent storage (so the ~1.2GB blob
       // survives eviction) and migrates/validates the model-cache key. Runs even
       // when appVersion is unknown — persistence must be requested regardless.
-      await prepareModelCache();
+      // Keyed on the encoder variant, so switching to fp16 evicts the fp32 blobs
+      // it replaces instead of leaving 2.3GB of dead weight behind.
+      await prepareModelCache(encoderQuant);
 
       // A dispose()/abort() landing during the cache prep above had nothing to
       // cancel (no worker, no pending request). Honour it here rather than
@@ -151,7 +155,7 @@ export class InferenceOrchestrator {
       }
 
       await this.sendMessage(
-        { type: 'init', backend },
+        { type: 'init', backend, encoderQuant },
         'ready',
         // 3 min WITHOUT PROGRESS. The old 900_000ms was not a timeout, it was a
         // hang: 15 minutes of `loading === true` with recovery disabled behind
