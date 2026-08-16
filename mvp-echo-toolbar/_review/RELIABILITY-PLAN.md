@@ -530,6 +530,69 @@ RC-1 entirely. Most of RC-4. The `isConfigured` overload, the `cloud:get-config`
 
 ---
 
+## 6b. Test strategy for the merged phase 2+3
+
+Phases 2 and 3 are merged and executed test-first. Written before any code.
+
+**The blocker is that the code we are changing has almost no coverage, and that
+is not an accident of neglect — it is a consequence of the design.**
+`switchModel()` and `_restoreModelSelection()` have no tests, the three adapters
+are ~969 untested lines, and `CaptureApp`/`SettingsPanel` have none at all with
+no DOM harness. Logic that lives inside a React component or inside a template
+string passed to `executeJavaScript` cannot be tested without either a browser
+or a rewrite. Making it testable and making it correct are the same refactor —
+which is why phase 3's "the renderer derives, never latches" is the enabling
+move, not a nicety.
+
+### Tier 1 — pure logic, no Electron, no DOM. TDD applies fully.
+
+- **`EngineState`** (item 29): the record, its invariants, and every transition,
+  as pure functions. `assertPair(engine, modelId)`, the restore ladder, the
+  generation guard. This is the heart of the phase and it is ordinary
+  input/output code — no excuse for anything but strict red-green.
+- **engine-manager**: already reachable via `testkit/electron-stub.js`, which
+  injects a fake `electron` into `require.cache`. Runs on Linux, no Electron.
+- **orchestrator**: already reachable via `testkit/fake-worker.mjs`.
+- **adapters**: reachable by substituting `modelManager` / fetch.
+
+### Tier 2 — needs a harness, but no new dependency.
+
+- **IPC contract test.** Statically read `main-simple.js`, `preload.js` and the
+  renderer call sites; assert the three agree. Channels invoked with no handler,
+  handlers missing from the allowlist, and dead channels are all detectable by
+  reading source — no runtime, no jsdom. Catches items 25 and 26's entire class,
+  and would have caught the allowlist silently returning `undefined`.
+- **Extract, do not simulate.** Rather than adding jsdom to test React, pull the
+  state derivation out of the components into pure modules and test those.
+  Deriving card state from `(rev, modelId, status)` is exactly what §5 rule 8
+  requires anyway, so the testable shape and the correct shape coincide. A
+  component left over should be dumb enough not to need a test.
+
+### Tier 3 — Windows only. Stays a manual list, and is named as such.
+
+Recording, tray transitions, hotkey, clipboard, real GPU, real endpoint. No
+pretence that these are covered; they go in the manual checklist and are
+verified on a build.
+
+### Order of work, which follows from the above
+
+1. `EngineState` core, pure, TDD. No wiring.
+2. Wire `engine-manager` to it — dissolves items 17, 18, 19.
+3. Extract renderer derivation to pure functions — dissolves 15, 16, 22, 23.
+4. IPC contract test, then fix what it reports — items 25, 26.
+5. Leaf items with local tests: 20 (tray generations), 28 (cache relocation).
+6. Item 30 (`app://` origin) is **dropped** — see §7. Item 31 last.
+
+### Rules held to for the duration
+
+No production code without a failing test first; watch every test fail and
+confirm it fails for the intended reason; minimal code to green; the existing
+suite stays green at every commit. Where something genuinely cannot be tested
+here (Windows runtime), say so explicitly in the commit rather than implying
+coverage that does not exist.
+
+---
+
 ## 7. What changed after this document was first written
 
 Corrections made against measurement, kept visible rather than silently folded in:
@@ -547,6 +610,23 @@ Corrections made against measurement, kept visible rather than silently folded i
 7. **RC-1 confirmed on disk** — three config files holding three different model ids simultaneously.
 8. **Test coverage mapped** — the existing "Fix 9" suite encodes the buggy behaviour as correct, so
    item 18 requires changing a test, not just adding one.
+9. **Threading turns out not to matter, so item 30 is DROPPED.** Measured on the XPS/GTX 1650 via
+   `--replay`: 105.8 s of audio decoded in 6,130 ms — **17.3× realtime, single-threaded**, with
+   parakeet explicitly reporting `SharedArrayBuffer not available - using single-threaded WASM`.
+   BRIDGE recorded 12.6× for this machine *with* threading. The expensive half is the WebGPU
+   encoder, which never needed `SharedArrayBuffer`. So the `app://` origin migration — which existed
+   only to restore cross-origin isolation, which existed only to enable threading — buys nothing and
+   costs every user a 2,371 MB re-download. Dropped. The `--sab` switch works on Chromium 150
+   (`SAB function | COI false | cores 16`) but should stay off: it relaxes a Spectre mitigation to
+   buy a benefit we have measured as unnecessary.
+10. **NEW, not in the original 31 — the inference runtime is fetched from a CDN.** The logs show
+    onnxruntime-web loading from `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.1/...` at
+    runtime. For an app whose promise is local-first and privacy-first that means it does not work
+    offline, and it is third-party executable code arriving on every cold start. Needs its own
+    decision; not yet triaged.
+11. **NEW — the CPU-switch bug reported from the 3.1.0 build.** Switching GPU→CPU appeared to do
+    nothing because the WebGPU readiness poll was never cancelled on a non-WebGPU switch and its
+    closure re-selected the GPU model seconds later. Another RC-4 instance. Fixed in `dfee58f`.
 
 ---
 
