@@ -114,12 +114,42 @@ export class InferenceOrchestrator {
           console.error('[InferenceOrchestrator] WebGPU device lost — tearing down for clean re-init');
           this.disposeSync(new Error('WebGPU device lost'));
         });
+
+        // A worker whose module script never LOADS — blocked by COEP, missing,
+        // or failing to parse — can never send a message. Without this listener
+        // the init request stayed pending for the full timeout while `loading`
+        // remained true, and CaptureApp's recovery is gated on !isLoading(), so
+        // the app sat with a dead hotkey and nothing in the log. That is exactly
+        // what Electron 43 produced. Same supersession guard as above.
+        created.addEventListener('error', (event: ErrorEvent) => {
+          if (this.worker !== created) return;
+          // A blocked cross-origin load is precisely the case where the browser
+          // withholds detail, so `message` is routinely empty. Say something
+          // useful rather than surfacing an empty string.
+          const detail = event.message || 'script failed to load (blocked, missing, or failed to parse)';
+          const where = event.filename ? ` [${event.filename}:${event.lineno}]` : '';
+          console.error(`[InferenceOrchestrator] worker error: ${detail}${where}`);
+          this.disposeSync(new Error(`Inference worker error: ${detail}`));
+        });
+
+        // The other way a worker can go quiet without an 'error': an incoming
+        // message that fails structured clone.
+        created.addEventListener('messageerror', () => {
+          if (this.worker !== created) return;
+          console.error('[InferenceOrchestrator] worker sent an undeserializable message');
+          this.disposeSync(new Error('Inference worker sent an undeserializable message'));
+        });
       }
 
       await this.sendMessage(
         { type: 'init', backend },
         'ready',
-        900000 // 15 min timeout — first download is ~1.2GB + warmup
+        // 3 min. The old 900_000ms was not a timeout, it was a hang: 15 minutes
+        // of `loading === true` with recovery disabled behind !isLoading().
+        // A stalled ~1.2GB download is better surfaced and retried than waited
+        // out, and a worker that fails to load now rejects immediately via the
+        // 'error' listener above rather than running the clock out.
+        180000
       );
 
       this.modelReady = true;

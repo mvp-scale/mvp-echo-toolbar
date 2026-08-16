@@ -66,7 +66,23 @@ function log(...parts) {
   // single-parameter version silently dropped everything after the first,
   // producing log lines that ended in a bare colon.
   const message = parts
-    .map((p) => (typeof p === 'string' ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })()))
+    .map((p) => {
+      if (typeof p === 'string') return p;
+      // Errors FIRST. JSON.stringify(new Error('boom')) is '{}' because Error's
+      // own properties are not enumerable, so every `log('label:', err)` call
+      // site wrote a line ending in a useless empty object. That is what hid
+      // "transcribe() called on main-process adapter" behind
+      // "EngineManager: processAudio failed: {}" for a whole debugging session.
+      if (p instanceof Error) {
+        // Build the header from name+message rather than reusing V8's, whose
+        // own first line can be stale for subclasses that assign `this.name`
+        // after super() — AlreadyLoadingError would otherwise read "Error".
+        const header = `${p.name}: ${p.message}`;
+        const nl = typeof p.stack === 'string' ? p.stack.indexOf('\n') : -1;
+        return nl === -1 ? header : `${header}${p.stack.slice(nl)}`;
+      }
+      try { return JSON.stringify(p); } catch { return String(p); }
+    })
     .join(' ');
   const timestamp = new Date().toISOString();
   console.log(message);

@@ -8,6 +8,14 @@
 export class FakeWorker {
   constructor() {
     this.listeners = [];
+    /**
+     * 'error' and 'messageerror' are tracked separately because they are the
+     * only way a worker whose SCRIPT never loaded can report anything — it can
+     * never send a 'message', so a test that can only emit messages cannot
+     * reproduce that failure at all.
+     */
+    this.errorListeners = [];
+    this.messageErrorListeners = [];
     this.posted = [];
     this.transfers = [];
     this.terminated = false;
@@ -17,10 +25,30 @@ export class FakeWorker {
 
   addEventListener(type, fn) {
     if (type === 'message') this.listeners.push(fn);
+    else if (type === 'error') this.errorListeners.push(fn);
+    else if (type === 'messageerror') this.messageErrorListeners.push(fn);
   }
 
   removeEventListener(type, fn) {
     if (type === 'message') this.listeners = this.listeners.filter((l) => l !== fn);
+    else if (type === 'error') this.errorListeners = this.errorListeners.filter((l) => l !== fn);
+    else if (type === 'messageerror') this.messageErrorListeners = this.messageErrorListeners.filter((l) => l !== fn);
+  }
+
+  /**
+   * Deliver a worker `error` event — what a real Worker fires when its module
+   * script is blocked (COEP), missing, or fails to parse. Note that for a
+   * blocked cross-origin load the browser deliberately withholds detail, so
+   * `message` is often empty; tests should cover that case, not just the
+   * friendly one.
+   */
+  emitError({ message = '', filename = '', lineno = 0 } = {}) {
+    for (const fn of [...this.errorListeners]) fn({ type: 'error', message, filename, lineno });
+  }
+
+  /** Deliver a `messageerror` event — an incoming message that failed structured clone. */
+  emitMessageError() {
+    for (const fn of [...this.messageErrorListeners]) fn({ type: 'messageerror' });
   }
 
   postMessage(msg, transfer) {

@@ -85,6 +85,75 @@ describe('Fix 0a — init failure must surface to the caller', () => {
   });
 });
 
+describe('Item 6 — a worker that never LOADS must fail fast, not wedge', () => {
+  // The Electron 43 case: COEP blocks the module worker, so the script never
+  // runs and the worker can never send a message. With no 'error' listener the
+  // init request sat unsettled for the full timeout, `loading` stayed true the
+  // whole time, and CaptureApp's recovery path is gated on !isLoading() — so
+  // the app was wedged with a dead hotkey and nothing in the log.
+
+  test('a blocked/missing worker script rejects init instead of hanging', async () => {
+    const { orch, latest } = makeOrchestrator();
+
+    const initPromise = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emitError({ message: 'Failed to load worker script', filename: 'inference-worker.js', lineno: 1 });
+
+    await assert.rejects(
+      () => withinMs(initPromise, 1000),
+      /worker/i,
+      'a worker load failure must surface to the caller',
+    );
+    assert.strictEqual(orch.isLoading(), false, 'loading must clear, or recovery stays disabled');
+    assert.strictEqual(orch.isReady(), false);
+  });
+
+  test('an error event with no message still rejects', async () => {
+    // A cross-origin/blocked load is exactly the case where the browser
+    // withholds detail, so the empty-message path is the one that matters.
+    const { orch, latest } = makeOrchestrator();
+
+    const initPromise = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emitError();
+
+    await assert.rejects(() => withinMs(initPromise, 1000), /worker/i);
+    assert.strictEqual(orch.isLoading(), false);
+  });
+
+  test('a messageerror also settles the pending request', async () => {
+    const { orch, latest } = makeOrchestrator();
+
+    const initPromise = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emitMessageError();
+
+    await assert.rejects(() => withinMs(initPromise, 1000), /worker/i);
+    assert.strictEqual(orch.isLoading(), false);
+  });
+
+  test('an error from a superseded worker cannot tear down its replacement', async () => {
+    const { orch, workers } = makeOrchestrator();
+
+    const first = orch.initialize('webgpu-hybrid');
+    await flush();
+    const stale = workers[0];
+    orch.dispose();
+    await first.catch(() => {});
+
+    const second = orch.initialize('webgpu-hybrid');
+    await flush();
+    const live = workers[workers.length - 1];
+    assert.notStrictEqual(live, stale, 'a fresh worker should have been created');
+
+    stale.emitError({ message: 'late failure from the old worker' });
+
+    assert.strictEqual(live.terminated, false, 'the live worker must survive a stale error');
+    orch.dispose();
+    await second.catch(() => {});
+  });
+});
+
 describe('Fix 0b — teardown must settle the in-flight request', () => {
   test('device-lost during init rejects the pending init promptly', async () => {
     const { orch, latest } = makeOrchestrator();
