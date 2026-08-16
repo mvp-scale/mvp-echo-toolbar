@@ -60,11 +60,27 @@ defect found since exists identically on Electron 28. Electron 43 removed two cr
 keeping the WebGPU path on the happy road. **The app was not regressing because of 43; 43 was the
 first time anyone saw what it does when its primary engine fails.**
 
-### State
+### State — VERIFIED, ready to merge
 
-- **Tests 34 → 121**, `npm run typecheck` clean at every commit.
-- 27 of 31 planned items done, 2 dropped with reasons, 1 deferred, plus two bugs found in use.
-- **Phase 1 is verified on the XPS.** Everything after it is inspection + typecheck only.
+- **Tests 34 → 135.** The gate is three commands: `npm run typecheck && npm test && npm run build`.
+  Build is not optional — a CommonJS/ESM mismatch once passed both of the other two and still broke
+  the bundle.
+- 27 of 31 planned items done, 2 dropped with reasons, 1 deferred, plus 5 defects found by testing
+  that were never on the list.
+- **Fully verified on the XPS** (2026-08-16). Every item in §9 of the plan passed:
+
+| Evidence from the debug log | Confirms |
+|---|---|
+| `restored model selection: local-fast` | CPU choice survives a restart — the reported bug, closed |
+| `wrote engine-state … (exists=true)` | The record persists; migration runs once |
+| `mode=raw-pcm, engine=webgpu` → transcript | GPU path, 11–12× realtime |
+| `mode=webm, engine=local` → ffmpeg → transcript | CPU path and WAV conversion |
+| `[console:popup:error] Model switch failed: …` | Failures are visible; that line went nowhere before |
+| `adapterName: "nvidia turing"` | GPU probe and label |
+
+**Every defect the Windows rounds found was in the WIRING between modules, never in the modules
+themselves.** The pure logic had tests and was right; the seams had none. Worth remembering before
+trusting anything marked "done" that has only been typechecked.
 
 ### What was found and fixed
 
@@ -88,12 +104,28 @@ first time anyone saw what it does when its primary engine fails.**
 
 ### Do this next
 
-1. Build from `electron-43` and work through **section 9 of the plan** — the six things only Windows
-   can confirm. Mid-recording switch and CPU fallback matter most.
-2. Untriaged: **onnxruntime-web is fetched from `cdn.jsdelivr.net` at runtime.** An offline,
-   privacy-first app should not be doing that. Not in the plan yet.
-3. `--sab` works on Chromium 150 (`SAB function | COI false | cores 16`) but should stay off — it
+1. **Merge to `dev` and soak.** Verification is done; nothing is blocking. The plan's own advice is
+   separate soaks for a platform bump and for behaviour changes, and this branch is both — so watch
+   for engine-selection oddities specifically.
+2. **Triage the CDN dependency.** onnxruntime-web is fetched from
+   `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.1/...` at runtime, visible in every log. An
+   offline, privacy-first app should not pull third-party executable code on every cold start. This
+   is a supply-chain decision, not a bug fix, and deserves its own session.
+3. **Two things still never exercised.** The model DOWNLOAD path — every run so far has loaded from
+   cache, so the ~1.2 GB first-run download is untested and its progress is invisible to the user.
+   And the tray revert generation guard, which is unit-tested but has never run live.
+4. `--sab` works on Chromium 150 (`SAB function | COI false | cores 16`) but should stay off — it
    relaxes a Spectre mitigation to buy throughput measured as unnecessary.
+
+### Two process fixes worth keeping
+
+- **Artifacts carry the commit sha.** Every build used to produce an identically named exe, so a
+  stale download was indistinguishable from a fresh one. That cost three verification rounds in one
+  day, each spent debugging code that was not running. When evidence contradicts the code twice,
+  suspect the binary before forming a third theory.
+- **`--diag` now surfaces browser-level failures.** `forwardConsole()` sends warnings and errors from
+  all three windows to the log file, including messages Chromium generates itself, which no
+  in-renderer shim can see. That is how the COEP block was finally identified.
 
 ---
 
