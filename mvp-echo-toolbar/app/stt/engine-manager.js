@@ -292,6 +292,19 @@ class EngineManager {
     }
   }
 
+  /**
+   * Does this dispatch need WebM transcoded to WAV first?
+   *
+   * The sidecar reads WAV only. This has to follow the SAME resolution as
+   * _adapterForModel — it previously keyed off `activeAdapterName`, so once
+   * dispatch started routing by model id the two disagreed: with WebGPU
+   * selected and the renderer correctly falling back to CPU, the conversion was
+   * skipped and sherpa-onnx got a raw .webm ("Expected chunk_id RIFF").
+   */
+  _needsWavConversion(modelId) {
+    return this._adapterForModel(modelId) === this.localSidecarAdapter;
+  }
+
   /** Point activeAdapter/selectedModelId at whatever the record says. */
   _applyState(state) {
     this.state = state;
@@ -412,8 +425,10 @@ class EngineManager {
       fs.writeFileSync(webmPath, audioBuffer);
       log(`EngineManager: Wrote WebM to ${webmPath} (${audioBuffer.byteLength} bytes)`);
 
-      // If local adapter is active, convert WebM→WAV using ffmpeg
-      if (this.activeAdapterName === 'local-sidecar') {
+      // Convert WebM→WAV when the DISPATCH TARGET is the sidecar — which is not
+      // necessarily the active adapter, because the renderer may have frozen a
+      // CPU capture plan while the user's selection is still WebGPU.
+      if (this._needsWavConversion(options.model)) {
         wavPath = path.join(
           os.tmpdir(),
           `mvp-echo-audio-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.wav`

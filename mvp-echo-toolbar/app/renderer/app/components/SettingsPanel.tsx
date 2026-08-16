@@ -159,6 +159,18 @@ export default function SettingsPanel() {
   const localAllModels = models.filter(m => m.group === 'webgpu' || m.group === 'local');
   const isLocalMode = selectedModelId.startsWith('local-') || selectedModelId.startsWith('webgpu-');
 
+  /**
+   * Reveal the endpoint fields even while a local/webgpu model is selected.
+   *
+   * Without this the hosted option is unreachable by construction: the fields
+   * are hidden whenever a local model is active, and selecting a hosted model
+   * FAILS with "Remote endpoint not configured" — so the selection never
+   * changes, isLocalMode stays true, and the form you need in order to fix it
+   * never appears. Clicking a hosted card now opens it.
+   */
+  const [showEndpointForm, setShowEndpointForm] = useState(false);
+  const endpointFieldsVisible = !isLocalMode || showEndpointForm;
+
   // Fetch real model list from engine manager via IPC
   const fetchModels = useCallback(async () => {
     const ipc = ipcRef.current;
@@ -371,6 +383,11 @@ export default function SettingsPanel() {
       pollRef.current = null;
     }
 
+    // Clicking a hosted model always opens the endpoint fields, whether or not
+    // the switch then succeeds — that failure is the most likely reason someone
+    // needs them.
+    setShowEndpointForm(model.group === 'gpu');
+
     const previousSelectedId = selectedModelId;
     const isWebGpu = model.group === 'webgpu';
 
@@ -462,7 +479,7 @@ export default function SettingsPanel() {
     <div className="border-t border-border px-3 py-2 bg-muted/20 max-h-[400px] overflow-y-auto">
       <div className="space-y-2">
         {/* Endpoint URL -- hidden when local/webgpu model is active */}
-        {!isLocalMode && (
+        {endpointFieldsVisible && (
           <div>
             <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
               Endpoint URL
@@ -478,7 +495,7 @@ export default function SettingsPanel() {
         )}
 
         {/* API Key -- hidden when local/webgpu model is active */}
-        {!isLocalMode && (
+        {endpointFieldsVisible && (
           <div>
             <label className="text-[9px] font-medium text-muted-foreground block mb-0.5">
               API Key
@@ -494,7 +511,7 @@ export default function SettingsPanel() {
         )}
 
         {/* Connection Status + Test -- hidden when local/webgpu model is active */}
-        {!isLocalMode && (
+        {endpointFieldsVisible && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               {connectionStatus === 'testing' && (

@@ -202,3 +202,34 @@ describe('processAudio must route by the model it was given', () => {
     assert.strictEqual(mgr._adapterForModel(undefined), mgr.activeAdapter);
   });
 });
+
+describe('WebM to WAV conversion must follow the dispatch, not the selection', () => {
+  // Second half of the routing fix, and a hole the first half opened. Dispatch
+  // was changed to route by options.model, but the ffmpeg conversion still
+  // keyed off activeAdapterName. So with WebGPU selected and the renderer
+  // correctly falling back to CPU, sherpa-onnx received a raw .webm:
+  //   wave-reader.cc: Expected chunk_id RIFF. Given: 0xa3df451a
+  test('a local- dispatch needs WAV even while webgpu is the active adapter', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel(WEBGPU_MODEL);
+
+    assert.strictEqual(mgr._needsWavConversion('local-fast'), true,
+      'the sidecar only reads WAV; the active adapter is irrelevant to that');
+  });
+
+  test('a webgpu- dispatch does not', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+
+    assert.strictEqual(mgr._needsWavConversion(WEBGPU_MODEL), false);
+  });
+
+  test('with no model named, it follows the active adapter', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel('local-fast');
+
+    assert.strictEqual(mgr._needsWavConversion(undefined), true);
+  });
+});
