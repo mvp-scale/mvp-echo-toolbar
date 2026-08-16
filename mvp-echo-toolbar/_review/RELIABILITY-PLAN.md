@@ -722,7 +722,40 @@ app has always done when its primary engine fails.
 
 ---
 
-## 9. Still unverified — the Windows list
+## 9. Windows verification — RESULTS (2026-08-16)
+
+**Verified working on the XPS across three test rounds.** Confirmed by dictation through the app
+itself: *"I'm on GPU now, just fine"* · *"Hosted model now shows the correct endpoint and the
+ability to test"* · *"So far still good."*
+
+| Check | Result |
+|---|---|
+| GPU path end to end | ✅ `mode=raw-pcm, engine=webgpu`, transcript in 466–984 ms |
+| Boots from existing IndexedDB cache | ✅ no re-download |
+| CPU ↔ GPU switching, visible and sticky | ✅ |
+| CPU fallback while the GPU model loads | ✅ records and transcribes instead of a dead hotkey |
+| Hosted endpoint form reachable | ✅ endpoint + API key + test button now appear |
+| Warm mic reuse | ✅ `capture-ready` in 143–271 ms on a warm stream |
+
+Throughput on the GTX 1650: 11.0 s of audio in 984 ms (**11.2× realtime**), 7.0 s in 749 ms. Short
+clips are dominated by fixed overhead, as expected.
+
+**Four defects were found by these rounds, every one of them in the WIRING between modules rather
+than in the modules themselves** — `state.status` never leaving `unknown`, `processAudio` routing on
+the active adapter, the WAV conversion keyed to a different decision than the dispatch, and the
+endpoint form being unreachable by construction. The pure logic had 132 tests and was right; the
+seams between the pieces had none. That is exactly what §6b predicted, and it is the strongest
+argument in this document for the Tier-3 list being run rather than assumed.
+
+### Not yet exercised
+
+- Legacy config migration on a real existing install (three old config files → `engine-state.json`).
+- Tray revert generation guard: trigger an error, immediately record again, confirm the tray stays
+  on `recording` past the 3-second mark.
+- Model **download** progress is still invisible to the user. Every run so far has loaded from cache,
+  so the download path itself remains untested and unreported. Not in the item list; worth adding.
+
+## 9b. Original pre-verification list
 
 Tier 3 from §6b. Named explicitly rather than implied to be covered. Phase 1 (items 5–14) is
 confirmed on the XPS; everything below landed after that build.
