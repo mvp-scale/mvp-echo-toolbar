@@ -193,3 +193,44 @@ describe('restore — one door, not three', () => {
     assert.ok(s.reason);
   });
 });
+
+describe('applyModelReady — the renderer reports readiness UP', () => {
+  // Observed failure: the orchestrator logged "Model loaded and ready", yet
+  // planCapture fell back to CPU with "GPU model still loading" on the very
+  // next hotkey press. state.status was created as 'unknown' and NOTHING ever
+  // moved it to 'ready' — main received webgpu:model-ready and only forwarded
+  // it to the model manager. So the WebGPU path could never be taken.
+  const { applyModelReady } = require('../app/stt/engine-state');
+
+  test('a ready report makes a webgpu selection actually usable', () => {
+    const chosen = select(createState(), 'webgpu-parakeet-0.6b');
+
+    const after = applyModelReady(chosen, true);
+
+    assert.strictEqual(after.status, 'ready',
+      'without this the GPU engine is selected but permanently unusable');
+  });
+
+  test('a not-ready report moves it back to loading', () => {
+    const ready = applyModelReady(select(createState(), 'webgpu-parakeet-0.6b'), true);
+
+    const after = applyModelReady(ready, false);
+
+    assert.strictEqual(after.status, 'loading');
+  });
+
+  test('it bumps rev so the record is broadcast', () => {
+    const chosen = select(createState(), 'webgpu-parakeet-0.6b');
+
+    assert.ok(applyModelReady(chosen, true).rev > chosen.rev);
+  });
+
+  test('it does not disturb a local selection', () => {
+    const cpu = select(createState(), 'local-fast');
+
+    const after = applyModelReady(cpu, true);
+
+    assert.strictEqual(after.modelId, 'local-fast');
+    assert.strictEqual(after.engine, 'local');
+  });
+});

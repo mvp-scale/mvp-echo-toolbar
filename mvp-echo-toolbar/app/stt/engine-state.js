@@ -160,8 +160,27 @@ function restore(saved, { gpu = 'indeterminate' } = {}) {
   return base;
 }
 
+/**
+ * Fold in the renderer's report that its worker is (or is no longer) warm.
+ *
+ * This is the one fact main cannot observe: the orchestrator lives in the
+ * renderer. Without it, `status` was created as 'unknown' and NOTHING ever
+ * moved it, so a WebGPU selection was permanently unusable — the orchestrator
+ * logged "Model loaded and ready" and the very next hotkey press still fell
+ * back to CPU with "GPU model still loading". main received webgpu:model-ready
+ * and only forwarded it to the model manager.
+ */
+function applyModelReady(state, ready) {
+  const next = { ...state, rev: state.rev + 1 };
+  // Readiness is a fact about the WebGPU worker specifically; it says nothing
+  // about the CPU or remote engines.
+  if (next.engine !== 'webgpu') return next;
+  return { ...next, status: ready ? 'ready' : 'loading', reason: null };
+}
+
 module.exports = {
   DEFAULT_MODEL,
+  applyModelReady,
   createState,
   engineForModel,
   assertPair,

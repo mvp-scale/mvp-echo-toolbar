@@ -171,3 +171,34 @@ describe('one record — an explicit choice cannot be outranked', () => {
     assert.ok(result.error, 'a failed switch must say why');
   });
 });
+
+describe('processAudio must route by the model it was given', () => {
+  // Observed failure: planCapture correctly fell back to CPU and dispatched
+  // model=local-fast, but EngineManager routed on this.activeAdapter — still
+  // the WebGPU adapter, because that is what the user selected — so the audio
+  // hit the main-process WebGPU adapter and threw "transcribe() called on
+  // main-process adapter". The model parameter was accepted and ignored.
+  test('a local- model resolves to the local adapter even while webgpu is selected', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel(WEBGPU_MODEL);
+
+    assert.strictEqual(mgr._adapterForModel('local-fast'), mgr.localSidecarAdapter,
+      'the recording was captured for CPU; it must be dispatched to CPU');
+  });
+
+  test('a webgpu- model resolves to the webgpu adapter', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+
+    assert.strictEqual(mgr._adapterForModel(WEBGPU_MODEL), mgr.webgpuAdapter);
+  });
+
+  test('no model falls back to the active adapter', async () => {
+    const mgr = makeManager({ gpuHardware: true });
+    await mgr.initialize();
+    await mgr.switchModel('local-fast');
+
+    assert.strictEqual(mgr._adapterForModel(undefined), mgr.activeAdapter);
+  });
+});

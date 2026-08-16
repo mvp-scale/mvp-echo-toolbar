@@ -22,7 +22,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { log } = require('../main/logger');
-const { createState, restore, select, engineForModel } = require('./engine-state');
+const { createState, restore, select, engineForModel, applyModelReady } = require('./engine-state');
 
 const RemoteAdapter = require('./adapters/remote-adapter');
 const LocalSidecarAdapter = require('./adapters/local-sidecar-adapter');
@@ -270,6 +270,28 @@ class EngineManager {
     this._broadcastState = fn;
   }
 
+  /**
+   * Resolve the adapter that can actually run `modelId`.
+   *
+   * processAudio used to dispatch on `this.activeAdapter` and merely forward
+   * `options.model` without looking at it. So when the renderer correctly fell
+   * back to CPU for a recording — because the GPU worker was not warm — the
+   * audio still went to the WebGPU adapter, which is main-process-only and
+   * throws "transcribe() called on main-process adapter". The recording was
+   * lost even though every earlier decision had been right.
+   *
+   * The model id is the routing table; the active adapter is only a default for
+   * callers that do not name one.
+   */
+  _adapterForModel(modelId) {
+    if (!modelId) return this.activeAdapter;
+    switch (engineForModel(modelId)) {
+      case 'webgpu': return this.webgpuAdapter;
+      case 'local': return this.localSidecarAdapter;
+      default: return this.remoteAdapter;
+    }
+  }
+
   /** Point activeAdapter/selectedModelId at whatever the record says. */
   _applyState(state) {
     this.state = state;
@@ -403,7 +425,13 @@ class EngineManager {
       }
 
       // Delegate to active adapter
-      const result = await this.activeAdapter.transcribe(transcribePath, {
+      // Route by the model the CALLER named, not by whatever is currently
+      // selected. The renderer freezes a capture plan at record start and may
+      // legitimately have fallen back to CPU while the user's selection is
+      // still WebGPU; dispatching on activeAdapter in that case sent the audio
+      // to the main-process WebGPU adapter, which throws, and lost it.
+      const adapter = this._adapterForModel(options.model);
+      const result = await adapter.transcribe(transcribePath, {
         model: options.model,
         language: options.language,
       });
@@ -699,6 +727,11 @@ class EngineManager {
     // Notify main that parakeet.js model is loaded in renderer
     ipcMain.handle('webgpu:model-ready', async (_event, ready) => {
       this.webgpuAdapter.modelManager.setReady(ready);
+      // Fold it into the record and rebroadcast. This is the one fact main
+      // cannot observe for itself, and without it `status` sat at 'unknown'
+      // forever — so planCapture kept falling back to CPU with "GPU model still
+      // loading" immediately after the orchestrator reported it was ready.
+      if (this.state) this._applyState(applyModelReady(this.state, ready));
       return { success: true };
     });
 
