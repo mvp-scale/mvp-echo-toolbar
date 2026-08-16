@@ -325,6 +325,18 @@ honoured.
   **Available VRAM cannot be measured through WebGPU** — which invalidates the original V3 as much
   as it invalidates the `maxBufferSize` heuristic it was meant to replace.
 
+- **The hybrid-GPU concern is REFUTED on this hardware.** The machine is a Dell XPS 15 7590
+  (Intel UHD 630 + GTX 1650, Optimus), which is exactly the configuration `raw/04` §P2 flagged as
+  UNVERIFIED — the device-loss watcher requests an adapter with no `powerPreference` while the
+  compute session asks for `high-performance`, so they could land on different GPUs and the watcher
+  would never see a loss. Measured: `high-performance`, `low-power` and default **all** return
+  `nvidia/turing`. Chromium exposes only the discrete GPU to WebGPU here, so watcher and compute
+  share a device and recovery works. Passing `powerPreference` at both sites remains cheap
+  defensive hygiene, but it is not a live bug.
+- `shader-f16` is false on all three adapters, so it is a driver/Chromium limitation rather than
+  adapter selection. Electron 28 ships Chromium ~120, well past `shader-f16` support, so the
+  2019-era NVIDIA driver is the likely gate — Turing supports 16-bit shader ops in hardware.
+
 Healthy on that machine: `crossOriginIsolated: true`, 16 WASM threads, `persisted: true`, and
 `storageUsed` 2371 MB — exactly the fp32 encoder + decoder + vocab, so no duplicate blobs.
 Note `maxBufferSize` is **2048 MB**: no single GPU buffer may exceed 2 GB. The 2323 MB encoder only
