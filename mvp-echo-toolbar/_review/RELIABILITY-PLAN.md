@@ -520,15 +520,20 @@ RC-1 entirely. Most of RC-4. The `isConfigured` overload, the `cloud:get-config`
 | — | What does the on-disk config state actually look like? | Three stores, three different answers, captured live: `local-sidecar-config.json` → `local-fast`, `webgpu-adapter-config.json` → `webgpu-parakeet-0.6b`, `toolbar-endpoint-config.json` → `parakeet-tdt-0.6b-v2-int8`. **RC-1 confirmed on disk, not theorised.** |
 | — | What regression protection exists? | 34 tests / 8 suites. **`switchModel()` and `_restoreModelSelection()` have none**, all three adapters are essentially untested (~969 lines), `CaptureApp.tsx` has zero. Note `test/engine-selection.test.js` ("Fix 9") **encodes the current override behaviour as correct** — fixing item 18 means *changing an existing test*, not just adding one. `testkit/electron-stub.js` fakes Electron, so engine-manager fixes are TDD-able on Linux. |
 
+### Answered by the Windows runs
+
+| # | Question | Answer |
+|---|---|---|
+| 2 | Does dropping COI restore the module worker on E43? | **Yes.** With isolation off the worker loads, the model initialises and transcription works end to end. COEP was the blocker. |
+| 3 | Does the AudioWorklet blob module also fail under COEP? | **Moot, and no.** With COI off the raw-PCM path works (`worklet→sink→destination`, `capture-ready` in 143–271 ms). Only relevant again if isolation is ever turned back on. |
+| 4 | Does `adapter.info` populate under E43 on the target GPU? | **Yes** — `{"available":true,"vendor":"nvidia","architecture":"turing"}`. The branch that had never once executed inside Electron now has. |
+| 7 | Is `requestAdapterInfo` the only removed API in play? | **No others found.** Many full inits across three rounds produced no further `TypeError: … is not a function`. Not proof, but the `console-message` forwarding would now surface one. |
+
 ### Still open
 
 | # | Question | Cheapest test | Decides |
 |---|---|---|---|
-| 2 | Does `--no-coi` restore the module worker on E43? | Launch the packaged exe with `--no-coi` (flag already exists, `main-simple.js:25`), press the hotkey with the GPU model selected. **No rebuild needed.** | Confirms COEP as the worker blocker and gives clean attribution vs F1. |
-| 3 | Does the AudioWorklet blob module (`AudioCapture.ts:287-288`) also fail under COEP on 43? | With COI **on** on E43, select the GPU model and press the hotkey. If it fails before any worker message, the worklet is also blocked. Its failure is currently swallowed into the generic `'Start recording failed'` catch at `CaptureApp.tsx:580-588` — F0 will make it legible. | Whether COEP breaks *one* thing or *all* dynamic module loads. Changes F5 from "nice" to "mandatory." |
-| 4 | Does `adapter.info` actually populate under E43 on the target GPU? | Run `_review/gpu-report.js` in the hidden-window DevTools. It already has the dual path at `:49-52`. | Validates F1 on the real target. Per `BRIDGE.md:57-60` it has only ever run on Chromium 120 (where `adapter.info` did not exist) and desktop Chrome — the `adapter.info` branch has **never** been exercised inside Electron. |
 | 5 | Is the sidecar's 1.485s "recognizer created" model load, or process + DLL startup? | Run `sherpa-onnx-offline.exe` twice on the same wav from a warm shell; compare wall-clock to the internal timing. | Whether F11 (warm process) is worth its new lifecycle surface. |
-| 7 | Is `requestAdapterInfo` the only removed API in play across 15 majors? | Run `_review/gpu-report.js` and scan the DevTools console during a full init for other `TypeError: … is not a function`. F0's `console-message` forwarding makes this permanent. | Whether F1 is the last platform-removal fix or the first of several. |
 | 8 | Does the `enable-features=SharedArrayBuffer` switch still work on Chromium 150? | Add the `appendSwitch` call, launch with COI off, check `typeof SharedArrayBuffer` in DevTools. **~30 min.** | Whether phase 6 (origin work) is urgent or optional. A yes recovers 16-thread decode with no origin change. |
 | 9 | What does single-threaded decode actually cost on weak hardware? | Time a 30 s clip on the XPS with `--coi` and without. No rebuild. | **The measurement that would flip §4.** Over ~3 s and the origin work moves from "later" to "now." |
 
