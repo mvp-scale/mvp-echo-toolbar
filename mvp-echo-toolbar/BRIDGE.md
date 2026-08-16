@@ -1,40 +1,188 @@
 # Session Bridge — start here to continue this work
 
-_Last updated: 2026-06-21. Human-readable handoff so a fresh conversation starts oriented — no need to replay or resume an old session. (Claude also keeps auto-memory for this project that loads automatically; this is the readable companion.)_
+_Last updated: 2026-08-16. Human-readable handoff so a fresh conversation starts oriented — no need
+to replay an old session. (Auto-memory also loads for this project; this is the readable companion.)_
 
-## Current state: ✅ SHIPPED v3.0.27 to production
-Released through the full proven pipeline — `dev`→`main` (cleaned) + tag `v3.0.27` + GitHub-built exe + public Release.
-- Release: https://github.com/mvp-scale/mvp-echo-toolbar/releases/tag/v3.0.27
-- `main` and `dev` are both at **3.0.27**. Nothing pending.
+---
 
-## What 3.0.27 fixed — and why the capture code looks the way it does
-The GitHub-released build had degraded: **empty transcriptions** + a **~1–2s wait before you could speak**. Diagnosed (multi-agent + adversarial red-team) as a **source-bug cluster, NOT dependency drift** — the released build ran the same `parakeet.js 1.4.4` / `onnxruntime-web 1.24.1` / Electron 28.3.3 as local. Two distinct problems, both in `app/renderer/app/audio/AudioCapture.ts`:
+## Current state: ✅ SHIPPED v3.0.28
 
-1. **Empty transcriptions = the mic dead-window.** The "talk now" cue fired before the mic was actually delivering audio (old gate: keypress / frame-arrival + `track.muted`), so speech was lost. **Fix:** an **energy-based readiness gate** — the cue fires only once real audio energy is flowing (used on the *cold* path).
-2. **~1–2s latency = per-press `getUserMedia` device cold-open** (the mic was re-opened every recording). **Fix:** **warm-mic** — acquire the stream once, keep it warm across recordings (repeat records fire the cue *immediately*), auto-release after an idle timeout.
-3. **User control:** a **"Microphone Readiness"** setting — `Keep ready` (warm, instant) / `Release after each use` (mic icon off between uses) — plus a configurable **hold duration (30s–1h)**. Persisted in `app-config.json` via `app-config:get`/`app-config:set` IPC; applied live (on mount + re-read at stop, no restart).
+Released through the full pipeline — `dev`→`main` (cleaned) + tag `v3.0.28` + GitHub-built exe +
+public Release. `main` and `dev` are both at 3.0.28. **Nothing pending.**
 
-## Key files
-- `app/renderer/app/audio/AudioCapture.ts` — capture engine: warm-mic reuse, idle-release, energy readiness gate; `setMicReleaseMode()`, `setIdleReleaseMs()`.
-- `app/renderer/app/CaptureApp.tsx` — record start/stop; reads app-config on mount + re-reads at stop.
-- `app/renderer/app/components/SettingsPanel.tsx` — the "Microphone Readiness" + "Hold for" UI.
-- `app/main/main-simple.js` — `loadAppConfig()` (app-config.json), `app-config:get/set` IPC, `whenReady` startup.
+- Release: https://github.com/mvp-scale/mvp-echo-toolbar/releases/tag/v3.0.28
+- Published exe SHA-256: `a1fd2fac1064dc32f653155e9a9afde688d15821a9709010353899f2f2223b6e`
+- 34 tests + `npm run typecheck`, both gating `npm run dist`
 
-## Build / release
-See **CLAUDE.md → "Release Process"** (full 3-step runbook). The one trap: **run `gh auth switch -u mvp-scale` FIRST** — `gh` defaults to a read-only account and returns `403` on workflow dispatch (git push works regardless, via a separate SSH key — don't be fooled).
+### What 3.0.28 was
 
-## Test / diagnose new bugs
-- Launch the exe with **`--diag`** (or `MVP_DEBUG=1`). Logs: `%TEMP%\mvp-echo-toolbar-debug.log` (capture/console) and `%TEMP%\mvp-echo-diagnostics.log`; saved WAVs in `%TEMP%\mvp-echo-audio\`.
-- Readiness fingerprints in the log: `capture-ready via warm` (warm reuse = instant), `via energy` (cold, gated), `via timeout` (energy never crossed → device very quiet / floor too high).
-- Signal sanity (`Raw PCM:` line): healthy speech **rms ≈ 0.03–0.08**; empties cluster **< ~0.02**; a high `peak` with low `rms` = mostly-silence-with-spikes (likely empty — not real voice).
+An architectural review (`_review/`, 14 passes + 4 code reviews + 6 implementation recons) found
+75+ issues; 18 of 20 planned fixes landed. The ones that mattered:
 
-## Known / deferred (NOT fixed in 3.0.27)
-- **Long-audio empties (>~3 min).** Transcription is one-shot `model.transcribe()` with **no chunking**; very long recordings can come back empty/truncated. 3.0.27 fixed the SHORT-clip dead-window, *not* this. `parakeet.js` ships `transcribeLongAudio` (sequential, 20s chunk floor) we don't use — wire it in if long dictation matters.
-- **Cold first record is still energy-gated** (first word after launch / after the idle release); warm reuse is instant. Pre-warming at startup would fix it but keeps the mic icon lit from launch.
-- **CI reproducibility:** `package-lock.json` is gitignored → CI `npm install` is unpinned (drift broke 3.0.23 via `@noble/hashes`; pinned via `overrides`). Commit a lockfile + `npm ci` to fully fix. Deferred.
-- **"Always" hold option** (never auto-release) — offered, not added.
-- **Local speed/batching:** researched & decided against — parakeet.js decode is hard-wired batch=1 in WASM; no worthwhile local speedup without a library fork. Front-end CMVN is correct (no preprocessing fix needed).
+- **Long dictations came back empty.** Audio was transcribed in one pass, which collapses above
+  ~60–90s. Now split into 30s windows and merged, with seam de-duplication we had to write
+  ourselves because parakeet's own dedup only compares *adjacent* words, not repeated spans.
+- **Decoding ran single-threaded in every prior release.** Packaged builds never set COOP/COEP, so
+  `SharedArrayBuffer` was unavailable. Now `crossOriginIsolated=true`, 16 WASM threads.
+- **The hotkey was dead for ~2.3s after the tray appeared.** Registration sat behind GPU probing.
+- **A `devicechange` could truncate a live recording**, surfacing as "no speech."
+- **The "talk now" tone fired instantly on a warm mic** with no proof audio was flowing.
+- Download 290 MB → 202 MB (the packaging config was including the build's own output).
 
-## Full investigation reports (on the dev box, dev-only)
-- `mvp-echo-toolbar/STARTUP-REGRESSION-REPORT.md` — the eager-WebGPU-init startup diagnosis.
-- `mvp-echo-toolbar/RELEASE-INSTABILITY-GAP-ANALYSIS.md` — the empties/latency/tray gap analysis.
+Full detail: `_review/ARCHITECTURAL-REVIEW.md` (synthesis) and `_review/FIX-PLAN.md` (per-fix
+traceability, DoD, and the tracking table).
+
+### Still unverified
+
+The seam-dedup fix has **not** been tested against `rec-013-rms0.0599-ok.wav` — the one recording
+known to duplicate (sentences 9/10 and 15/16). A different 105s file came back clean, which is
+positive but not the same test. If duplication reappears, that file + `--replay` is the fast loop.
+
+### Performance is settled — do not reopen without a new symptom
+
+**100x realtime on the 3090 Ti, 12.6x on the XPS 15 7590 / GTX 1650.** A 2-minute dictation takes
+~1.2s and ~9.5s; typical recordings are 1–8s and never chunk. There is no user-facing latency
+problem. Parallel workers were **dropped**: memory-bound to desktop-only, complex, and would
+optimise the machine already at 100x.
+
+---
+
+## Next: migrate off Electron 28
+
+### Why
+
+**Primary reason is security.** Electron supports the latest three majors; latest is **43.4.0**, so
+28.3.3 is 15 majors behind and long EOL — receiving no Chromium security patches, in an app that
+fetches ~1.2 GB over the network and renders local HTML with `unsafe-eval` in its CSP.
+
+Two blocked items come along for free, both confirmed by measurement on the XPS — Edge **and**
+Chrome report `shader-f16: true` and 18 WebGPU features on the same GPU and driver, while Electron
+28 reports `false` and 7:
+
+| Unlock | Value |
+|---|---|
+| `shader-f16` | fp16 encoder: **2363 MB → 1182 MB**. On the 4096 MB 1650 that is 58% → 29% |
+| `timestamp-query` | Real GPU profiling — the thing the (now-dropped) parallel-worker decision was blocked on |
+
+Note fp16 is **memory headroom, not speed**. Do not sell it as a performance fix.
+
+### Version landscape
+
+| Electron | Chromium | Node | Note |
+|---|---|---|---|
+| **28.3.3** | 120 | 18.18.2 | current — EOL |
+| 31.7.7 | 126 | 20.18.0 | |
+| 35.7.5 | 134 | 22.16.0 | |
+| 39.8.10 | 142 | 22.22.1 | |
+| **43.4.0** | 150 | 24.18.1 | latest stable, supported window is 41–43 |
+
+**Recommended target: 43.** Stepping 28→29→…→43 is 15 upgrades of mostly wasted effort for an app
+with this small an API surface. Jump to latest, test, and bisect *only* if something breaks.
+
+### Why the risk is lower than 15 majors suggests
+
+The app uses a deliberately small, stable Electron surface — no `remote`, no custom protocols, and
+**no native modules to rebuild** (parakeet.js is pure JS + wasm):
+
+```
+app 43 · ipcRenderer 38 · ipcMain 33 · webContents 18 · session 11 · clipboard 10
+Tray 7 · screen 7 · BrowserWindow 7 · globalShortcut 3 · contextBridge 3
+nativeImage 2 · Menu 2 · shell 1 · dialog 1
+```
+
+---
+
+## Migration plan — recon each step before doing it
+
+Each step has a question to answer *first*. Do not batch them; the whole point is that a failure
+should be attributable.
+
+### Step 1 — Baseline capture (before touching anything)
+Record current behaviour so "did we break it" is answerable.
+- `--replay` on a fixed WAV on **both** machines → transcript + timing
+- `npm test`, `npm run typecheck`, `npm run dist` output sizes
+- The GPU report (`_review/gpu-report.js`) on both
+
+**Recon question:** do we have a reproducible before-picture on both the 3090 Ti and the XPS?
+
+### Step 2 — Toolchain compatibility
+Currently `electron-builder ^26.0.12` (latest 26.15.3), `vite ^5.0.12`, `typescript ^5.3.3`.
+
+**Recon question:** does electron-builder 26.x support packaging Electron 43? If not, that is the
+real blocker and it changes the target. Also check whether Node 24 in the main process affects
+anything (all our main-process code is CommonJS `require`, which is still supported).
+
+### Step 3 — Breaking-change audit, scoped to what we use
+Read the Electron breaking-changes doc for 29→43, but **filter to the 15 APIs listed above**.
+Ignore everything else.
+
+**Recon question:** which of our specific call sites changed signature or behaviour? Particular
+suspects, because our fixes ride on them:
+- `session.defaultSession.webRequest.onHeadersReceived` — **the COOP/COEP fix depends on this**
+- `session.setPermissionRequestHandler` — media + persistent-storage auto-approval
+- `Tray` / `nativeImage` on Windows — icon loading and the new `starting` state
+- `globalShortcut.register` — registered early now, before the window loads
+- `webContents.setWindowOpenHandler` / `will-navigate` — the navigation guards
+- `BrowserWindow` `webPreferences` defaults (`sandbox` is explicitly `false` in three places)
+
+### Step 4 — Bump and build
+Single change: Electron version in `mvp-echo-toolbar/package.json`. Then `npm run typecheck`,
+`npm test`, `npm run dist`.
+
+**Recon question:** does it build at all, and does the artifact size change unexpectedly?
+
+### Step 5 — Verify the integration points on Windows
+Static checks cannot cover these. Run the manual list in `_review/FIX-PLAN.md` §"Windows manual
+checks", plus:
+- `crossOriginIsolated=true` in the worker log — **if this regresses, the threading fix is gone**
+- Tray shows "Starting up..." then "Ready"
+- Hotkey works immediately; early press does not record through the wrong adapter
+- `--replay` produces the same transcript as the Step 1 baseline
+- Model loads from IndexedDB cache without re-downloading
+
+**Recon question:** does anything differ from the Step 1 baseline, and is the difference explained?
+
+### Step 6 — fp16, only after Step 5 is green
+Two parts, and they are separate:
+1. Confirm `adapter.features.has('shader-f16')` is now true inside Electron
+2. Pass `encoderQuant: 'fp16'` in `inference-worker.ts` — **feature-gated, never unconditional**,
+   with fallback to fp32
+
+Also bump `MODEL_CACHE_VERSION` in `model-cache.ts`, or the old 2.4 GB encoder lingers in IndexedDB
+alongside the new 1.2 GB one.
+
+**Recon question:** does fp16 change the transcript? Use `--replay` on the same file, both quants,
+and diff. Accuracy loss is normally negligible but has not been verified here.
+
+### Step 7 — Soak, then ship
+Same two-stage soak as 3.0.28: `--diag` on for a few days, then off for a few more.
+**Separate soaks for the Electron bump and for fp16** — different failure signatures, and bundling
+them makes a regression impossible to attribute.
+
+---
+
+## Traps that cost time in the last session
+
+- **Worker `console.log` is NOT forwarded to the main log** — only the renderer's is. `[ParakeetWorker]`
+  lines appear in DevTools only. A verification line put in the worker is invisible in the log file.
+- **`CaptureApp` overrides `console.log` to be silent unless `--diag`.** `console.warn`/`error`
+  always print. Use `console.warn` for anything that must be seen.
+- **WebGPU cannot measure available VRAM.** `maxBufferSize` is an API cap; an allocation probe
+  returned 12288 MB on a 4096 MB card because WDDM over-commits into system RAM. Do not build
+  capacity prediction on either. Attempt, catch failure, fall back.
+- **PowerShell needs the call operator:** `& ".\28.exe" --diag "--replay=C:\...\test.wav"`
+- **`UserGpuPreferences` registry values must include the `.exe` extension** or Windows never
+  matches them and the GPU preference silently does nothing.
+- **`npm run dist` emits a stray `preload.js` at the project root** — byte-identical to
+  `app/preload/preload.js`, unused, now gitignored. Don't edit it.
+- **Release requires `gh auth switch -u mvp-scale` first**, or workflow dispatch 403s. A working
+  `git push` does not mean `gh` can dispatch — different credentials.
+
+## Useful tooling built last session
+
+- `--replay=<file.wav>` — push a saved recording through the real pipeline. Deterministic
+  before/after. Forwards to an already-running instance.
+- `_review/gpu-report.js` — paste into DevTools for isolation, adapter, features, limits, cache state.
+- `_review/seam-test-script.md` — 48 numbered sentences to read aloud; any drop or duplicate at a
+  window boundary shows up as a missing or repeated number.
+- `npm test` (34 tests, `node:test`, zero new deps) and `npm run typecheck`.
