@@ -316,12 +316,26 @@ honoured.
 | fp16 | **1182 MB** | ~30%. Needs the WebGPU `shader-f16` feature |
 | int8 | 622 MB | rejected by the WebGPU EP |
 
-| # | Item | Why |
+**Measured on the GTX 1650 (`_review/gpu-report.js`), 2026-08-16 — two results changed this plan:**
+
+- **`shader-f16: false`.** Turing supports fp16 in hardware, but Chromium does not expose the
+  feature on this adapter. **V1 is not viable on this machine** unless a driver update enables it.
+- **The VRAM probe returned 12288 MB on a 4 GB card** (it hit the safety cap). WebGPU/WDDM
+  over-commits and spills to system RAM, so an allocation succeeding says nothing about residency.
+  **Available VRAM cannot be measured through WebGPU** — which invalidates the original V3 as much
+  as it invalidates the `maxBufferSize` heuristic it was meant to replace.
+
+Healthy on that machine: `crossOriginIsolated: true`, 16 WASM threads, `persisted: true`, and
+`storageUsed` 2371 MB — exactly the fp32 encoder + decoder + vocab, so no duplicate blobs.
+Note `maxBufferSize` is **2048 MB**: no single GPU buffer may exceed 2 GB. The 2323 MB encoder only
+loads because ONNX splits weights across many tensors.
+
+| # | Item | Status / why |
 |---|---|---|
-| V1 | Request `encoderQuant: 'fp16'` | One line, halves model residency |
-| V2 | Fallback chain `fp16 → fp32 → wasm/int8` | Some GPUs lack `shader-f16`; today it is fp32 or nothing |
-| V3 | Fix `estimatedVram` (`gpu-detector.ts:38-48`) | Derived from `adapter.limits.maxBufferSize`, an API cap — not a memory measurement. Settings gates the model download on it |
-| V4 | Bump `MODEL_CACHE_VERSION` when quant changes | Different quant = different files; the key tracks model identity only, so the old 2.4 GB would linger in IndexedDB forever |
+| V1 | Request `encoderQuant: 'fp16'` | **Blocked on the 1650** — no `shader-f16`. Re-check after an NVIDIA driver update. Still worth it where the feature exists (halves residency) — so it must be feature-gated, never unconditional |
+| V2 | Fallback chain `fp16 → fp32 → wasm/int8` | **Promoted to first.** Gate on `adapter.features.has('shader-f16')` rather than assuming, and fall back on session-creation failure |
+| V3 | ~~Fix `estimatedVram`~~ → **stop predicting capacity** | Neither `maxBufferSize` nor an allocation probe measures VRAM; the driver over-commits. Replace prediction with failure handling: attempt the load, catch failure, fall back and remember the outcome |
+| V4 | Bump `MODEL_CACHE_VERSION` when quant changes | Different quant = different files; the key tracks model identity only, so an old encoder would linger in IndexedDB forever |
 
 **Verification:** `--replay` on a fixed recording gives before/after transcript *and* timing per
 quant, on each machine. Check `shader-f16` support first:
