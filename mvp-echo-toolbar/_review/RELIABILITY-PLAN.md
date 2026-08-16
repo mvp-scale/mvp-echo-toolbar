@@ -14,28 +14,30 @@
 
 ## Phase order
 
-| # | Phase | Items | Why these ship together |
+Three phases. Items 1–4 are already committed on `electron-43` and are not repeated here.
+
+| # | Phase | Items | What it is, and why it's one unit |
 |---|---|---|---|
-| **0** | Toolchain + version — **done** | 1–4 | Already committed on `electron-43`. The build environment was pinned in its own commit *before* the Electron bump so a broken build is attributable to one or the other, not both. |
-| **1** | Make failure visible | 5–7 | Ships **alone**, on Electron 28, before anything else. Zero behaviour change — it is the instrument every later phase is measured with. Fixing anything before this means debugging blind, which is how this session started. |
-| **2** | Ship Electron 43 | 8–13 | The security release. Every item is either required for 43 to function (8–11, 13) or required for there to be a working fallback when it doesn't (12). Nothing optional rides along. |
-| **3** | Free-win probe | 14 | Timeboxed to ~30 minutes. If the `SharedArrayBuffer` switch works, phase 6 loses most of its urgency. Discard immediately if it doesn't. |
-| **4** | Reliability release | 15–27 | All pre-existing on Electron 28. Grouped because they are independent of the platform *and* of each other — any subset can ship. Deliberately kept out of phase 2 so an Electron 43 regression can never be confused with a behaviour change. |
-| **5** | Decouple the model cache | 28 | **Must precede phase 6.** While the cache lives in browser storage it is welded to the origin, so any origin change costs every user a 2.4 GB re-download. Fix it once and phase 6 becomes free. |
-| **6** | One source of truth + real origin | 29–30 | The structural rewrite, and restoring isolation. Last of the correctness work on purpose: a state-management rewrite executed during a 15-major platform migration produces failures nobody can attribute. |
-| **7** | Performance | 31 | Deferred deliberately. Warming the sidecar turns a one-shot process into a long-lived one with a whole new lifecycle to get wrong. It is a speed problem, not a correctness one. |
+| **1** | Ship Electron 43 | 5–14 | The security release. Make failures legible (5–7), fix what 43 actually broke (8–11, 13), give the app a working CPU fallback (12), and probe the free win (14). Everything here is required for 43 to function or to fail safely. Nothing optional rides along. |
+| **2** | Reliability release | 15–27 | The 13 defects that exist identically on Electron 28. Independent of the platform and of each other — any subset can ship in any order. |
+| **3** | Structural | 28–31 | Decouple the model cache → move to a real origin and restore isolation → one authoritative engine record. Internal order matters; the cache must move first or the origin change costs every user 2.4 GB. Sidecar warm-up (31) rides along last. |
 
-**Two rules produced this grouping.**
+**Why three and not one.** Two boundaries are load-bearing:
 
-*Never bundle two candidate causes.* The two things that could explain "the WebGPU engine never becomes
-ready" — the removed `adapter.info` API and the COEP worker block — are in the same phase but must be
-separately toggleable, or a green result tells you nothing about which one was the blocker. The same
-logic put the toolchain pin in its own commit back in phase 0.
+*Between 1 and 2* — bundling behaviour changes into a platform migration is exactly what made this
+week hard to diagnose. If the Electron 43 release also changes how model selection works, a bug report
+tells you nothing about which one caused it. Within phase 1 the same rule applies to the two candidate
+explanations for "the GPU engine never becomes ready": the removed `adapter.info` API and the COEP
+worker block must stay separately toggleable, or a green result proves nothing.
 
-*Build the instrument before taking the measurement.* Phase 1 changes no behaviour at all. It exists
-because the logger currently prints `{}` where the error should be, a failed worker produces no event
-for 15 minutes, and two of the three windows never forward their console anywhere. Every phase after
-it is only verifiable because of it.
+*Between 2 and 3* — phase 3 rewrites how state flows through main, preload and renderer. That needs
+its own soak. Doing it during a 15-major platform migration is how you get failures nobody can
+attribute.
+
+**Why not more than three.** An earlier draft had eight. Three of them contained a single item, which
+is a task, not a phase; the logging fixes cannot alter behaviour so they don't need their own release
+cycle; and the cache/origin/state work is one project with an internal ordering constraint rather than
+three separate ones.
 
 Item numbers refer to the consolidated list in §8.
 
@@ -552,29 +554,32 @@ Corrections made against measurement, kept visible rather than silently folded i
 
 Phase numbers refer to the table at the top.
 
-**Phase 0 — already committed on `electron-43`**
+**Already committed on `electron-43`** *(not a phase — history)*
 1. Electron 28 → 43.4.0 — 15 majors of missing Chromium security patches
 2. `electron-builder` pinned to 26.15.3 — CI was silently drifting every build
 3. CI Node 18 → 24 — Node 18 is EOL and builder deps already require newer
 4. Version → 3.1.0 — so the test exe isn't named identically to the release it's compared against
 
-**Phase 1 — make failure visible** *(ships alone, on 28, no behaviour change)*
+**Phase 1 — ship Electron 43**
+
+*Make failures legible first — these change no behaviour and are the instrument for everything else:*
 5. Errors log as `{}` — the logger JSON-stringifies Error objects, destroying the message
 6. Worker failures hang 15 minutes — nothing listens for the worker's `error` event
 7. Settings and popup errors go nowhere — only the hidden window forwards its console
 
-**Phase 2 — ship Electron 43**
+*Then what 43 actually broke, plus a safe floor:*
 8. GPU detection crashes on 43 — calls a WebGPU method Chrome removed in 131
 9. "Couldn't ask" is recorded as "no GPU" — an indeterminate probe is cached as a permanent negative
 10. Hand-written WebGPU types assert a removed method exists — why typecheck passed on broken code
 11. `gpu-detector.ts` is dead code — zero callers
 12. CPU engine reports itself unavailable on a fresh install — never adopts the bundled model
 13. Isolation off by default — unblocks the worker; costs multi-threaded decode
+14. Probe the `SharedArrayBuffer` switch (~30 min, timeboxed) — may restore 16-thread decode for free
 
-**Phase 3 — free-win probe**
-14. Try the `SharedArrayBuffer` switch — may restore 16-thread decode with no origin change
+> Keep 8 and 13 separately toggleable. They are the two candidate explanations for "the GPU engine
+> never becomes ready" and bundling them destroys attribution.
 
-**Phase 4 — reliability release** *(all pre-existing on 28, any subset can ship)*
+**Phase 2 — reliability release** *(all pre-existing on 28, any subset can ship)*
 15. Hotkey dies when the GPU model isn't ready — no fallback, no visible reason, no recovery
 16. Switching models mid-recording loses the recording
 17. No check that the model belongs to the active engine
@@ -589,18 +594,14 @@ Phase numbers refer to the table at the top.
 26. Countdown handler can wait forever for a window
 27. Hardcoded LAN endpoint in the settings field (was F3)
 
-**Phase 5 — decouple the cache** *(must precede phase 6)*
+**Phase 3 — structural** *(internal order matters — 28 must come before 30)*
 28. Move the model cache out of browser storage into content-hashed files
-
-**Phase 6 — one source of truth + real origin**
 29. One authoritative record of which engine is selected — replaces the seven that disagree
 30. Move to an `app://` origin and turn isolation back on
-
-**Phase 7 — performance**
 31. Keep the CPU model loaded between transcriptions (~1.5 s tax per call)
 
 ---
 
-**31 items — 27 fixes, 4 already committed.** Six ship with Electron 43; the rest are independent.
+**31 items — 27 fixes, 4 already committed.** Ten ship with Electron 43; the rest are independent.
 Everything from 15 down exists identically on Electron 28: it is not migration damage, it is what the
 app has always done when its primary engine fails.
