@@ -262,20 +262,6 @@ export default function CaptureApp() {
     // Release the worker when the user switches to a non-GPU engine. Without
     // this the fully-loaded model (~2.5GB of sessions, GPU buffers and the
     // un-revoked model blob) stayed resident and idle for the whole session.
-    // --probe-scheme only. Answers whether a Worker can fetch a privileged
-    // custom scheme, which is the precondition for serving models off disk.
-    const ipcProbe = (window as any).electron?.ipcRenderer;
-    const onProbe = async (_e: unknown, url: string) => {
-      try {
-        const r = await orchestratorRef.current.probeFetch(url);
-        console.warn(`PROBE RESULT: ok=${r.ok} status=${r.status} bytes=${r.bytes} ms=${r.ms} ` +
-          `-> ${r.bytes === 5242880 ? 'CUSTOM SCHEME WORKS FROM WORKER' : 'MISMATCH'}`);
-      } catch (err) {
-        console.warn('PROBE RESULT: FAILED —', err instanceof Error ? err.message : String(err));
-      }
-    };
-    ipcProbe?.on?.('probe:scheme', onProbe);
-
     const unsubDispose = api.onWebgpuDisposeOrchestrator?.(() => {
       console.log('CaptureApp: Received webgpu:dispose-orchestrator from main');
       // Never tear down a download in progress.

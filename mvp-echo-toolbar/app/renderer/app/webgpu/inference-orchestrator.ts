@@ -186,19 +186,6 @@ export class InferenceOrchestrator {
   }
 
   /**
-   * Ask the worker to fetch `url` and report what came back.
-   *
-   * Exists to answer one question before any code is written on top of it: can
-   * a Web Worker fetch a privileged custom scheme? parakeet hands onnxruntime a
-   * URL string and ORT fetches it from inside this worker, so if the answer is
-   * no, serving models off disk via a custom scheme cannot work at all.
-   */
-  async probeFetch(url: string): Promise<Record<string, unknown>> {
-    if (!this.worker) this.worker = this.createWorker();
-    return this.sendMessage({ type: 'probe-fetch', url }, 'probe-result', 30000);
-  }
-
-  /**
    * Transcribe raw PCM audio.
    * @param pcm - Float32Array of 16kHz mono audio samples
    * @param sampleRate - Sample rate (should be 16000)
