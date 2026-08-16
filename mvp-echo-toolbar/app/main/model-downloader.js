@@ -166,4 +166,74 @@ async function downloadFile(url, destPath, opts = {}) {
   return { path: destPath, bytes: written, fromCache: false };
 }
 
-module.exports = { planRanges, downloadFile, MIN_CHUNK_BYTES };
+/**
+ * Download a file that is published as several ordered parts.
+ *
+ * GitHub caps a release asset at 2 GB and the fp32 weights sidecar is 2,323 MB,
+ * so it has to be split. That turns out to be the better shape anyway: separate
+ * part URLs fetched concurrently give the same parallelism as Range requests
+ * without requiring the server to honour Range, which removes both the
+ * single-stream fallback and the class of bug where a server claims range
+ * support and does not deliver it.
+ *
+ * Part sizes are NOT assumed uniform — each part's offset is the sum of the
+ * lengths before it. Getting that wrong produces a file of exactly the right
+ * size and entirely the wrong contents, detectable only when the model fails to
+ * load after a multi-gigabyte download.
+ *
+ * @param {string[]} urls    parts, in order
+ * @param {string}   destPath
+ * @param {object}   opts    fetchImpl (required), onProgress, expectedBytes
+ */
+async function downloadParts(urls, destPath, opts = {}) {
+  const { fetchImpl, onProgress, expectedBytes } = opts;
+  if (typeof fetchImpl !== 'function') throw new Error('downloadParts requires fetchImpl');
+  if (!Array.isArray(urls) || urls.length === 0) throw new Error('downloadParts requires at least one url');
+
+  if (expectedBytes && fs.existsSync(destPath) && fs.statSync(destPath).size === expectedBytes) {
+    onProgress?.({ loaded: expectedBytes, total: expectedBytes });
+    return { path: destPath, bytes: expectedBytes, fromCache: true };
+  }
+
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  const partPath = `${destPath}.part`;
+  if (fs.existsSync(partPath)) fs.rmSync(partPath, { force: true });
+
+  let loaded = 0;
+  const handle = await fs.promises.open(partPath, 'w');
+  try {
+    // Fetch every part concurrently, then place them by cumulative offset. The
+    // bodies are held only long enough to write; parts are sized to be a
+    // fraction of the whole precisely so this stays bounded.
+    const buffers = await Promise.all(urls.map(async (url) => {
+      const res = await fetchImpl(url, {});
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      loaded += buf.length;
+      onProgress?.({ loaded, total: expectedBytes || 0 });
+      return buf;
+    }));
+
+    let offset = 0;
+    for (const buf of buffers) {
+      await handle.write(buf, 0, buf.length, offset);
+      offset += buf.length;
+    }
+  } catch (err) {
+    await handle.close();
+    fs.rmSync(partPath, { force: true });
+    throw err;
+  }
+  await handle.close();
+
+  const written = fs.statSync(partPath).size;
+  if (expectedBytes && written !== expectedBytes) {
+    fs.rmSync(partPath, { force: true });
+    throw new Error(`size mismatch for ${destPath}: expected ${expectedBytes} bytes, got ${written}`);
+  }
+
+  fs.renameSync(partPath, destPath);
+  return { path: destPath, bytes: written, fromCache: false };
+}
+
+module.exports = { planRanges, downloadFile, downloadParts, MIN_CHUNK_BYTES };
