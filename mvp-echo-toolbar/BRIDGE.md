@@ -1,85 +1,61 @@
 # Session Bridge — start here to continue this work
 
-_Last updated: 2026-08-16. Human-readable handoff so a fresh conversation starts oriented — no need
+_Last updated: 2026-08-17. Human-readable handoff so a fresh conversation starts oriented — no need
 to replay an old session. (Auto-memory also loads for this project; this is the readable companion.)_
 
 ---
 
-## Current state: ✅ SHIPPED v3.0.28
+## Current state: `electron-43` ready to release as 3.1.0
 
-Released through the full pipeline — `dev`→`main` (cleaned) + tag `v3.0.28` + GitHub-built exe +
-public Release. `main` and `dev` are both at 3.0.28. **Nothing pending.**
+**313 tests.** `npm run typecheck && npm test && npm run build` green.
+49 commits ahead of `dev`. Version already 3.1.0 in both package.json files; no v3.1.0 tag yet.
 
-- Release: https://github.com/mvp-scale/mvp-echo-toolbar/releases/tag/v3.0.28
-- Published exe SHA-256: `a1fd2fac1064dc32f653155e9a9afde688d15821a9709010353899f2f2223b6e`
-- 34 tests + `npm run typecheck`, both gating `npm run dist`
+Verified on Windows by the maintainer: GPU, CPU and hosted engines all transcribe; GPU→CPU→GPU
+switching; selection restored across restart; no tray blinking; no init storm.
 
-### What 3.0.28 was
+> **Honest caveat on first-run.** A genuine COLD download — empty model dir, percentage climbing,
+> hotkey pressed mid-download, Windows `.part` handling — was reported working by the maintainer
+> rather than captured in a log. Every log on file shows the warm path (`already on disk`). If a
+> first-run bug appears later, start there.
 
-An architectural review (`_review/`, 14 passes + 4 code reviews + 6 implementation recons) found
-75+ issues; 18 of 20 planned fixes landed. The ones that mattered:
+### What 3.1.0 is
 
-- **Long dictations came back empty.** Audio was transcribed in one pass, which collapses above
-  ~60–90s. Now split into 30s windows and merged, with seam de-duplication we had to write
-  ourselves because parakeet's own dedup only compares *adjacent* words, not repeated spans.
-- **Decoding ran single-threaded in every prior release.** Packaged builds never set COOP/COEP, so
-  `SharedArrayBuffer` was unavailable. Now `crossOriginIsolated=true`, 16 WASM threads.
-- **The hotkey was dead for ~2.3s after the tray appeared.** Registration sat behind GPU probing.
-- **A `devicechange` could truncate a live recording**, surfacing as "no speech."
-- **The "talk now" tone fired instantly on a warm mic** with no proof audio was flowing.
-- Download 290 MB → 202 MB (the packaging config was including the build's own output).
+**The model now lives on disk and is served over loopback.** `model://` cannot work — Chromium
+refuses a cross-origin fetch from a `file://` document to any scheme outside
+chrome/chrome-extension/chrome-untrusted/data/http/https, and the initiator-origin check runs
+before `supportFetchAPI` matters. `http://127.0.0.1` is on that list. `app/main/model-server.js`
+is the replacement: ephemeral port, per-session path token, `basename()` confinement, `Host`
+check, exact `Content-Length`. On by default; `--no-model-store` is the way back.
+Evidence: `_review/LOOPBACK-PROBE.md`.
 
-Full detail: `_review/ARCHITECTURAL-REVIEW.md` (synthesis) and `_review/FIX-PLAN.md` (per-fix
-traceability, DoD, and the tracking table).
+**The flag that gated it never worked.** `preload.js` read `process.argv.includes('--model-store')`,
+but preload runs in the RENDERER, whose command line is Chromium's. Measured: main sees the flag,
+preload sees `--type=renderer`. So it was always false, in dev and packaged alike — the store had
+no working way to be switched on. Fixed with `additionalArguments`;
+`test/renderer-flags.test.js` fails the build if a flag the preload reads is not forwarded.
 
-### Still unverified
+**A download is no longer indistinguishable from a crash.** `engine-state.js` owns a `downloading`
+status plus a percentage, written through one method and guarded on the payload's `modelId` —
+what the download is ABOUT — rather than on `state.engine === 'webgpu'`, which would have been the
+sixth instance of the `activeAdapter` routing bug. Progress is aggregated across files first,
+because parakeet reports per-file and a raw forward walks 0→100% once per file.
+Decision and rationale: `_review/DOWNLOAD-STATE-DECISION.md`.
 
-The seam-dedup fix has **not** been tested against `rec-013-rms0.0599-ok.wav` — the one recording
-known to duplicate (sentences 9/10 and 15/16). A different 105s file came back clean, which is
-positive but not the same test. If duplication reappears, that file + `--replay` is the fast loop.
+**Prefetch, deliberately visible.** The GPU model is fetched in the background once the user has
+chosen the GPU engine, reporting into the same record everything else reads. A silent 1.2GB pull
+is not delight, it is a surprise you happen not to notice.
 
-### Performance is settled — do not reopen without a new symptom
+### Open, deliberately
 
-**100x realtime on the 3090 Ti, 12.6x on the XPS 15 7590 / GTX 1650.** A 2-minute dictation takes
-~1.2s and ~9.5s; typical recordings are 1–8s and never chunk. There is no user-facing latency
-problem. Parallel workers were **dropped**: memory-bound to desktop-only, complex, and would
-optimise the machine already at 100x.
-
----
-
-## Current work: branch `electron-43` — Electron 43 + a reliability overhaul
-
-> **➡️ READ `PLAN.md` FIRST.** It is the authoritative next-steps document as of 2026-08-17 and
-> supersedes the "Do this next" list further down. This file is the state summary.
-
-### Where it stands (2026-08-17, HEAD `7974adc`, 11 commits ahead of `dev`, all pushed)
-
-**212 tests.** `npm run typecheck && npm test && npm run build` green.
-
-Working and verified on Windows:
-
-| | |
-|---|---|
-| fp16 encoder, chosen per machine from `shader-f16` | **1.5 GB VRAM, down from 4 GB** |
-| GPU transcription | 377–889 ms; 10.9 s of audio in 889 ms (12.3× realtime) |
-| Selection persistence | an explicit choice is never overridden, by a probe or a restart |
-| Hotkey during model load | **blocks and says why** — never silently uses another engine |
-| Endpoint status | reports only what a request established; "Connected" is gone |
-
-**Missing the target, and the reason PLAN.md exists:**
-
-- First run is **~90 s against a 30 s target**, and it is *silent* — a dead hotkey saying
-  "loading". This is the worst customer moment in the product.
-- It re-downloads whenever browser storage drops the model, which has been observed happening.
-- Only the GPU engine was exercised on the current build. CPU and hosted are untested here.
-- Chunks decode **sequentially**; parallel was dropped earlier and the maintainer wants it revisited.
-
-**Built, measured, and deliberately switched OFF** behind `--model-store`: an on-disk model store
-with a parallel range/multi-part downloader, plus published release assets. Measured end to end —
-**fp32 19.6 s, fp16 10.8 s, int8 6.8 s, second run 0.00 s with no network.** It is off because
-`model://` cannot work: Chromium refuses a cross-origin fetch from a `file://` document to any
-scheme outside `chrome`/`chrome-extension`/`chrome-untrusted`/`data`/`http`/`https`.
-**`http://127.0.0.1` is on that list** — a loopback server is the fix, and it is Phase 1 of the plan.
+- **#10 — onnxruntime-web is still fetched from cdn.jsdelivr.net on every cold start.** Blocked on
+  a dependency bug: parakeet's `initOrt()` destructures a `wasmPaths` option and never assigns it,
+  so passing it through does nothing. Setting `ort.env.wasm.wasmPaths` directly works (measured:
+  zero CDN requests) but onnxruntime-web is parakeet's dependency, not ours, and a vite
+  `resolve.alias` does not reach the worker build. Privacy concern, not functional.
+- **#12 — a failed model load reads as "loading" forever** (`engine-state.js` collapses every
+  failure into `loading`). The fix means classifying failures in a catch block, and a
+  misclassification marks a working GPU unusable on a network blip — which is the mistake that
+  once cost a user their 1.2GB encoder. Its own task, its own risk budget.
 
 ### The expensive lesson from this session
 
