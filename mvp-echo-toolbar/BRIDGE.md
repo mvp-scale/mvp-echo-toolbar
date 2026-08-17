@@ -49,8 +49,51 @@ optimise the machine already at 100x.
 
 ## Current work: branch `electron-43` — Electron 43 + a reliability overhaul
 
-_Session of 2026-08-16. Nothing merged to `dev` or `main`. Read
-`_review/RELIABILITY-PLAN.md` first — it is authoritative; this is the summary._
+> **➡️ READ `PLAN.md` FIRST.** It is the authoritative next-steps document as of 2026-08-17 and
+> supersedes the "Do this next" list further down. This file is the state summary.
+
+### Where it stands (2026-08-17, HEAD `7974adc`, 11 commits ahead of `dev`, all pushed)
+
+**212 tests.** `npm run typecheck && npm test && npm run build` green.
+
+Working and verified on Windows:
+
+| | |
+|---|---|
+| fp16 encoder, chosen per machine from `shader-f16` | **1.5 GB VRAM, down from 4 GB** |
+| GPU transcription | 377–889 ms; 10.9 s of audio in 889 ms (12.3× realtime) |
+| Selection persistence | an explicit choice is never overridden, by a probe or a restart |
+| Hotkey during model load | **blocks and says why** — never silently uses another engine |
+| Endpoint status | reports only what a request established; "Connected" is gone |
+
+**Missing the target, and the reason PLAN.md exists:**
+
+- First run is **~90 s against a 30 s target**, and it is *silent* — a dead hotkey saying
+  "loading". This is the worst customer moment in the product.
+- It re-downloads whenever browser storage drops the model, which has been observed happening.
+- Only the GPU engine was exercised on the current build. CPU and hosted are untested here.
+- Chunks decode **sequentially**; parallel was dropped earlier and the maintainer wants it revisited.
+
+**Built, measured, and deliberately switched OFF** behind `--model-store`: an on-disk model store
+with a parallel range/multi-part downloader, plus published release assets. Measured end to end —
+**fp32 19.6 s, fp16 10.8 s, int8 6.8 s, second run 0.00 s with no network.** It is off because
+`model://` cannot work: Chromium refuses a cross-origin fetch from a `file://` document to any
+scheme outside `chrome`/`chrome-extension`/`chrome-untrusted`/`data`/`http`/`https`.
+**`http://127.0.0.1` is on that list** — a loopback server is the fix, and it is Phase 1 of the plan.
+
+### The expensive lesson from this session
+
+Enabling that store by default replaced a *working* fp16 path with a broken one, and it was
+destructive rather than merely broken: the blocked fetch was read as "fp16 is unusable", which
+deleted a user's already-downloaded 1.2 GB encoder and started a 2.4 GB one — then retried 61
+times in 50 seconds, because a failed init reported not-ready, which changed the record, which
+broadcast, which triggered another init.
+
+Three rules came out of it, and they are restated at the top of `PLAN.md`: never default-enable a
+mechanism that has not loaded a model on a real Windows build; a transport error is never a verdict
+about capability; and bounds belong at the resource being exhausted, not at each caller.
+
+_Historical detail of the reliability work is in `_review/RELIABILITY-PLAN.md`._
 
 ### The headline
 
