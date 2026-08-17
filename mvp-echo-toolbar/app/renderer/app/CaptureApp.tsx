@@ -51,6 +51,8 @@ export default function CaptureApp() {
    * record. Derived from the record, so it is true by construction.
    */
   const trayBaselineRef = useRef<'ready' | 'downloading'>('ready');
+  /** Last state+detail actually sent to the tray, so identical paints are dropped. */
+  const trayPaintedRef = useRef<string>('');
   /** Routing frozen at record start; used verbatim at stop. */
   const capturePlanRef = useRef<CapturePlan | null>(null);
   const selectedLanguageRef = useRef('');
@@ -249,14 +251,15 @@ export default function CaptureApp() {
       const changed = baseline !== trayBaselineRef.current;
       trayBaselineRef.current = baseline;
       if (!isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) {
-        // Repaint on every tick while downloading so the tooltip percentage
-        // stays current; otherwise only when the baseline actually changes.
-        if (baseline === 'downloading' || changed) {
-          trayFlashRef.current.cancel();
-          (window as any).electronAPI?.updateTrayState(
-            baseline,
-            baseline === 'downloading' ? `${state.progress?.pct ?? 0}%` : undefined,
-          );
+        // Push ONLY when what a user can SEE is different. Sending on every
+        // broadcast is what made the tray blink: the record changes far more
+        // often than its visible rendering does.
+        const detail = baseline === 'downloading' ? `${state.progress?.pct ?? 0}%` : undefined;
+        const painted = `${baseline}|${detail ?? ''}`;
+        if (painted !== trayPaintedRef.current) {
+          trayPaintedRef.current = painted;
+          if (changed) trayFlashRef.current.cancel();
+          (window as any).electronAPI?.updateTrayState(baseline, detail);
         }
       }
       if (state.engine === 'webgpu' && !orchestratorRef.current.isReady()) {

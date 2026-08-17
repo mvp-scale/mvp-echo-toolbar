@@ -14,6 +14,8 @@ const trayManager = new TrayManager();
 const logPath = getLogPath();
 /** The loopback model server. Created at app-ready, bound lazily on first use. */
 let modelServer = null;
+/** True while a background prefetch is moving bytes. */
+let prefetchInFlight = false;
 
 // ── Diagnostics flag ──
 // OFF by default (clean, quiet console). Enable at launch with either:
@@ -642,6 +644,43 @@ app.whenReady().then(async () => {
     }
   });
 
+  // ── Prefetch the GPU model, visibly ──
+  //
+  // The CPU engine is bundled and works immediately, so the GPU model can be
+  // fetched in the background before anyone selects it. That is what turns the
+  // first-run wait into no wait at all.
+  //
+  // It is NOT silent. A silent 1.2GB pull is not delightful, it is just a
+  // surprise you happen not to notice — so this reports progress into the same
+  // record everything else reads, and the tray and popup show it while it runs.
+  //
+  // Deliberately narrow: only when the user has ALREADY chosen the GPU engine.
+  // Fetching a gigabyte for someone who has only ever used the CPU engine is
+  // their bandwidth spent on our guess. The moment they pick GPU, the download
+  // is already done or already running.
+  function prefetchSelectedModel() {
+    const state = engineManager.state;
+    if (!state || state.engine !== 'webgpu') return;
+    const variant = 'fp16';
+    if (isComplete(variant, MODELS_DIR)) return;   // nothing to do, stay quiet
+    log('ModelStore: prefetching the GPU model in the background');
+    // Fire and forget. ensureModel is single-flight, so a user selecting GPU
+    // mid-prefetch joins this download rather than starting a second one.
+    prefetchInFlight = true;
+    modelServer.start()
+      .then(() => ensureModel(variant, {
+        dir: MODELS_DIR,
+        urlFor: modelServer.urlFor,
+        fetchImpl: net.fetch,
+        onProgress: ({ pct, loaded, total }) => {
+          engineManager.reportDownloadProgress({ modelId: state.modelId, loaded, total, pct });
+        },
+      }))
+      .then(() => log('ModelStore: prefetch complete'))
+      .catch((err) => log('ModelStore: prefetch failed (not fatal):', err.message))
+      .finally(() => { prefetchInFlight = false; });
+  }
+
   // Load user config (keybind, etc.)
   const appConfig = loadAppConfig();
   const shortcutLabel = shortcutDisplayLabel(appConfig.shortcut);
@@ -822,6 +861,10 @@ app.whenReady().then(async () => {
   engineReady = true;
   trayManager.setState('ready');
   log('MVP-Echo Toolbar: Engine ready');
+
+  // Only once the record has been restored, so we know whether GPU is even the
+  // user's engine. Returns immediately when the files are already on disk.
+  prefetchSelectedModel();
 
   if (REPLAY_PATH) triggerReplay(REPLAY_PATH);
 });

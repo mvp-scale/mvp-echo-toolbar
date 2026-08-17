@@ -30,6 +30,8 @@ class TrayManager {
   constructor() {
     this.tray = null;
     this.state = 'ready';
+    /** Last tooltip actually written, so an identical one is not rewritten. */
+    this.tooltip = null;
     this.doneTimeout = null;
     this.onTogglePopup = null;
     this.onQuit = null;
@@ -108,12 +110,24 @@ class TrayManager {
       this.doneTimeout = null;
     }
 
-    this.state = state;
     const stateConfig = STATES[state];
-    this.tray.setImage(this.getIcon(state));
+    // Only touch the OS when something visibly changed. setImage() on every
+    // call made the tray icon blink continuously during a download: the
+    // renderer repaints on every state broadcast, and there are ~100 of those
+    // per download. Rewriting an icon with the same icon is not free on
+    // Windows — it is a visible redraw.
+    if (state !== this.state) {
+      this.tray.setImage(this.getIcon(state));
+    }
+    this.state = state;
+
     // `detail` is appended, never stored, so it cannot outlive the state that
     // carried it — a percentage still sitting on "Ready" would be a lie.
-    this.tray.setToolTip(detail ? `${stateConfig.tooltip} ${detail}` : stateConfig.tooltip);
+    const tooltip = detail ? `${stateConfig.tooltip} ${detail}` : stateConfig.tooltip;
+    if (tooltip !== this.tooltip) {
+      this.tray.setToolTip(tooltip);
+      this.tooltip = tooltip;
+    }
 
     // Auto-revert done -> ready after 3 seconds
     if (state === 'done') {
