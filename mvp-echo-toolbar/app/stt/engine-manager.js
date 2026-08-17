@@ -70,6 +70,12 @@ class EngineManager {
      */
     this._readyPromise = new Promise((resolve) => { this._resolveReady = resolve; });
 
+    /**
+     * Monotonic switch counter. A switch captures this before its first await
+     * and refuses to act on the result if a newer one has started since.
+     */
+    this._switchGen = 0;
+
     /** Lazy getters for windows; resolved at IPC-call time, not setupIPC time. */
     this._getHiddenWindow = () => null;
     this._getPopupWindow = () => null;
@@ -567,9 +573,24 @@ class EngineManager {
     this._saveEngineState(nextState);
     log(`EngineManager: selected ${modelId} (engine ${nextState.engine})`);
 
+    // Claim this switch BEFORE the await. Engine-side work is slow — a model
+    // load, or a server call with a 60s timeout — so a user who changes their
+    // mind has both switches in flight at once. The record is already correct
+    // (committed before the await, last write wins), but without this the
+    // superseded switch still runs its activation afterwards: abandoning GPU
+    // for CPU would still fire webgpu:init-orchestrator and load 1.2GB for a
+    // model the user walked away from.
+    const gen = ++this._switchGen;
+
+    const isCurrent = () => gen === this._switchGen;
+
     try {
-      await this._activateSelection(nextState);
-      return { success: true, modelId };
+      const done = await this._activateSelection(nextState, isCurrent);
+      if (!isCurrent()) {
+        log(`EngineManager: ${modelId} was superseded mid-switch; its activation was skipped`);
+        return { success: true, modelId, superseded: true };
+      }
+      return { success: true, modelId, ...(done === false ? { superseded: true } : {}) };
     } catch (error) {
       log(`EngineManager: ${modelId} is selected, but the engine reported: ${error.message}`);
       return { success: true, modelId, warning: error.message };
@@ -582,14 +603,20 @@ class EngineManager {
    * Throwing from here means "the selection is recorded but something about it
    * is not working" — never "the selection did not happen".
    */
-  async _activateSelection({ engine, modelId }) {
+  async _activateSelection({ engine, modelId }, isCurrent = () => true) {
     if (engine === 'webgpu') {
       await this.webgpuAdapter.switchModel(modelId);
+      // Re-check at the side effect, not merely at the end. Loading the model is
+      // the expensive, hard-to-undo part; by the time the adapter's switch
+      // resolves the user may already be on another engine, and telling the
+      // renderer to spin up a 1.2GB orchestrator then is the automatic
+      // behaviour this whole branch exists to remove.
+      if (!isCurrent()) return false;
       const hidden = this._getHiddenWindow();
       if (hidden && !hidden.isDestroyed()) {
         hidden.webContents.send('webgpu:init-orchestrator');
       }
-      return;
+      return true;
     }
 
     // Moving off the GPU releases its orchestrator regardless of what follows —

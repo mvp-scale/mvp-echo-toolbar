@@ -341,3 +341,64 @@ describe('endpoint config and connection tests belong to the REMOTE adapter', ()
       'testing the ACTIVE adapter reports the CPU engine is fine and tells the user nothing');
   });
 });
+
+/**
+ * Switching again before the first switch finishes.
+ *
+ * The user-reachable version: click English GPU, change your mind a second
+ * later, click English CPU. Both switches are in flight at once, because the
+ * engine-side work — a model load, a 60s server call — is awaited.
+ *
+ * The record already ends up correct, because the choice is committed before
+ * the await and the last write wins. What is NOT guarded is the work that
+ * happens AFTER the await: a superseded switch still runs its activation, so
+ * abandoning GPU for CPU can still send `webgpu:init-orchestrator` and load a
+ * 1.2GB model the user just walked away from.
+ */
+describe('a superseded switch must not do its engine-side work', () => {
+  function slowManager(store) {
+    const mgr = makeManager({ gpuHardware: true, store });
+    const events = [];
+    mgr._getHiddenWindow = () => ({
+      isDestroyed: () => false,
+      webContents: { send: (ch) => events.push(ch) },
+    });
+    mgr.webgpuAdapter.switchModel = async () => { await new Promise((r) => setTimeout(r, 30)); };
+    mgr.localSidecarAdapter.switchModel = async () => {};
+    return { mgr, events };
+  }
+
+  test('the newer selection wins the record', async () => {
+    const { mgr } = slowManager({ value: null });
+
+    const slow = mgr.switchModel(WEBGPU_MODEL);
+    await new Promise((r) => setTimeout(r, 5));
+    await mgr.switchModel('local-fast');
+    await slow;
+
+    assert.strictEqual(mgr.selectedModelId, 'local-fast',
+      'the last thing clicked is the selection');
+  });
+
+  test('the superseded switch does NOT initialize the orchestrator it lost', async () => {
+    const { mgr, events } = slowManager({ value: null });
+
+    const slow = mgr.switchModel(WEBGPU_MODEL);
+    await new Promise((r) => setTimeout(r, 5));
+    await mgr.switchModel('local-fast');
+    await slow;
+
+    assert.ok(!events.includes('webgpu:init-orchestrator'),
+      'loading 1.2GB for a model the user abandoned is exactly the automatic behaviour to avoid');
+  });
+
+  test('an uncontested switch still does its work', async () => {
+    // The guard must not break the normal path.
+    const { mgr, events } = slowManager({ value: null });
+
+    await mgr.switchModel(WEBGPU_MODEL);
+
+    assert.ok(events.includes('webgpu:init-orchestrator'));
+    assert.strictEqual(mgr.selectedModelId, WEBGPU_MODEL);
+  });
+});
