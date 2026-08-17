@@ -61,6 +61,18 @@ app.whenReady().then(async () => {
     bigSize = fs.statSync(BIG_SPARSE).size;
     fs.copyFileSync(BIG_SPARSE, path.join(dir, 'big.sparse'));
   }
+  // ORT's own wasm assets, served from the same loopback server. The question
+  // is whether env.wasm.wasmPaths accepts a {wasm, mjs} map pointing at
+  // http://127.0.0.1 — and whether that actually stops the jsdelivr fetch.
+  const ORT_DIR = path.join(__dirname, '../../node_modules/parakeet.js/node_modules/onnxruntime-web/dist');
+  let ortWasm = false;
+  if (fs.existsSync(path.join(ORT_DIR, 'ort-wasm-simd-threaded.jsep.mjs'))) {
+    for (const f of ['ort-wasm-simd-threaded.jsep.wasm', 'ort-wasm-simd-threaded.jsep.mjs']) {
+      fs.copyFileSync(path.join(ORT_DIR, f), path.join(dir, f));
+    }
+    ortWasm = true;
+  }
+
   let realOnnx = false;
   if (!process.env.MVP_PROBE_NO_ORT && fs.existsSync(REAL_ONNX)) {
     fs.copyFileSync(REAL_ONNX, path.join(dir, 'real-model.onnx'));
@@ -85,6 +97,16 @@ app.whenReady().then(async () => {
   console.log(`store:    ${JSON.stringify(res.urls, null, 2)}`);
   console.log(`network:  ${networkCalls === 0 ? 'NONE — served from disk' : `${networkCalls} calls (WRONG)`}`);
 
+  // The assertion that matters: nothing may reach jsdelivr. Watching the
+  // session's real network stack is the only way to know — a wasmPaths that is
+  // silently ignored looks identical to one that worked.
+  const cdnHits = [];
+  const { session } = require('electron');
+  session.defaultSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, cb) => {
+    if (/jsdelivr|unpkg|cdn\./i.test(details.url)) cdnHits.push(details.url);
+    cb({});
+  });
+
   const win = new BrowserWindow({
     show: false,
     webPreferences: { offscreen: true, nodeIntegration: true, contextIsolation: false, sandbox: false },
@@ -101,6 +123,10 @@ app.whenReady().then(async () => {
     bigSize,
     onnxUrl: realOnnx ? server.urlFor('real-model.onnx') : null,
     ortPath: path.join(__dirname, '../../dist/renderer/assets/ort.bundle.min-CyvNfplx.js'),
+    wasmPaths: ortWasm ? {
+      wasm: server.urlFor('ort-wasm-simd-threaded.jsep.wasm'),
+      mjs: server.urlFor('ort-wasm-simd-threaded.jsep.mjs'),
+    } : null,
   });
 
   const result = await Promise.race([done, new Promise((r) => setTimeout(() => r('TIMEOUT'), 180000))]);
@@ -114,6 +140,7 @@ app.whenReady().then(async () => {
   console.log(`\nsha expected: ${expectSha}`);
   console.log(`sha served:   ${enc?.sha}`);
   console.log(`BYTES IDENTICAL: ${enc?.sha === expectSha ? 'YES' : 'NO'}`);
+  console.log(`CDN REQUESTS: ${cdnHits.length === 0 ? 'NONE' : cdnHits.join(', ')}`);
 
   await server.close();
   fs.rmSync(dir, { recursive: true, force: true });

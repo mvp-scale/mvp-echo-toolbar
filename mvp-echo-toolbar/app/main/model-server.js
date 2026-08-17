@@ -64,6 +64,29 @@ function isLoopbackHost(hostHeader) {
   return LOOPBACK_HOSTS.has(host);
 }
 
+/**
+ * Content-Type by extension.
+ *
+ * Not cosmetic. A module `import()` — which is how onnxruntime-web loads its
+ * `.mjs` glue — refuses any response without a JavaScript MIME type, and
+ * `application/octet-stream` for everything produced exactly that failure:
+ *   "Failed to fetch dynamically imported module: .../ort-wasm-simd-threaded.jsep.mjs"
+ * `application/wasm` additionally lets Chromium compile the module while it
+ * streams rather than buffering it first.
+ */
+const CONTENT_TYPES = {
+  '.mjs': 'text/javascript',
+  '.js': 'text/javascript',
+  '.wasm': 'application/wasm',
+  '.json': 'application/json',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+function contentTypeFor(name) {
+  const dot = name.lastIndexOf('.');
+  return (dot === -1 ? null : CONTENT_TYPES[name.slice(dot).toLowerCase()]) || 'application/octet-stream';
+}
+
 /** `bytes=<start>-<end?>` only. Anything else is ignored and the whole file is sent. */
 function parseRange(header, size) {
   const m = /^bytes=(\d*)-(\d*)$/.exec(String(header || '').trim());
@@ -140,7 +163,7 @@ function createHandler({ dir, token }) {
     const length = size === 0 ? 0 : end - start + 1;
 
     const headers = {
-      'Content-Type': 'application/octet-stream',
+      'Content-Type': contentTypeFor(name),
       'Content-Length': length,
       'Accept-Ranges': 'bytes',
       // The files are immutable — a variant is identified by its exact byte
@@ -148,6 +171,15 @@ function createHandler({ dir, token }) {
       'Cache-Control': 'no-store',
     };
     if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+
+    // A module import is always a CORS-mode request, even from file:// — which
+    // a plain fetch() from file:// is not (measured: no Origin header at all,
+    // response type "basic"). So the ACAO omitted elsewhere is required here,
+    // and it is echoed ONLY for the opaque `null` origin a file:// document
+    // sends. A real website presents its own origin, which will not match, so
+    // this does not widen who can read the port.
+    const origin = req.headers.origin;
+    if (origin === 'null') headers['Access-Control-Allow-Origin'] = 'null';
 
     res.writeHead(range ? 206 : 200, headers);
     if (req.method === 'HEAD' || length === 0) return res.end();
@@ -213,4 +245,4 @@ function createModelServer({ dir, token = crypto.randomBytes(16).toString('hex')
   return { server, start, close, urlFor, get address() { return address; } };
 }
 
-module.exports = { createModelServer, createHandler, parseRange, isLoopbackHost };
+module.exports = { createModelServer, createHandler, parseRange, isLoopbackHost, contentTypeFor };

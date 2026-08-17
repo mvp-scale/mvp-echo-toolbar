@@ -29,6 +29,8 @@ ipcRenderer.on('go', async (_e, cfg) => {
       const ns = ort.default ?? ort;
       ns.env.wasm.numThreads = 1;
       ns.env.wasm.proxy = false;
+      // THE POINT OF THIS LEG: point ORT at loopback instead of jsdelivr.
+      if (cfg.wasmPaths) ns.env.wasm.wasmPaths = cfg.wasmPaths;
       const t0 = Date.now();
       const session = await ns.InferenceSession.create(cfg.onnxUrl, { executionProviders: ['wasm'] });
       out.push({

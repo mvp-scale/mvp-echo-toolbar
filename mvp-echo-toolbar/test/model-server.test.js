@@ -20,7 +20,7 @@ const path = require('path');
 const crypto = require('crypto');
 const net = require('net');
 
-const { createModelServer, parseRange, isLoopbackHost } = require('../app/main/model-server');
+const { createModelServer, parseRange, isLoopbackHost, contentTypeFor } = require('../app/main/model-server');
 
 const TOKEN = 'a'.repeat(32);
 let dir;
@@ -307,5 +307,51 @@ describe('isLoopbackHost', () => {
     for (const h of ['evil.example.com', 'evil.example.com:127.0.0.1', '192.168.1.169:20300', '', undefined]) {
       assert.strictEqual(isLoopbackHost(h), false, String(h));
     }
+  });
+});
+
+describe('serving onnxruntime-web, which is a module load not a fetch', () => {
+  // Measured: pointing ORT's wasmPaths at this server failed with
+  //   "Failed to fetch dynamically imported module: .../ort-wasm-simd-threaded.jsep.mjs"
+  // A module import() is not a fetch(). It is ALWAYS a CORS-mode request, even
+  // from file:// (where a plain fetch sends no Origin at all and comes back
+  // type:"basic"), and it refuses any response without a JavaScript MIME type.
+  test('a .mjs is served as JavaScript, or import() refuses it', async () => {
+    fs.writeFileSync(path.join(dir, 'ort-glue.mjs'), 'export default 1;\n');
+
+    const res = await get(`${base}/ort-glue.mjs`);
+
+    assert.match(res.headers.get('content-type'), /javascript/,
+      'application/octet-stream makes a module import fail, whatever the bytes are');
+  });
+
+  test('a .wasm is served as application/wasm', async () => {
+    // Lets Chromium compile while it streams instead of buffering 25MB first.
+    fs.writeFileSync(path.join(dir, 'ort.wasm'), Buffer.alloc(8));
+
+    const res = await get(`${base}/ort.wasm`);
+
+    assert.strictEqual(res.headers.get('content-type'), 'application/wasm');
+  });
+
+  test('a file:// module import gets the CORS header it needs', async () => {
+    // A file:// document presents Origin: null on a module load.
+    const res = await get(`${base}/vocab.txt`, { headers: { Origin: 'null' } });
+
+    assert.strictEqual(res.headers.get('access-control-allow-origin'), 'null');
+  });
+
+  test('a real website does NOT get one', async () => {
+    // Echoing only the opaque origin keeps this from widening who can read the
+    // port: a page on https://evil.example.com presents its own origin, which
+    // is not echoed, so the module load fails for it.
+    const res = await get(`${base}/vocab.txt`, { headers: { Origin: 'https://evil.example.com' } });
+
+    assert.strictEqual(res.headers.get('access-control-allow-origin'), null);
+  });
+
+  test('the model blobs are unaffected — still octet-stream', () => {
+    assert.strictEqual(contentTypeFor('encoder-model.fp16.onnx'), 'application/octet-stream');
+    assert.strictEqual(contentTypeFor('noextension'), 'application/octet-stream');
   });
 });
