@@ -1,5 +1,18 @@
 # Corrective plan — first-run experience
 
+> ## ✅ COMPLETE — shipped as v3.1.0 on 2026-08-17
+>
+> All three phases are done. This document is kept for its reasoning, its rules, and its
+> definition of done, not as outstanding work. **Current state and what is still open live in
+> `BRIDGE.md`.**
+>
+> Two items were deliberately NOT done and are tracked there: onnxruntime-web is still fetched
+> from a CDN on a cold start (blocked on parakeet ignoring its own `wasmPaths` option), and a
+> failed model load still reads as "loading" forever.
+>
+> One honest caveat on the verification: a genuine COLD first run was reported working by the
+> maintainer rather than captured in a log. Every log on file shows the warm path.
+
 _Written 2026-08-17 after a long session on `electron-43`; restructured the same day once Phase 1.1
 landed and the Phase 2 recon came back. Authoritative for what comes next. `BRIDGE.md` is the state
 summary; this is the work. Live task list: `#1`–`#11` (see the phase sections)._

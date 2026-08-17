@@ -5,338 +5,180 @@ to replay an old session. (Auto-memory also loads for this project; this is the 
 
 ---
 
-## Current state: `electron-43` ready to release as 3.1.0
+## Current state: ✅ SHIPPED v3.1.0 (2026-08-17)
 
-**313 tests.** `npm run typecheck && npm test && npm run build` green.
-49 commits ahead of `dev`. Version already 3.1.0 in both package.json files; no v3.1.0 tag yet.
+Released through the full pipeline — `dev` fast-forwarded from `electron-43`, `clean-release.yml`
+→ `main` + tag `v3.1.0`, CI-built exe from `main`, public Release. **Nothing pending.**
 
-Verified on Windows by the maintainer: GPU, CPU and hosted engines all transcribe; GPU→CPU→GPU
-switching; selection restored across restart; no tray blinking; no init storm.
+- Release: https://github.com/mvp-scale/mvp-echo-toolbar/releases/tag/v3.1.0
+- `main` at `0d163f5`; released exe SHA-256
+  `3c7d5b0fbead157f0f9c72a43b827fef6b897c45876117201cdb9b01fb933178`
+- **313 tests.** `npm run typecheck && npm test && npm run build` is the gate, green at every commit.
 
-> **Honest caveat on first-run.** A genuine COLD download — empty model dir, percentage climbing,
+> **The one honest caveat.** A genuine COLD first run — empty model dir, percentage climbing,
 > hotkey pressed mid-download, Windows `.part` handling — was reported working by the maintainer
-> rather than captured in a log. Every log on file shows the warm path (`already on disk`). If a
-> first-run bug appears later, start there.
+> rather than captured in a log. Every log on file shows the warm path (`already on disk`).
+> **If a first-run bug ever appears, start there**, and reproduce with:
+> `Move-Item "$env:LOCALAPPDATA\mvp-echo-toolbar\models" "...\models-backup"` then launch.
 
-### What 3.1.0 is
+### What 3.1.0 was
 
 **The model now lives on disk and is served over loopback.** `model://` cannot work — Chromium
 refuses a cross-origin fetch from a `file://` document to any scheme outside
 chrome/chrome-extension/chrome-untrusted/data/http/https, and the initiator-origin check runs
-before `supportFetchAPI` matters. `http://127.0.0.1` is on that list. `app/main/model-server.js`
-is the replacement: ephemeral port, per-session path token, `basename()` confinement, `Host`
-check, exact `Content-Length`. On by default; `--no-model-store` is the way back.
+before `supportFetchAPI` matters. `http://127.0.0.1` IS on that list. `app/main/model-server.js`
+is the replacement: ephemeral port, per-session path token, `basename()` confinement, `Host` check,
+exact `Content-Length`, correct MIME types. On by default; `--no-model-store` is the way back.
 Evidence: `_review/LOOPBACK-PROBE.md`.
 
-**The flag that gated it never worked.** `preload.js` read `process.argv.includes('--model-store')`,
-but preload runs in the RENDERER, whose command line is Chromium's. Measured: main sees the flag,
-preload sees `--type=renderer`. So it was always false, in dev and packaged alike — the store had
-no working way to be switched on. Fixed with `additionalArguments`;
-`test/renderer-flags.test.js` fails the build if a flag the preload reads is not forwarded.
+**The flag that gated it never worked, in any build ever.** `preload.js` read
+`process.argv.includes('--model-store')`, but preload runs in the RENDERER, whose command line is
+Chromium's. Measured: main sees the flag, preload sees `--type=renderer`. Always false, dev and
+packaged alike. Fixed with `additionalArguments`; `test/renderer-flags.test.js` fails the build if
+a flag the preload reads is not forwarded. **`--diag` only ever worked because it goes over IPC.**
 
 **A download is no longer indistinguishable from a crash.** `engine-state.js` owns a `downloading`
-status plus a percentage, written through one method and guarded on the payload's `modelId` —
-what the download is ABOUT — rather than on `state.engine === 'webgpu'`, which would have been the
-sixth instance of the `activeAdapter` routing bug. Progress is aggregated across files first,
-because parakeet reports per-file and a raw forward walks 0→100% once per file.
-Decision and rationale: `_review/DOWNLOAD-STATE-DECISION.md`.
+status plus a percentage, written through one method (`EngineManager.reportDownloadProgress`) and
+guarded on the payload's `modelId` — what the download is ABOUT — not on `state.engine`, which
+would have been the sixth instance of the `activeAdapter` routing bug. Progress is aggregated
+across files first, because parakeet reports per-file and a raw forward walks 0→100% once per
+file. Design rationale, and the three bugs the review caught that all three designs shared:
+`_review/DOWNLOAD-STATE-DECISION.md`.
 
-**Prefetch, deliberately visible.** The GPU model is fetched in the background once the user has
-chosen the GPU engine, reporting into the same record everything else reads. A silent 1.2GB pull
-is not delight, it is a surprise you happen not to notice.
+**Prefetch, deliberately visible.** Fetched in the background once the user has chosen the GPU
+engine, reporting into the same record everything else reads. The maintainer's call: *"Silent pull
+does not create customer delight because it's silent."*
 
-### Open, deliberately
+### Open, deliberately — start here next session
 
-- **#10 — onnxruntime-web is still fetched from cdn.jsdelivr.net on every cold start.** Blocked on
-  a dependency bug: parakeet's `initOrt()` destructures a `wasmPaths` option and never assigns it,
-  so passing it through does nothing. Setting `ort.env.wasm.wasmPaths` directly works (measured:
-  zero CDN requests) but onnxruntime-web is parakeet's dependency, not ours, and a vite
-  `resolve.alias` does not reach the worker build. Privacy concern, not functional.
-- **#12 — a failed model load reads as "loading" forever** (`engine-state.js` collapses every
-  failure into `loading`). The fix means classifying failures in a catch block, and a
-  misclassification marks a working GPU unusable on a network blip — which is the mistake that
-  once cost a user their 1.2GB encoder. Its own task, its own risk budget.
+- **#10 — onnxruntime-web is still fetched from `cdn.jsdelivr.net` on every cold start.**
+  BLOCKED ON AN UPSTREAM BUG, and the published research about this was WRONG: parakeet's
+  `initOrt()` (`node_modules/parakeet.js/src/backend.js`) destructures a `wasmPaths` option,
+  documents it, and **never assigns it** — the only write is the CDN default, guarded by
+  `if (!ort.env.wasm.wasmPaths)`. Setting `ort.env.wasm.wasmPaths` DIRECTLY works (measured:
+  `InferenceSession.create` in 3.65 s, **zero** jsdelivr requests). Setting it ourselves before
+  `fromUrls` would win, but onnxruntime-web is parakeet's dependency, not ours, and a vite
+  `resolve.alias` does not reach the worker build (`vite:worker-import-meta-url` runs its own
+  Rollup pass; directory and explicit-entry aliases both failed). Real options: pin
+  onnxruntime-web as a direct dependency at parakeet's exact 1.24.1; patch/vendor `initOrt`; or
+  move the worker off the vite worker pipeline. Privacy concern, not functional.
 
-### The expensive lesson from this session
+- **#12 — a failed model load reads as "loading" forever.** `engine-state.js` collapses every
+  failure into `loading`, so a GPU model that failed to load looks like one still arriving and the
+  user waits for something that is never coming. The fix means classifying failures in a catch
+  block — and a misclassification marks a WORKING GPU unusable on a network blip, which is exactly
+  what once deleted a user's 1.2 GB encoder. Its own task, its own risk budget.
 
-Enabling that store by default replaced a *working* fp16 path with a broken one, and it was
-destructive rather than merely broken: the blocked fetch was read as "fp16 is unusable", which
-deleted a user's already-downloaded 1.2 GB encoder and started a 2.4 GB one — then retried 61
-times in 50 seconds, because a failed init reported not-ready, which changed the record, which
-broadcast, which triggered another init.
+- **Minor:** `_review/` (37 files) and `PLAN.md` ship to `main`. Pre-existing — v3.0.28 had 28 of
+  them — but if they should stay internal like `BRIDGE.md` does, it is two lines in `.dev-only`.
 
-Three rules came out of it, and they are restated at the top of `PLAN.md`: never default-enable a
-mechanism that has not loaded a model on a real Windows build; a transport error is never a verdict
-about capability; and bounds belong at the resource being exhausted, not at each caller.
+### Tooling worth reusing (found the hard way this session)
 
-_Historical detail of the reliability work is in `_review/RELIABILITY-PLAN.md`._
+- **Windows exes build LOCALLY on the Linux box, in ~4 minutes.** wine 9.0 is installed,
+  `sherpa-onnx-bin` (180 MB) is present and `sherpa_onnx_models` is a symlink to the outer project.
+  A previous session believed this did not work; it does. Iterate locally, and use CI only for the
+  release build (provenance).
+- **Electron runs headless here** with `--ozone-platform=headless` plus
+  `webPreferences.offscreen: true` (there is no X server). That is how `_review/loopback-probe/`
+  answers questions no unit test can — whether Chromium permits a fetch, whether ORT loads.
+  Neither switch changes the network stack or origin rules.
+- **ALWAYS check which binary produced a log.** Two rounds were spent this session diagnosing a
+  stale exe. Artifacts and CI builds carry the commit sha; compare it before theorising.
+- **`grep` in this repo is an indexed override and misses literal text.** Use `python3` or an
+  explicit raw search when hunting for a string rather than a symbol.
 
-### The headline
+## How 3.1.0 came about (kept — the reasoning still applies)
 
-`git diff --stat dev electron-43` at the start was **three files, zero application code**. Every
-defect found since exists identically on Electron 28. Electron 43 removed two crutches —
-`adapter.requestAdapterInfo()` and a permissive COEP posture for the module worker — that had been
-keeping the WebGPU path on the happy road. **The app was not regressing because of 43; 43 was the
-first time anyone saw what it does when its primary engine fails.**
-
-### State — VERIFIED, ready to merge
-
-- **Tests 34 → 135.** The gate is three commands: `npm run typecheck && npm test && npm run build`.
-  Build is not optional — a CommonJS/ESM mismatch once passed both of the other two and still broke
-  the bundle.
-- 27 of 31 planned items done, 2 dropped with reasons, 1 deferred, plus 5 defects found by testing
-  that were never on the list.
-- **Fully verified on the XPS** (2026-08-16). Every item in §9 of the plan passed:
-
-| Evidence from the debug log | Confirms |
-|---|---|
-| `restored model selection: local-fast` | CPU choice survives a restart — the reported bug, closed |
-| `wrote engine-state … (exists=true)` | The record persists; migration runs once |
-| `mode=raw-pcm, engine=webgpu` → transcript | GPU path, 11–12× realtime |
-| `mode=webm, engine=local` → ffmpeg → transcript | CPU path and WAV conversion |
-| `[console:popup:error] Model switch failed: …` | Failures are visible; that line went nowhere before |
-| `adapterName: "nvidia turing"` | GPU probe and label |
+`git diff --stat dev electron-43` at the start of that branch was **three files, zero application
+code**. Every defect found since existed identically on Electron 28. Electron 43 removed two
+crutches — `adapter.requestAdapterInfo()` and a permissive COEP posture for the module worker —
+that had been keeping the WebGPU path on the happy road. **The app was not regressing because of
+43; 43 was the first time anyone saw what it does when its primary engine fails.**
 
 **Every defect the Windows rounds found was in the WIRING between modules, never in the modules
-themselves.** The pure logic had tests and was right; the seams had none. Worth remembering before
-trusting anything marked "done" that has only been typechecked.
+themselves.** The pure logic had tests and was right; the seams had none. That held again in this
+session: the flag that never reached the renderer, the init storm, the blinking tray — all seams,
+none caught by 313 passing tests. Worth remembering before trusting anything marked "done" that
+has only been typechecked.
 
-### What was found and fixed
+### The expensive lessons, in order of what they cost
 
-- `adapter.requestAdapterInfo()` was removed in Chrome 131. The probe let that decide availability,
-  so Electron 43 reported "no usable GPU on this system" about a working 3090. `webgpu.d.ts`
-  hand-declared the removed method, which is why `tsc` stayed green — deleted, along with the dead
-  `gpu-detector.ts`.
-- COEP blocks the Vite module worker under `file://` on Chromium 150. Cross-origin isolation is now
-  **off by default** (`--coi` re-enables). Measured: single-threaded decode is **17.3x realtime** on
-  the XPS, faster than the 12.6x recorded *with* threading — so the `app://` origin migration was
-  dropped entirely, and with it a 2,371 MB re-download for every existing user.
-- The CPU engine could never bootstrap its own bundled model, so a fresh install had no fallback at
-  all. Reachable on Electron 28, before the user touches anything.
-- "Which model is selected" lived in seven places that disagreed — captured live with three config
-  files holding three different ids at once. Now one `engine-state.json`.
-- Routing was decided twice, at record start and again at stop, so a mid-recording switch dispatched
-  audio to the wrong engine and lost it. Now frozen per recording.
-- A loading GPU model no longer kills the hotkey; it falls back to CPU for that recording.
-- The logger turned every Error into `{}`. A failed worker hung for 15 minutes with no event. Two of
-  three windows forwarded no console output at all.
-- **RC-1 appeared four separate times** — routing on "what is active" instead of "what this operation
-  is about". `processAudio` dispatch, the WebM→WAV conversion gate, the restore precedence, and
-  finally `cloud:configure`/`cloud:test-connection`, which sent the endpoint to the CPU sidecar
-  (whose `configure()` drops `endpointUrl`) while the log claimed otherwise. Expect more of this
-  shape wherever `this.activeAdapter` is still consulted.
+1. **Never default-enable an unproven mechanism.** Shipping the model store on by default replaced
+   a WORKING fp16 path with a broken one — and destructively: a blocked fetch was read as "fp16 is
+   unusable", which deleted a user's already-downloaded 1.2 GB encoder and started a 2.4 GB one.
+2. **A transport error is never a verdict about capability.** That is the specific misreading
+   above, and it is why `#12` is deliberately deferred rather than patched quickly.
+3. **Bounds live at the resource being exhausted, not at each caller.** A failed init reported
+   not-ready -> record changed -> broadcast -> re-init: 61 attempts in 50 seconds, because the
+   caller's 3-strike guard covered one of three call sites. The same shape returned in this
+   session as hundreds of inits in milliseconds, for the same reason — a guard checked before
+   three awaits is not a mutex.
+4. **Enumerate what a user can do DURING any operation with duration.** Press again, switch, quit.
+   Several bugs were re-entry, and they were invisible on Linux: POSIX renames open files happily
+   and produces silent corruption instead of an error.
+5. **Windows is in the loop, not a formality.** See the caveat at the top of this file.
 
-### Do this next
+### Earlier findings still worth knowing
 
-0. ✅ **DONE — the hosted endpoint has an honest state model.** Two commits; see below for what
-   is still unverified. The rule that came out of it, in the maintainer's words: *"if the user
-   clicks the GPU, the CPU, or the remote GPU model, that should be it. You shouldn't be
-   automatically switching. It's the automatic switching that causes the unknown behavior."*
+- `adapter.requestAdapterInfo()` was removed in Chrome 131, and `webgpu.d.ts` hand-declared it,
+  which is why `tsc` stayed green while the probe reported "no usable GPU" about a working 3090.
+- COEP blocks the Vite module worker under `file://` on Chromium 150, so cross-origin isolation is
+  **off by default** (`--coi` re-enables). Measured: single-threaded decode is **17.3x realtime**
+  on the XPS, faster than the 12.6x recorded *with* threading — so the `app://` origin migration
+  was dropped, and with it a 2,371 MB re-download for every existing user.
+- "Which model is selected" once lived in seven places that disagreed. Now one `engine-state.json`.
+- Routing was decided twice, at record start and again at stop, so a mid-recording switch
+  dispatched audio to the wrong engine and lost it. Now frozen per recording (`capture-plan.ts`).
+- **RC-1 — routing on "what is currently active" rather than "what this operation is about" —
+  appeared five separate times.** The download-progress guard would have been the sixth; it keys on
+  `modelId` instead. Expect more of this shape wherever `this.activeAdapter` is still consulted.
+- `--sab` works on Chromium 150 but should stay off: it relaxes a Spectre mitigation to buy
+  throughput that was measured as unnecessary.
 
-   - **A selection is committed and persisted the instant it is made**, before any adapter or
-     network call. Engine-side failure returns a `warning` against a selection that stands.
-   - **`applyGpu`/`restore` no longer rewrite `engine`/`modelId`.** A probe may set `status` and
-     `reason` only. Six existing tests asserted the old demotion was correct and now assert the
-     opposite.
-   - **`cloud:get-config` reads the remote adapter, not `activeAdapter`.** The fifth instance of
-     RC-1, and a destructive one: opening Settings on the CPU engine *erased* the saved endpoint.
-   - **`isConfigured` is gone** from the endpoint payload; `endpointStatusLabel()` reports only
-     what was observed — "Not tested" / "Reachable · N models" / "Key rejected" / the transport
-     error. Never "Connected", never "Authenticated".
-   - Endpoint saves 700 ms after typing stops, and editing the URL or key clears the probe result.
+### Performance is settled — do not reopen without a new symptom
 
-   **The server is the constraint now, and it is a DEPLOYMENT problem, not a code one.**
-   `mvp-stt-docker` at v3.0.0 has everything the toolbar wants. The box at
-   `192.168.1.169:20300` is running **v1.0.0** — four independent signals agree: `openapi.json`
-   says 1.0.0 vs `bridge.py:142`'s `version="3.0.0"`; `POST /v1/models/switch` (bridge.py:175-205)
-   404s; `/health` returns `{"status":"ok"}` with no `engine` block; `/v1/models` omits `active`,
-   `label` and `group`. **Redeploy and model switching starts working with no client change.**
-
-   ⚠️ **That deployment has no working authentication.** `POST /v1/audio/transcriptions` returns
-   200 with no key and with a wrong key. The proxy IS in the request path (`BaseHTTP/0.6` fronting
-   `uvicorn`), and the repo's `auth-proxy.py` requires a Bearer key on everything except `/health`
-   — so the deployed proxy is stale too. Anyone who can reach that host can use the GPU. **Verify
-   after redeploying rather than assuming.** This is also why the toolbar cannot claim the key was
-   accepted: a 200 proves nothing when nothing checks. A 401 IS provable, so that path is built
-   and will start working by itself once the real proxy is running.
-
-   Also settled by reading the server: **Test Connection must never call `/v1/models/switch`.**
-   Only one model is resident at a time and switching unloads it / restarts the inference
-   subprocess (`managed_ws_adapter.py:410-411`). A "test" that evicted the loaded model would be
-   destructive.
-
-   <details><summary>Original problem statement (kept for context)</summary>
-
-   Maintainer's own words:
-   *"Test connection seems to give a false impression that it's connected. There's both connected
-   and authenticated, and connected gives the wrong definition."* He is right, and it is worse than
-   naming: `remote-adapter.js` defines `isConfigured` as `!!endpointUrl`, so **a URL merely being
-   present renders a green "Connected" dot**. Nothing verifies the host answered, that the key was
-   accepted, or that the model is switchable.
-
-   At least four distinct facts are being collapsed into one word:
-
-   | Fact | How you learn it | Currently shown as |
-   |---|---|---|
-   | A URL has been entered | string is non-empty | "Connected" ❌ |
-   | The host is reachable | `/health` responds | — |
-   | The key is accepted | `/v1/models` returns 200 not 401 | — |
-   | A model can be switched | `/v1/models/switch` succeeds | — |
-
-   The plan already specifies the mechanism (§5 rule 4 and item 27): drop `isConfigured` entirely,
-   add a persisted `verifiedAt` set **only** by a successful test, and derive the label from
-   `status` + `endpoint.verifiedAt`. That was never implemented. Do it with the same discipline as
-   the rest: the derivation is a pure function, testable without a DOM, like
-   `engine-status-label.ts`.
-
-   Related and unfixed: **`SettingsPanel` saves config on every keystroke.** Typing an endpoint
-   produced `Configuring adapter: 1`, then `92.168.1.169:203001`, then the full URL. Wants a
-   debounce, and `verifiedAt` must be cleared whenever the URL or key changes — otherwise a stale
-   "verified" survives an edit and the dot lies again.
-
-   Also verify **persistence and ordering** of the endpoint fields specifically: they are the one
-   surface where the maintainer has doubts, and the one path never confirmed end to end.
-
-   </details>
-
-1. **Merge to `dev` and soak.** Verification is done; nothing is blocking. The plan's own advice is
-   separate soaks for a platform bump and for behaviour changes, and this branch is both — so watch
-   for engine-selection oddities specifically.
-2. **Triage the CDN dependency.** onnxruntime-web is fetched from
-   `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.1/...` at runtime, visible in every log. An
-   offline, privacy-first app should not pull third-party executable code on every cold start. This
-   is a supply-chain decision, not a bug fix, and deserves its own session.
-3. **Two things still never exercised.** The model DOWNLOAD path — every run so far has loaded from
-   cache, so the ~1.2 GB first-run download is untested and its progress is invisible to the user.
-   And the tray revert generation guard, which is unit-tested but has never run live.
-4. `--sab` works on Chromium 150 (`SAB function | COI false | cores 16`) but should stay off — it
-   relaxes a Spectre mitigation to buy throughput measured as unnecessary.
+**100x realtime on the 3090 Ti, 12.6x on the XPS 15 7590 / GTX 1650.** A 2-minute dictation takes
+~1.2 s and ~9.5 s; typical recordings are 1-8 s and never chunk. There is no user-facing latency
+problem. Parallel chunk workers were **dropped**: memory-bound to desktop-only, complex, and would
+optimise the machine already at 100x. What makes this app *feel* fast is prefetch and legibility,
+not more speed.
 
 ### Two process fixes worth keeping
 
 - **Artifacts carry the commit sha.** Every build used to produce an identically named exe, so a
-  stale download was indistinguishable from a fresh one. That cost three verification rounds in one
-  day, each spent debugging code that was not running. When evidence contradicts the code twice,
-  suspect the binary before forming a third theory.
-- **`--diag` now surfaces browser-level failures.** `forwardConsole()` sends warnings and errors from
+  stale download was indistinguishable from a fresh one. That cost three verification rounds in
+  one day, and two more in this session. When evidence contradicts the code twice, suspect the
+  binary before forming a third theory.
+- **`--diag` surfaces browser-level failures.** `forwardConsole()` sends warnings and errors from
   all three windows to the log file, including messages Chromium generates itself, which no
-  in-renderer shim can see. That is how the COEP block was finally identified.
+  in-renderer shim can see. That is how the COEP block was identified.
 
----
+## Historical: the Electron 28 -> 43 migration (DONE, shipped in 3.1.0)
 
-## Historical: the original Electron 28 migration plan
+The step-by-step migration plan that used to live here has been removed: it was executed and
+shipped. A fresh session should not read it as outstanding work. The summary of why it was done
+and what it bought:
 
-### Why
+**Primary reason was security.** Electron supports the latest three majors, so 28.3.3 was 15
+majors behind and long EOL — no Chromium security patches, in an app that fetches ~1.2 GB over the
+network and renders local HTML with `unsafe-eval` in its CSP. Now on **43.4.0** (Chromium 150,
+Node 24).
 
-**Primary reason is security.** Electron supports the latest three majors; latest is **43.4.0**, so
-28.3.3 is 15 majors behind and long EOL — receiving no Chromium security patches, in an app that
-fetches ~1.2 GB over the network and renders local HTML with `unsafe-eval` in its CSP.
-
-Two blocked items come along for free, both confirmed by measurement on the XPS — Edge **and**
-Chrome report `shader-f16: true` and 18 WebGPU features on the same GPU and driver, while Electron
-28 reports `false` and 7:
+Two blocked items came along for free:
 
 | Unlock | Value |
 |---|---|
-| `shader-f16` | fp16 encoder: **2363 MB → 1182 MB**. On the 4096 MB 1650 that is 58% → 29% |
-| `timestamp-query` | Real GPU profiling — the thing the (now-dropped) parallel-worker decision was blocked on |
+| `shader-f16` | fp16 encoder: **2363 MB -> 1182 MB**. On a 4096 MB card that is 58% -> 29% |
+| `timestamp-query` | Real GPU profiling (the parallel-worker decision was once blocked on it) |
 
-Note fp16 is **memory headroom, not speed**. Do not sell it as a performance fix.
+fp16 is **memory headroom, not speed** — do not sell it as a performance fix. It is chosen per
+machine from `adapter.features.has('shader-f16')`, with an fp32 fallback, and **fp16 accuracy has
+still never been diffed against fp32.** One `--replay` file, both quants, compare — that remains
+genuinely open if anyone ever suspects transcript quality.
 
-### Version landscape
-
-| Electron | Chromium | Node | Note |
-|---|---|---|---|
-| **28.3.3** | 120 | 18.18.2 | current — EOL |
-| 31.7.7 | 126 | 20.18.0 | |
-| 35.7.5 | 134 | 22.16.0 | |
-| 39.8.10 | 142 | 22.22.1 | |
-| **43.4.0** | 150 | 24.18.1 | latest stable, supported window is 41–43 |
-
-**Recommended target: 43.** Stepping 28→29→…→43 is 15 upgrades of mostly wasted effort for an app
-with this small an API surface. Jump to latest, test, and bisect *only* if something breaks.
-
-### Why the risk is lower than 15 majors suggests
-
-The app uses a deliberately small, stable Electron surface — no `remote`, no custom protocols, and
-**no native modules to rebuild** (parakeet.js is pure JS + wasm):
-
-```
-app 43 · ipcRenderer 38 · ipcMain 33 · webContents 18 · session 11 · clipboard 10
-Tray 7 · screen 7 · BrowserWindow 7 · globalShortcut 3 · contextBridge 3
-nativeImage 2 · Menu 2 · shell 1 · dialog 1
-```
-
----
-
-## Migration plan — recon each step before doing it
-
-Each step has a question to answer *first*. Do not batch them; the whole point is that a failure
-should be attributable.
-
-### Step 1 — Baseline capture (before touching anything)
-Record current behaviour so "did we break it" is answerable.
-- `--replay` on a fixed WAV on **both** machines → transcript + timing
-- `npm test`, `npm run typecheck`, `npm run dist` output sizes
-- The GPU report (`_review/gpu-report.js`) on both
-
-**Recon question:** do we have a reproducible before-picture on both the 3090 Ti and the XPS?
-
-### Step 2 — Toolchain compatibility
-Currently `electron-builder ^26.0.12` (latest 26.15.3), `vite ^5.0.12`, `typescript ^5.3.3`.
-
-**Recon question:** does electron-builder 26.x support packaging Electron 43? If not, that is the
-real blocker and it changes the target. Also check whether Node 24 in the main process affects
-anything (all our main-process code is CommonJS `require`, which is still supported).
-
-### Step 3 — Breaking-change audit, scoped to what we use
-Read the Electron breaking-changes doc for 29→43, but **filter to the 15 APIs listed above**.
-Ignore everything else.
-
-**Recon question:** which of our specific call sites changed signature or behaviour? Particular
-suspects, because our fixes ride on them:
-- `session.defaultSession.webRequest.onHeadersReceived` — **the COOP/COEP fix depends on this**
-- `session.setPermissionRequestHandler` — media + persistent-storage auto-approval
-- `Tray` / `nativeImage` on Windows — icon loading and the new `starting` state
-- `globalShortcut.register` — registered early now, before the window loads
-- `webContents.setWindowOpenHandler` / `will-navigate` — the navigation guards
-- `BrowserWindow` `webPreferences` defaults (`sandbox` is explicitly `false` in three places)
-
-### Step 4 — Bump and build
-Single change: Electron version in `mvp-echo-toolbar/package.json`. Then `npm run typecheck`,
-`npm test`, `npm run dist`.
-
-**Recon question:** does it build at all, and does the artifact size change unexpectedly?
-
-### Step 5 — Verify the integration points on Windows
-Static checks cannot cover these. Run the manual list in `_review/FIX-PLAN.md` §"Windows manual
-checks", plus:
-- `crossOriginIsolated=true` in the worker log — **if this regresses, the threading fix is gone**
-- Tray shows "Starting up..." then "Ready"
-- Hotkey works immediately; early press does not record through the wrong adapter
-- `--replay` produces the same transcript as the Step 1 baseline
-- Model loads from IndexedDB cache without re-downloading
-
-**Recon question:** does anything differ from the Step 1 baseline, and is the difference explained?
-
-### Step 6 — fp16, only after Step 5 is green
-Two parts, and they are separate:
-1. Confirm `adapter.features.has('shader-f16')` is now true inside Electron
-2. Pass `encoderQuant: 'fp16'` in `inference-worker.ts` — **feature-gated, never unconditional**,
-   with fallback to fp32
-
-Also bump `MODEL_CACHE_VERSION` in `model-cache.ts`, or the old 2.4 GB encoder lingers in IndexedDB
-alongside the new 1.2 GB one.
-
-**Recon question:** does fp16 change the transcript? Use `--replay` on the same file, both quants,
-and diff. Accuracy loss is normally negligible but has not been verified here.
-
-### Step 7 — Soak, then ship
-Same two-stage soak as 3.0.28: `--diag` on for a few days, then off for a few more.
-**Separate soaks for the Electron bump and for fp16** — different failure signatures, and bundling
-them makes a regression impossible to attribute.
-
----
+The app uses a deliberately small Electron surface — no `remote`, no custom protocols (the
+`model://` attempt is gone), and **no native modules to rebuild** (parakeet.js is pure JS + wasm),
+which is why a 15-major jump was lower risk than it sounds.
 
 ## Traps that cost time in the last session
 
