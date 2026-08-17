@@ -4,6 +4,8 @@ console.log('MVP-Echo Toolbar: Preload script loaded');
 
 // Expose APIs for both hidden capture window and popup window
 contextBridge.exposeInMainWorld('electronAPI', {
+  /** Opt-in until the on-disk store's serving mechanism is proven. */
+  modelStoreEnabled: process.argv.includes('--model-store'),
   // Audio processing
   startRecording: (source) => ipcRenderer.invoke('start-recording', source),
   stopRecording: (source) => ipcRenderer.invoke('stop-recording', source),

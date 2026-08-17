@@ -118,8 +118,20 @@ export default function CaptureApp() {
       // the entire point, one download per machine rather than one per cache
       // eviction. A failure here is not fatal: `urls` stays undefined and the
       // worker falls back to fetching from the hub as before.
+      // OPT-IN until the serving mechanism is proven on Windows.
+      //
+      // The model:// scheme does not work: Chromium refuses a cross-origin
+      // fetch from a file:// document to anything outside
+      // chrome/chrome-extension/chrome-untrusted/data/http/https, and a custom
+      // scheme cannot be added to that list. `supportFetchAPI` makes a scheme
+      // fetchable but the origin check happens first.
+      //
+      // Wiring it on by default replaced a WORKING fp16 path with a broken one,
+      // so it stays behind a flag until a build proves the replacement loads a
+      // model. The store, downloader, manifest and pruning are all fine — only
+      // the URL shape is wrong, and http://127.0.0.1 is on the allowed list.
       let urls;
-      if (backend === 'webgpu-hybrid') {
+      if (backend === 'webgpu-hybrid' && (window as any).electronAPI?.modelStoreEnabled) {
         const ipc = (window as any).electron?.ipcRenderer;
         const res = await ipc?.invoke('model:ensure', encoderQuant).catch(() => null);
         // filenames rides along with the urls; fp32 cannot attach its weights without it.
@@ -151,9 +163,19 @@ export default function CaptureApp() {
       // repeating a failure this machine has already demonstrated. The check is
       // reliable enough that this should be rare; remembering costs one flag and
       // is the difference between recovering and looping.
-      if (encoderQuant === 'fp16') {
+      // ONLY a genuine compile/session failure condemns fp16. A fetch or
+      // network error says nothing about whether this GPU can run fp16, and
+      // treating it as a verdict cost a real user their 1.2GB encoder: a
+      // blocked model:// fetch marked fp16 unusable, which changed the cache
+      // key, pruned encoder-model.fp16.onnx, and moved the machine to a 2.4GB
+      // fp32 download that then failed in exactly the same way.
+      const msg = e instanceof Error ? e.message : String(e);
+      const isTransport = /fetch|network|CORS|ERR_|timed out|sent nothing/i.test(msg);
+      if (encoderQuant === 'fp16' && !isTransport) {
         localStorage.setItem(FP16_FAILED_KEY, '1');
         console.warn('CaptureApp: marking fp16 unusable on this machine — next attempt will use fp32');
+      } else if (encoderQuant === 'fp16') {
+        console.warn(`CaptureApp: fp16 kept — that failure was transport, not capability (${msg})`);
       }
       // RETRACT the readiness claim. Without this the record kept `status:
       // 'ready'` from a PREVIOUS successful load after the worker had been torn

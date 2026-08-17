@@ -34,6 +34,9 @@ export class AlreadyLoadingError extends Error {
 export type WorkerFactory = () => Worker;
 
 export class InferenceOrchestrator {
+  /** Consecutive init failures tolerated before refusing further attempts. */
+  static readonly MAX_CONSECUTIVE_FAILURES = 3;
+
   private worker: Worker | null = null;
   private modelReady = false;
   private loading = false;
@@ -61,6 +64,19 @@ export class InferenceOrchestrator {
    * Injectable so the rule can be tested without waiting three minutes.
    */
   private readonly initStallMs: number;
+
+  /**
+   * Consecutive failed inits. Reset by a success.
+   *
+   * The bound lives HERE, not only in the caller. Observed on Windows: 61
+   * attempts in 50 seconds, because a failed init reports readiness=false, main
+   * folds that into the record, the rev bump broadcasts, and the renderer's
+   * state handler re-inits on `engine === 'webgpu' && !isReady()`. The failure
+   * fed the retry that produced it. CaptureApp's 3-strike guard existed but only
+   * covered the hotkey path, so the loop ran around it — which is the argument
+   * for the resource refusing re-entry rather than every caller remembering to.
+   */
+  private consecutiveFailures = 0;
 
   constructor(createWorker?: WorkerFactory, { initStallMs = 180000 }: { initStallMs?: number } = {}) {
     this.createWorker =
@@ -95,6 +111,11 @@ export class InferenceOrchestrator {
   ): Promise<void> {
     if (this.loading) throw new AlreadyLoadingError();
     if (this.modelReady) return;
+    if (this.consecutiveFailures >= InferenceOrchestrator.MAX_CONSECUTIVE_FAILURES) {
+      throw new Error(
+        `Inference worker failed ${this.consecutiveFailures} times in a row — giving up until the app restarts or the selection changes`,
+      );
+    }
 
     this.loading = true;
     const myEpoch = this.teardownEpoch;
@@ -167,6 +188,7 @@ export class InferenceOrchestrator {
       );
 
       this.modelReady = true;
+      this.consecutiveFailures = 0;
       console.log(`[InferenceOrchestrator] Model loaded and ready${appVersion ? ` (app v${appVersion})` : ''}`);
     } catch (err) {
       // Tear the worker down on failure. A half-initialized worker still holds
@@ -175,7 +197,8 @@ export class InferenceOrchestrator {
       // so the next initialize() starts from a clean worker. No auto-retry —
       // the user/CaptureApp re-triggers init, avoiding a retry storm on an
       // already memory-pressured machine.
-      console.error('[InferenceOrchestrator] Init failed — disposing worker for clean retry:', err);
+      this.consecutiveFailures += 1;
+      console.error(`[InferenceOrchestrator] Init failed (${this.consecutiveFailures}) — disposing worker for clean retry:`, err);
       this.disposeSync();
       // RETHROW. Swallowing this made the failure invisible to the caller,
       // whose 3-strike backoff counter was then reset on every attempt and

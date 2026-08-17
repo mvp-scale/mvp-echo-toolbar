@@ -313,3 +313,52 @@ describe('init timeout is a stall window, not a total budget', () => {
     assert.strictEqual(latest().terminated, true);
   });
 });
+
+// ── Failure must not feed the retry that produced it ───────────────────────
+//
+// Observed on Windows: 61 init attempts in 50 seconds.
+//
+//   init fails -> reportReadiness(false) -> main folds it into the record
+//   -> rev bumps -> broadcast -> applyEngineState sees engine=webgpu and
+//   !isReady() -> init again -> fails ...
+//
+// The 3-strike bound existed but only guarded the hotkey path, so this loop
+// ran around it. The orchestrator itself must refuse to be re-entered on a
+// hopeless cycle, because the callers cannot all be trusted to remember.
+
+describe('initialize refuses to thrash after repeated failures', () => {
+  test('it gives up after a bounded number of consecutive failures', async () => {
+    const { orch, latest } = makeOrchestrator(40);
+
+    let attempts = 0;
+    for (let i = 0; i < 10; i++) {
+      const p = orch.initialize('webgpu-hybrid').catch((e) => e);
+      await flush();
+      const w = latest();
+      // A worker that reports a hard failure, like a blocked fetch.
+      if (w && !w.terminated) w.emit({ type: 'error', message: 'Failed to fetch' });
+      const err = await p;
+      if (err instanceof Error && /giving up|too many/i.test(err.message)) break;
+      attempts++;
+    }
+
+    assert.ok(attempts < 10,
+      `initialize must stop accepting attempts after repeated failures; got ${attempts}`);
+  });
+
+  test('a success resets the budget', async () => {
+    const { orch, latest } = makeOrchestrator(40);
+
+    const p1 = orch.initialize('webgpu-hybrid').catch((e) => e);
+    await flush();
+    latest().emit({ type: 'error', message: 'Failed to fetch' });
+    await p1;
+
+    const p2 = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emit({ type: 'ready' });
+    await p2;
+
+    assert.strictEqual(orch.isReady(), true, 'a recovered machine must not stay locked out');
+  });
+});
