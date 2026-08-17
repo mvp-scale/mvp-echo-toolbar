@@ -113,9 +113,22 @@ export default function CaptureApp() {
       try {
         appVersion = await api?.getAppVersion?.();
       } catch { /* cache versioning is best-effort */ }
-      console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, encoder=${encoderQuant}, v=${appVersion ?? 'unknown'})...`);
+      // Put the model on disk before touching the orchestrator. Returns
+      // instantly when the files are already there at the right size — which is
+      // the entire point, one download per machine rather than one per cache
+      // eviction. A failure here is not fatal: `urls` stays undefined and the
+      // worker falls back to fetching from the hub as before.
+      let urls;
+      if (backend === 'webgpu-hybrid') {
+        const ipc = (window as any).electron?.ipcRenderer;
+        const res = await ipc?.invoke('model:ensure', encoderQuant).catch(() => null);
+        if (res?.success) urls = res.urls;
+        else console.warn('CaptureApp: local model store unavailable, falling back to hub:', res?.error ?? 'no IPC');
+      }
+
+      console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, encoder=${encoderQuant}, source=${urls ? 'disk' : 'hub'}, v=${appVersion ?? 'unknown'})...`);
       lastInitAtRef.current = Date.now();
-      await orchestratorRef.current.initialize(backend, appVersion, encoderQuant);
+      await orchestratorRef.current.initialize(backend, appVersion, encoderQuant, urls);
       initFailRef.current = 0; // success resets the failure/backoff counter
       // fp16 proved itself on this machine — clear any old failure marker so a
       // one-off failure (a driver since updated) is not remembered forever.

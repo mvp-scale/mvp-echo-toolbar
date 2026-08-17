@@ -89,7 +89,9 @@ export class InferenceOrchestrator {
     backend: 'webgpu-hybrid' | 'wasm' = 'wasm',
     appVersion?: string,
     /** Which encoder this machine can run. Decided by the caller's capability probe. */
-    encoderQuant: 'fp32' | 'fp16' = 'fp32'
+    encoderQuant: 'fp32' | 'fp16' = 'fp32',
+    /** Local model:// URLs. When present the worker skips the hub entirely. */
+    urls?: { encoderUrl: string; decoderUrl: string; tokenizerUrl: string }
   ): Promise<void> {
     if (this.loading) throw new AlreadyLoadingError();
     if (this.modelReady) return;
@@ -155,7 +157,7 @@ export class InferenceOrchestrator {
       }
 
       await this.sendMessage(
-        { type: 'init', backend, encoderQuant },
+        { type: 'init', backend, encoderQuant, urls },
         'ready',
         // 3 min WITHOUT PROGRESS. The old 900_000ms was not a timeout, it was a
         // hang: 15 minutes of `loading === true` with recovery disabled behind

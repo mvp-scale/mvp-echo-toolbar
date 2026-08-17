@@ -13,7 +13,7 @@
  *   { type: 'error', message }
  */
 
-import { fromHub } from 'parakeet.js';
+import { fromHub, ParakeetModel as ParakeetModelClass } from 'parakeet.js';
 import { chunkPlanFor, dedupeOverlappingWords, joinWords } from './chunk-plan';
 import type { ParakeetModel } from 'parakeet.js';
 
@@ -27,7 +27,7 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     switch (msg.type) {
       case 'init':
-        await init(msg.backend || 'wasm', msg.encoderQuant || 'fp32');
+        await init(msg.backend || 'wasm', msg.encoderQuant || 'fp32', msg.urls);
         break;
       case 'transcribe':
         await transcribe(msg.audio, msg.sampleRate);
@@ -47,6 +47,13 @@ self.onmessage = async (event: MessageEvent) => {
 async function init(
   backend: 'webgpu-hybrid' | 'wasm',
   encoderQuant: 'fp32' | 'fp16' = 'fp32',
+  /**
+   * Local model:// URLs from the on-disk store. When present the hub is skipped
+   * entirely — no network, no IndexedDB. fromHub() is only a thin wrapper around
+   * fromUrls(); it resolves the same URLs and caches the bytes in IndexedDB on
+   * the way past, which is the part being replaced.
+   */
+  urls?: { encoderUrl: string; decoderUrl: string; tokenizerUrl: string },
 ): Promise<void> {
   console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend}, encoder=${encoderQuant})...`);
 
@@ -64,6 +71,17 @@ async function init(
   // The progress callback fires once per network read chunk (~tens of thousands
   // of times for the ~1.2GB model). Throttle to whole-percent transitions so it
   // doesn't flood the console/log with thousands of lines per download.
+  if (urls) {
+    console.log(`[ParakeetWorker] Loading from local store: ${urls.encoderUrl}`);
+    model = await ParakeetModelClass.fromUrls({
+      ...urls,
+      backend,
+      // Matches what fromHub passes through; the preprocessor stays JS, so no
+      // preprocessorUrl is needed and none is downloaded.
+      preprocessorBackend: 'js',
+    });
+  } else {
+
   let lastPct = -1;
   let lastFile = '';
   model = await fromHub('parakeet-tdt-0.6b-v2', {
@@ -99,6 +117,7 @@ async function init(
       self.postMessage({ type: 'download-progress', file: p.file, loaded: p.loaded, total: p.total, pct });
     },
   });
+  }
 
   // Watch for WebGPU device loss. On hybrid-GPU laptops the device can be lost
   // on a driver/TDR reset; without this it surfaces as an opaque hung session.

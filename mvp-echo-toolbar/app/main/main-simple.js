@@ -1,11 +1,13 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard, protocol, net } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 
 const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
 const { log, clearLog, getLogPath, flushSync } = require('./logger');
+const { ensureModel, modelDir, isComplete } = require('./model-store');
 
 const engineManager = new EngineManager();
 const trayManager = new TrayManager();
@@ -18,6 +20,20 @@ const logPath = getLogPath();
 // When on, the renderer streams one structured fingerprint line per recording to
 // a dedicated diagnostics file (separate from the general debug log).
 const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
+
+// ── model:// — GPU model files served from disk ──
+//
+// parakeet hands onnxruntime a URL and ORT fetches it, so serving the files off
+// a scheme is what lets them live on disk instead of in IndexedDB — which was
+// observed losing a healthy 2.3GB copy between two inits thirty seconds apart.
+//
+// registerSchemesAsPrivileged MUST run before app-ready. `stream` matters: the
+// payload is a 1.2GB encoder that must not be buffered whole. `supportFetchAPI`
+// is what makes it reachable from fetch() inside the worker at all.
+const MODEL_SCHEME = 'model';
+protocol.registerSchemesAsPrivileged([
+  { scheme: MODEL_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
 
 // ── Cross-origin isolation toggle ──
 // OFF by default since 3.1.0. On via --coi / MVP_COI=1.
@@ -558,6 +574,42 @@ function showWelcomeWindow() {
 // ── App Lifecycle ──
 
 app.whenReady().then(async () => {
+  // Serve model:// from the on-disk store. Electron streams the file and handles
+  // ranges itself via net.fetch on a file:// URL — that is the whole serving
+  // layer, no hand-rolled file server.
+  const MODELS_DIR = modelDir({ fallbackDir: app.getPath('userData') });
+  protocol.handle(MODEL_SCHEME, (req) => {
+    // basename() confines this to MODELS_DIR: model://models/../../secret must not resolve.
+    const target = path.join(MODELS_DIR, path.basename(new URL(req.url).pathname));
+    if (!fs.existsSync(target)) return new Response('not found', { status: 404 });
+    return net.fetch(pathToFileURL(target).toString());
+  });
+  log(`MVP-Echo Toolbar: model store = ${MODELS_DIR}`);
+
+  // Fetch the GPU model for `variant` if it is not already on disk, and hand
+  // back the fromUrls() map. net.fetch, not Node's fetch: Chromium's stack
+  // honours system proxies, PAC scripts and corporate certificate stores, which
+  // Node's ignores — using Node here would break every user behind a corporate
+  // proxy who works today.
+  ipcMain.handle('model:ensure', async (_e, variant) => {
+    try {
+      if (isComplete(variant, MODELS_DIR)) log(`ModelStore: ${variant} already on disk — no download`);
+      const res = await ensureModel(variant, {
+        dir: MODELS_DIR,
+        fetchImpl: net.fetch,
+        onProgress: ({ file, pct, loaded, total }) => {
+          const hidden = hiddenWindow && !hiddenWindow.isDestroyed() ? hiddenWindow : null;
+          hidden?.webContents.send('model:download-progress', { file, pct, loaded, total });
+        },
+      });
+      if (res.pruned.length) log(`ModelStore: pruned stale variant files: ${res.pruned.join(', ')}`);
+      return { success: true, urls: res.urls };
+    } catch (err) {
+      log('ModelStore: ensure failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // Load user config (keybind, etc.)
   const appConfig = loadAppConfig();
   const shortcutLabel = shortcutDisplayLabel(appConfig.shortcut);

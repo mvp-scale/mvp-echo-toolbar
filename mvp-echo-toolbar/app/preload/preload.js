@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('electron', {
       const validChannels = [
         'cloud:configure', 'cloud:test-connection', 'cloud:get-config',
         'engine:list-models', 'engine:switch-model', 'engine:status', 'engine:get-state',
+        'model:ensure',
         'debug:open-devtools', 'debug:renderer-log',
         'webgpu:check-availability', 'webgpu:model-status',
         'webgpu:model-ready',
