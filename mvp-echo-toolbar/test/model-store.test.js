@@ -200,3 +200,87 @@ describe('ensureModel', () => {
     await assert.rejects(ensureModel('fp64', { dir: tmp(), manifest: TINY, fetchImpl: () => {} }), /fp64/);
   });
 });
+
+/**
+ * fp32 — the variant with an external-data sidecar, split across assets.
+ *
+ * Two things make it different from fp16 and both are easy to get wrong:
+ *
+ *   1. The weights live in a separate `.onnx.data` file. fromUrls needs
+ *      `encoderDataUrl` AND `filenames`, because it derives the external-data
+ *      path as `filenames.encoder + '.data'`. Omit filenames and the session
+ *      loads a graph with no weights.
+ *   2. That sidecar is 2,435,420,160 bytes — over GitHub's 2 GB asset cap — so
+ *      it is published as parts and reassembled on download.
+ */
+describe('fp32 — external data, split into parts', () => {
+  const FP32 = {
+    fp32: [
+      { name: 'encoder-model.onnx', bytes: 100, key: 'encoderUrl' },
+      { name: 'encoder-model.onnx.data', bytes: 300, key: 'encoderDataUrl',
+        parts: ['encoder-model.onnx.data.part0', 'encoder-model.onnx.data.part1'] },
+      { name: 'decoder_joint-model.int8.onnx', bytes: 50, key: 'decoderUrl' },
+      { name: 'vocab.txt', bytes: 10, key: 'tokenizerUrl' },
+    ],
+  };
+
+  test('a part-ed file goes through downloadParts, not downloadFile', async () => {
+    const dir = tmp();
+    const single = [], multi = [];
+
+    await ensureModel('fp32', {
+      dir, manifest: FP32, fetchImpl: () => {},
+      download: async (url, dest, o) => { single.push(url); fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes)); return {}; },
+      downloadMulti: async (urls, dest, o) => { multi.push(...urls); fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes)); return {}; },
+    });
+
+    assert.strictEqual(multi.length, 2, 'both parts must be requested');
+    assert.ok(multi[0].endsWith('.part0') && multi[1].endsWith('.part1'), 'and in order');
+    assert.ok(!single.some((u) => u.includes('.data')), 'the sidecar must not be fetched as one asset');
+  });
+
+  test('it returns encoderDataUrl, or the session loads a graph with no weights', async () => {
+    const dir = tmp();
+
+    const { urls } = await ensureModel('fp32', {
+      dir, manifest: FP32, fetchImpl: () => {},
+      download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
+      downloadMulti: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
+    });
+
+    assert.ok(urls.encoderDataUrl, 'fromUrls cannot attach external data without it');
+    assert.match(urls.encoderDataUrl, /encoder-model\.onnx\.data$/);
+  });
+
+  test('it returns filenames, which fromUrls needs to derive the external-data path', async () => {
+    const dir = tmp();
+
+    const res = await ensureModel('fp32', {
+      dir, manifest: FP32, fetchImpl: () => {},
+      download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
+      downloadMulti: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
+    });
+
+    assert.strictEqual(res.filenames?.encoder, 'encoder-model.onnx',
+      'fromUrls builds the external path as filenames.encoder + ".data"');
+    assert.strictEqual(res.filenames?.decoder, 'decoder_joint-model.int8.onnx');
+  });
+
+  test('the real manifest declares fp32 with a split sidecar', () => {
+    const data = MANIFEST.fp32?.find((f) => f.name.endsWith('.onnx.data'));
+
+    assert.ok(data, 'fp32 must be present or older GPUs stay on the slow source');
+    assert.ok(Array.isArray(data.parts) && data.parts.length >= 2,
+      'a 2,435 MB asset exceeds the 2 GB cap and must be split');
+    assert.ok(data.bytes > 2 * 1024 * 1024 * 1024, 'sanity: this is the oversized one');
+  });
+
+  test('every real manifest entry declares which fromUrls key it fills', () => {
+    for (const [variant, files] of Object.entries(MANIFEST)) {
+      for (const f of files) {
+        assert.ok(f.key, `${variant}/${f.name} has no key`);
+        assert.ok(Number.isInteger(f.bytes) && f.bytes > 0, `${variant}/${f.name} has no byte count`);
+      }
+    }
+  });
+});

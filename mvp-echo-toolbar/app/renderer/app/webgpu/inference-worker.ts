@@ -53,7 +53,14 @@ async function init(
    * fromUrls(); it resolves the same URLs and caches the bytes in IndexedDB on
    * the way past, which is the part being replaced.
    */
-  urls?: { encoderUrl: string; decoderUrl: string; tokenizerUrl: string },
+  urls?: {
+    encoderUrl: string; decoderUrl: string; tokenizerUrl: string;
+    /** fp32 only: the external weights sidecar. */
+    encoderDataUrl?: string;
+    /** Required whenever encoderDataUrl is set — fromUrls builds the external
+     *  data path as `filenames.encoder + '.data'`. */
+    filenames?: { encoder: string; decoder: string };
+  },
 ): Promise<void> {
   console.log(`[ParakeetWorker] Loading parakeet-tdt-0.6b-v2 (${backend}, encoder=${encoderQuant})...`);
 
@@ -73,8 +80,10 @@ async function init(
   // doesn't flood the console/log with thousands of lines per download.
   if (urls) {
     console.log(`[ParakeetWorker] Loading from local store: ${urls.encoderUrl}`);
+    const { filenames, ...urlMap } = urls;
     model = await ParakeetModelClass.fromUrls({
-      ...urls,
+      ...urlMap,
+      ...(filenames ? { filenames } : {}),
       backend,
       // Matches what fromHub passes through; the preprocessor stays JS, so no
       // preprocessorUrl is needed and none is downloaded.

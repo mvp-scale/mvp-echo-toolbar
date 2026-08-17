@@ -122,7 +122,8 @@ export default function CaptureApp() {
       if (backend === 'webgpu-hybrid') {
         const ipc = (window as any).electron?.ipcRenderer;
         const res = await ipc?.invoke('model:ensure', encoderQuant).catch(() => null);
-        if (res?.success) urls = res.urls;
+        // filenames rides along with the urls; fp32 cannot attach its weights without it.
+        if (res?.success) urls = { ...res.urls, filenames: res.filenames };
         else console.warn('CaptureApp: local model store unavailable, falling back to hub:', res?.error ?? 'no IPC');
       }
 

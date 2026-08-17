@@ -186,7 +186,10 @@ async function downloadFile(url, destPath, opts = {}) {
  * @param {object}   opts    fetchImpl (required), onProgress, expectedBytes
  */
 async function downloadParts(urls, destPath, opts = {}) {
-  const { fetchImpl, onProgress, expectedBytes } = opts;
+  const {
+    fetchImpl, onProgress, expectedBytes,
+    connections = 8, minChunkBytes = MIN_CHUNK_BYTES,
+  } = opts;
   if (typeof fetchImpl !== 'function') throw new Error('downloadParts requires fetchImpl');
   if (!Array.isArray(urls) || urls.length === 0) throw new Error('downloadParts requires at least one url');
 
@@ -199,26 +202,63 @@ async function downloadParts(urls, destPath, opts = {}) {
   const partPath = `${destPath}.part`;
   if (fs.existsSync(partPath)) fs.rmSync(partPath, { force: true });
 
+  // Size every part first, so each one's absolute offset in the finished file is
+  // known before anything is fetched. Part sizes are NOT assumed uniform:
+  // assuming that yields a file of exactly the right size and entirely the wrong
+  // contents, which only surfaces when the model fails to load.
+  const probes = await Promise.all(urls.map((u) => probe(u, fetchImpl)));
+  const offsets = [];
+  let base = 0;
+  for (const p of probes) { offsets.push(base); base += p.bytes || 0; }
+
   let loaded = 0;
+  const total = expectedBytes || (base || 0);
+  const bump = (n) => { loaded += n; onProgress?.({ loaded, total: total || loaded }); };
+
   const handle = await fs.promises.open(partPath, 'w');
   try {
-    // Fetch every part concurrently, then place them by cumulative offset. The
-    // bodies are held only long enough to write; parts are sized to be a
-    // fraction of the whole precisely so this stays bounded.
-    const buffers = await Promise.all(urls.map(async (url) => {
-      const res = await fetchImpl(url, {});
-      if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+    const drain = async (res, offset) => {
+      if (res.body && typeof res.body[Symbol.asyncIterator] === 'function') {
+        let pos = offset;
+        for await (const chunk of res.body) {
+          const buf = Buffer.from(chunk);
+          await handle.write(buf, 0, buf.length, pos);
+          pos += buf.length;
+          bump(buf.length);
+        }
+        return;
+      }
       const buf = Buffer.from(await res.arrayBuffer());
-      loaded += buf.length;
-      onProgress?.({ loaded, total: expectedBytes || 0 });
-      return buf;
-    }));
-
-    let offset = 0;
-    for (const buf of buffers) {
       await handle.write(buf, 0, buf.length, offset);
-      offset += buf.length;
-    }
+      bump(buf.length);
+    };
+
+    // Build ONE flat list of requests across every part, then run it all
+    // concurrently. How many parts a file was split into is a packaging detail
+    // — GitHub caps an asset at 2 GB — and must not decide how many connections
+    // the download gets. Two parts fetched one-request-each measured 57 MB/s
+    // against 116 MB/s for a single file with eight ranges.
+    const jobs = [];
+    urls.forEach((url, i) => {
+      const { bytes, ranges } = probes[i];
+      if (!ranges || !bytes) {
+        jobs.push(async () => {
+          const res = await fetchImpl(url, {});
+          if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+          await drain(res, offsets[i]);
+        });
+        return;
+      }
+      for (const r of planRanges(bytes, connections, minChunkBytes)) {
+        jobs.push(async () => {
+          const res = await fetchImpl(url, { headers: { Range: `bytes=${r.start}-${r.end}` } });
+          if (!res.ok) throw new Error(`HTTP ${res.status} on ${url} range ${r.start}-${r.end}`);
+          await drain(res, offsets[i] + r.start);
+        });
+      }
+    });
+
+    await Promise.all(jobs.map((j) => j()));
   } catch (err) {
     await handle.close();
     fs.rmSync(partPath, { force: true });

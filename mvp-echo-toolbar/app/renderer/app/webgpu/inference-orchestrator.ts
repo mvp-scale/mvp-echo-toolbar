@@ -91,7 +91,7 @@ export class InferenceOrchestrator {
     /** Which encoder this machine can run. Decided by the caller's capability probe. */
     encoderQuant: 'fp32' | 'fp16' = 'fp32',
     /** Local model:// URLs. When present the worker skips the hub entirely. */
-    urls?: { encoderUrl: string; decoderUrl: string; tokenizerUrl: string }
+    urls?: Record<string, unknown>
   ): Promise<void> {
     if (this.loading) throw new AlreadyLoadingError();
     if (this.modelReady) return;

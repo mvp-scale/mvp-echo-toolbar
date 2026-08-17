@@ -47,6 +47,22 @@ const MANIFEST = {
     { name: 'decoder_joint-model.int8.onnx', bytes: 8998286, key: 'decoderUrl' },
     { name: 'vocab.txt', bytes: 10409, key: 'tokenizerUrl' },
   ],
+  /**
+   * fp32 — for GPUs without shader-f16. Two differences from the others:
+   * the weights are an external `.onnx.data` sidecar, and that sidecar is
+   * 2,435 MB, over GitHub's 2 GB per-asset cap, so it is published as parts.
+   */
+  fp32: [
+    { name: 'encoder-model.onnx', bytes: 41770866, key: 'encoderUrl' },
+    {
+      name: 'encoder-model.onnx.data',
+      bytes: 2435420160,
+      key: 'encoderDataUrl',
+      parts: ['encoder-model.onnx.data.part0', 'encoder-model.onnx.data.part1'],
+    },
+    { name: 'decoder_joint-model.int8.onnx', bytes: 8998286, key: 'decoderUrl' },
+    { name: 'vocab.txt', bytes: 10409, key: 'tokenizerUrl' },
+  ],
   int8: [
     { name: 'encoder-model.int8.onnx', bytes: 652184014, key: 'encoderUrl' },
     { name: 'decoder_joint-model.int8.onnx', bytes: 8998286, key: 'decoderUrl' },
@@ -144,7 +160,7 @@ async function ensureModel(variant, opts = {}) {
 
     if (Array.isArray(f.parts)) {
       await downloadMulti(f.parts.map((p) => `${base}/${p}`), dest, {
-        fetchImpl, onProgress: report, expectedBytes: f.bytes,
+        fetchImpl, onProgress: report, expectedBytes: f.bytes, connections,
       });
     } else {
       await download(`${base}/${f.name}`, dest, {
@@ -160,7 +176,16 @@ async function ensureModel(variant, opts = {}) {
 
   const urls = {};
   for (const f of files) urls[f.key] = `${scheme}://models/${f.name}`;
-  return { dir, urls, pruned, bytes: total };
+
+  // fromUrls derives the external-data path as `filenames.encoder + '.data'`.
+  // Without filenames it attaches no external data at all and the fp32 session
+  // loads a graph with no weights — which fails late and obscurely.
+  const filenames = {
+    encoder: files.find((f) => f.key === 'encoderUrl')?.name,
+    decoder: files.find((f) => f.key === 'decoderUrl')?.name,
+  };
+
+  return { dir, urls, filenames, pruned, bytes: total };
 }
 
 module.exports = { MANIFEST, DEFAULT_BASE, modelDir, isComplete, pruneOtherVariants, ensureModel };

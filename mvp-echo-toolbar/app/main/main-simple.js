@@ -603,7 +603,7 @@ app.whenReady().then(async () => {
         },
       });
       if (res.pruned.length) log(`ModelStore: pruned stale variant files: ${res.pruned.join(', ')}`);
-      return { success: true, urls: res.urls };
+      return { success: true, urls: res.urls, filenames: res.filenames };
     } catch (err) {
       log('ModelStore: ensure failed:', err);
       return { success: false, error: err.message };

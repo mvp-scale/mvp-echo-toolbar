@@ -70,6 +70,27 @@ function fakeFetch(body, { ranges = true, failRange = null, onRequest = () => {}
   };
 }
 
+/** Like partFetch, but each part honours HEAD and Range — as a real CDN does. */
+function rangedPartFetch(parts, { ranges = true } = {}) {
+  return async (url, init = {}) => {
+    const i = Number(/(\d+)$/.exec(url)?.[1] ?? 0);
+    const p = parts[i] || parts[0];
+    if (init.method === 'HEAD') {
+      return { ok: true, status: 200, headers: new Map([
+        ['content-length', String(p.length)],
+        ...(ranges ? [['accept-ranges', 'bytes']] : []),
+      ]) };
+    }
+    const range = init.headers?.Range;
+    if (range && ranges) {
+      const m = /bytes=(\d+)-(\d+)/.exec(range);
+      const sl = p.subarray(Number(m[1]), Number(m[2]) + 1);
+      return { ok: true, status: 206, arrayBuffer: async () => sl.buffer.slice(sl.byteOffset, sl.byteOffset + sl.byteLength) };
+    }
+    return { ok: true, status: 200, arrayBuffer: async () => p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength) };
+  };
+}
+
 /** Deterministic bytes so a mis-assembled file is detectable, not just wrong-sized. */
 function makeBody(n) {
   const b = Buffer.alloc(n);
@@ -340,6 +361,59 @@ describe('downloadParts — reassembling a split asset', () => {
     const dest = path.join(dir, 'e');
 
     await downloadParts(['https://example/only'], dest, { fetchImpl: partFetch([body]) });
+
+    assert.deepStrictEqual(fs.readFileSync(dest), body);
+  });
+});
+
+/**
+ * Parts must ALSO be range-parallel, not one connection each.
+ *
+ * Measured against the real release: fp16 (one file, 8 ranges) ran at 116 MB/s,
+ * while fp32 (two parts, one request each) managed 57 MB/s and took 41.8s —
+ * over the 30-second budget purely because two parts meant two connections.
+ * The number of parts is a packaging detail imposed by GitHub's 2 GB cap; it
+ * must not decide how many connections the download gets.
+ */
+describe('downloadParts — concurrency comes from ranges, not part count', () => {
+  test('two parts still produce many concurrent requests', async () => {
+    const dir = tmpdir();
+    const body = makeBody(160_000);
+    const parts = [body.subarray(0, 80_000), body.subarray(80_000)];
+    let requests = 0;
+
+    await downloadParts(['https://example/p0', 'https://example/p1'], path.join(dir, 'e'), {
+      connections: 8,
+      minChunkBytes: 1024,
+      fetchImpl: async (url, init) => { requests++; return rangedPartFetch(parts)(url, init); },
+    });
+
+    assert.ok(requests > parts.length + 2,
+      `expected many ranged requests across 2 parts, got ${requests}`);
+  });
+
+  test('and the file is still byte-identical', async () => {
+    const dir = tmpdir();
+    const body = makeBody(160_000);
+    const parts = [body.subarray(0, 80_000), body.subarray(80_000)];
+    const dest = path.join(dir, 'e');
+
+    await downloadParts(['https://example/p0', 'https://example/p1'], dest, {
+      connections: 8, minChunkBytes: 1024, fetchImpl: rangedPartFetch(parts),
+    });
+
+    assert.deepStrictEqual(fs.readFileSync(dest), body);
+  });
+
+  test('a part whose server refuses ranges still lands correctly', async () => {
+    const dir = tmpdir();
+    const body = makeBody(60_000);
+    const parts = [body.subarray(0, 30_000), body.subarray(30_000)];
+    const dest = path.join(dir, 'e');
+
+    await downloadParts(['https://example/p0', 'https://example/p1'], dest, {
+      connections: 8, minChunkBytes: 1024, fetchImpl: rangedPartFetch(parts, { ranges: false }),
+    });
 
     assert.deepStrictEqual(fs.readFileSync(dest), body);
   });
