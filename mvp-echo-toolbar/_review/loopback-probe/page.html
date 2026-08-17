@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><body><script>
+const { ipcRenderer } = require('electron');
+
+ipcRenderer.on('go', async (_e, cfg) => {
+  const out = [];
+
+  // The file:// module worker does the fetches — the shape that matters.
+  try {
+    const w = new Worker(new URL('./worker.js', location.href), { type: 'module' });
+    const fromWorker = await new Promise((resolve, reject) => {
+      w.onmessage = (ev) => resolve(ev.data);
+      w.onerror = (ev) => reject(new Error(ev.message || 'worker failed to load'));
+      setTimeout(() => reject(new Error('worker timeout')), 150000);
+      w.postMessage(cfg);
+    });
+    out.push(...fromWorker.map((r) => ({ where: 'file:// worker', ...r })));
+  } catch (e) {
+    out.push({ where: 'file:// worker', ok: false, error: String(e.message || e) });
+  }
+
+  // And onnxruntime-web itself, which loads with its own fetch() call and is the
+  // actual consumer. A plain fetch succeeding does not prove ORT will.
+  if (cfg.onnxUrl) {
+    try {
+      // import() needs a URL, not a filesystem path — a bare /abs/path silently
+      // resolves against the document and never loads.
+      const ort = await import(new URL('file://' + cfg.ortPath).href);
+      const ns = ort.default ?? ort;
+      ns.env.wasm.numThreads = 1;
+      ns.env.wasm.proxy = false;
+      const t0 = Date.now();
+      const session = await ns.InferenceSession.create(cfg.onnxUrl, { executionProviders: ['wasm'] });
+      out.push({
+        where: 'onnxruntime-web', step: 'InferenceSession.create', ok: true,
+        ms: Date.now() - t0,
+        inputs: session.inputNames, outputs: session.outputNames,
+      });
+    } catch (e) {
+      out.push({ where: 'onnxruntime-web', step: 'InferenceSession.create', ok: false, error: String(e.message || e) });
+    }
+  }
+
+  ipcRenderer.send('probe-result', out);
+});
+</script></body></html>

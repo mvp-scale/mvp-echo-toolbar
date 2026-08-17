@@ -118,3 +118,19 @@ describe('IPC contract — an unlisted channel must fail loudly', () => {
       'preload invoke() must throw for a channel that is not allowlisted');
   });
 });
+
+describe('the product never tells a user to open a console', () => {
+  test('no renderer file points at devtools for information', () => {
+    // SettingsPanel rendered "check console for progress" beside a spinning
+    // dot — an admission that the only place real progress went was devtools.
+    // Deleted; this is what stops it coming back.
+    //
+    // Source-read for the same reason as the IPC lists above: statically
+    // visible, no jsdom, no Electron, no new dependency.
+    const offenders = walk('app/renderer', ['.ts', '.tsx'])
+      .filter((f) => /check\s+(the\s+)?console|see\s+(the\s+)?console|open\s+(the\s+)?console/i.test(read(f)));
+
+    assert.deepStrictEqual(offenders, [],
+      `these ask the user to open a console: ${offenders.join(', ')}`);
+  });
+});

@@ -4,8 +4,12 @@ console.log('MVP-Echo Toolbar: Preload script loaded');
 
 // Expose APIs for both hidden capture window and popup window
 contextBridge.exposeInMainWorld('electronAPI', {
-  /** Opt-in until the on-disk store's serving mechanism is proven. */
-  modelStoreEnabled: process.argv.includes('--model-store'),
+  /**
+   * ON by default since the loopback server was verified on Windows
+   * (2026-08-17: source=disk, serving fp16 on 127.0.0.1, model loaded, no
+   * re-download). `--no-model-store` is the way back to the hub path.
+   */
+  modelStoreEnabled: !process.argv.includes('--no-model-store'),
   // Audio processing
   startRecording: (source) => ipcRenderer.invoke('start-recording', source),
   stopRecording: (source) => ipcRenderer.invoke('stop-recording', source),
@@ -15,7 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyToClipboard: (text) => ipcRenderer.invoke('copy-to-clipboard', text),
 
   // Tray state updates (from hidden window)
-  updateTrayState: (state) => ipcRenderer.invoke('tray:update-state', state),
+  updateTrayState: (state, detail) => ipcRenderer.invoke('tray:update-state', state, detail),
 
   // Global shortcut listener (hidden window)
   onGlobalShortcutToggle: (callback) => {
@@ -98,7 +102,7 @@ contextBridge.exposeInMainWorld('electron', {
         'model:ensure',
         'debug:open-devtools', 'debug:renderer-log',
         'webgpu:check-availability', 'webgpu:model-status',
-        'webgpu:model-ready',
+        'webgpu:model-ready', 'webgpu:download-progress',
         'diag:enabled', 'diag:record', 'diag:save-audio',
         'app-config:get', 'app-config:set',
       ];

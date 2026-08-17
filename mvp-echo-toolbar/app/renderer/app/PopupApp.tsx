@@ -205,7 +205,7 @@ export default function PopupApp() {
             />
 
             {/* Collapsible settings */}
-            {showSettings && <SettingsPanel />}
+            {showSettings && <SettingsPanel engineState={engineState} />}
           </>
         )}
       </div>

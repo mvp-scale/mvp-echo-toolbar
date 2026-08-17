@@ -22,7 +22,9 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { log } = require('../main/logger');
-const { createState, restore, select, engineForModel, applyModelReady } = require('./engine-state');
+const {
+  createState, restore, select, engineForModel, applyModelReady, applyDownloadProgress,
+} = require('./engine-state');
 
 const RemoteAdapter = require('./adapters/remote-adapter');
 const LocalSidecarAdapter = require('./adapters/local-sidecar-adapter');
@@ -404,6 +406,22 @@ class EngineManager {
       this.activeAdapter = this.remoteAdapter;
       this.activeAdapterName = 'remote';
     }
+  }
+
+  /**
+   * Fold observed download progress into the record and rebroadcast.
+   *
+   * The single writer for this fact. Both producers call it: the renderer's hub
+   * download (over `webgpu:download-progress`) and the on-disk model store,
+   * which already runs in this process and so calls it directly with no IPC hop.
+   *
+   * The guard that matters lives in applyDownloadProgress, not here: it keys on
+   * the payload's modelId — what the download is ABOUT — so a tick for a model
+   * the user has since moved off is dropped rather than repainting the record.
+   */
+  reportDownloadProgress({ modelId, loaded, total, pct } = {}) {
+    if (!this.state) return;
+    this._applyState(applyDownloadProgress(this.state, { modelId, loaded, total, pct }));
   }
 
   // ── Core operations ──
@@ -805,7 +823,6 @@ class EngineManager {
       const modelManager = this.webgpuAdapter.modelManager;
       return {
         downloaded: modelManager.isModelDownloaded(),
-        downloadState: modelManager.getDownloadState(),
         gpu: this.webgpuAdapter.getGpuCapability(),
       };
     });
@@ -818,6 +835,21 @@ class EngineManager {
       // forever — so planCapture kept falling back to CPU with "GPU model still
       // loading" immediately after the orchestrator reported it was ready.
       if (this.state) this._applyState(applyModelReady(this.state, ready));
+      return { success: true };
+    });
+
+    // Bytes arriving for a model download. THE ONLY WRITER of download
+    // progress — both producers (the renderer's hub download and the on-disk
+    // store, which runs in this process) come through here, so "one owner"
+    // survives either of them going live without a second migration.
+    //
+    // Deliberately NOT persisted: _saveEngineState is not called. A percentage
+    // is an observation about right now, not a choice, and a 47% that reached
+    // disk would be read back on the next launch as a download that is not
+    // running. (engine-state.js normalizes that on restore anyway — this is the
+    // belt to that braces.)
+    ipcMain.handle('webgpu:download-progress', async (_event, payload) => {
+      this.reportDownloadProgress(payload);
       return { success: true };
     });
 

@@ -149,3 +149,51 @@ describe('endpointStatusLabel — say only what was observed', () => {
     assert.strictEqual(s.tone, 'busy');
   });
 });
+
+describe('statusLabel — a download is not a load', () => {
+  // 'loading' covered both warming a cached model (~20s, no bytes moving) and
+  // fetching 1.2GB (~90s). One word for two experiences an order of magnitude
+  // apart is why the blocked-press message promised "ready shortly" when it
+  // might be minutes. Decision: _review/DOWNLOAD-STATE-DECISION.md.
+  const downloading = (progress) => ({
+    rev: 1, engine: 'webgpu', modelId: 'webgpu-parakeet-0.6b',
+    status: 'downloading', reason: null, gpu: 'usable', progress,
+  });
+
+  test('it names the percentage', () => {
+    const { label, tone } = statusLabel(downloading({ loaded: 470, total: 1000, pct: 47 }));
+
+    assert.strictEqual(label, 'Downloading GPU model — 47%');
+    assert.strictEqual(tone, 'busy', 'busy, never error — a download is not a failure');
+  });
+
+  test('0% still reads as started, not as absent', () => {
+    assert.strictEqual(statusLabel(downloading({ loaded: 0, total: 1000, pct: 0 })).label,
+      'Downloading GPU model — 0%');
+  });
+
+  test('100% is a legal thing to render', () => {
+    assert.strictEqual(statusLabel(downloading({ loaded: 1000, total: 1000, pct: 100 })).label,
+      'Downloading GPU model — 100%');
+  });
+
+  test('no progress yet says so rather than showing undefined%', () => {
+    // The window between "the download started" and the first byte report.
+    assert.strictEqual(statusLabel(downloading(null)).label, 'Downloading GPU model…');
+  });
+
+  test('a missing pct on a present progress object does not leak NaN', () => {
+    const label = statusLabel(downloading({ loaded: 1, total: 2 })).label;
+
+    assert.doesNotMatch(label, /NaN|undefined/, 'no percentage beats a broken one');
+  });
+
+  test('loading NEVER carries a number', () => {
+    // A warm cache moves no bytes, so a percentage there would be invented.
+    // This is what keeps the two statuses worth distinguishing at all.
+    const warm = { ...downloading({ pct: 47, loaded: 1, total: 2 }), status: 'loading' };
+
+    assert.strictEqual(statusLabel(warm).label, 'Loading GPU model…');
+    assert.doesNotMatch(statusLabel(warm).label, /\d/);
+  });
+});

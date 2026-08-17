@@ -86,7 +86,24 @@ export function statusLabel(state: EngineStateRecord | null): StatusLabel {
   switch (state.status) {
     case 'ready':
       return { label: 'Ready', tone: 'ok', detail: engineName };
+    case 'downloading': {
+      // Deliberately distinct from 'loading'. Warming a cached model takes ~20s
+      // and moves no bytes; fetching the encoder takes ~90s and moves 1.2GB.
+      // One word for both is why a blocked press promised "ready shortly" when
+      // it might have been minutes.
+      const pct = state.progress?.pct;
+      return {
+        label: Number.isFinite(pct)
+          ? `Downloading ${engineName} model — ${pct}%`
+          : `Downloading ${engineName} model…`,
+        tone: 'busy',
+        detail: engineName,
+      };
+    }
     case 'loading':
+      // No number here, ever. There are no bytes in flight to report, so any
+      // percentage would be invented — which is the dishonesty this whole
+      // module exists to remove.
       return { label: `Loading ${engineName} model…`, tone: 'busy', detail: engineName };
     case 'unusable':
       // Prefer the record's own reason — it is written by whatever made the

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { planCapture, type CapturePlan, type EngineStateRecord } from './capture-plan';
 import { createTrayFlasher } from './tray-flash';
+import { singleFlight } from './single-flight';
 import { AudioCapture } from './audio/AudioCapture';
 import { playCompletionSound } from './audio/completion-sound';
 import { playWarningSound } from './audio/warning-sound';
@@ -42,6 +43,14 @@ export default function CaptureApp() {
   const isProcessingRef = useRef(false);
   const isStartingRef = useRef(false); // guards the async start window (re-entrancy)
   const engineStateRef = useRef<EngineStateRecord | null>(null);
+  /**
+   * What the tray should show when nothing transient is happening.
+   *
+   * tray-flash defaults revertTo:'ready', so any 3s flash during a 90s download
+   * ended with the tray asserting Ready while the hotkey was still refusing to
+   * record. Derived from the record, so it is true by construction.
+   */
+  const trayBaselineRef = useRef<'ready' | 'downloading'>('ready');
   /** Routing frozen at record start; used verbatim at stop. */
   const capturePlanRef = useRef<CapturePlan | null>(null);
   const selectedLanguageRef = useRef('');
@@ -61,7 +70,12 @@ export default function CaptureApp() {
    * the same generation counter that already guards transcription results.
    */
   const trayFlashRef = useRef(createTrayFlasher({
-    setState: (s: string) => (window as any).electronAPI?.updateTrayState(s),
+    setState: (s: string) => (window as any).electronAPI?.updateTrayState(
+      s,
+      // The percentage rides along ONLY on the state it describes, so it can
+      // never be left decorating 'ready'.
+      s === 'downloading' ? `${engineStateRef.current?.progress?.pct ?? 0}%` : undefined,
+    ),
     generation: () => requestGenRef.current,
   }));
 
@@ -78,7 +92,31 @@ export default function CaptureApp() {
     ipc?.invoke('webgpu:model-ready', orchestratorRef.current.isReady());
   }, []);
 
-  const initWebGpuOrchestrator = useCallback(async () => {
+  /**
+   * Forward download progress UP to the record, the same way readiness goes up.
+   *
+   * The orchestrator has already aggregated across files and throttled to
+   * whole-percent transitions, so this is at most ~101 messages per download.
+   *
+   * `modelId` is what the download is ABOUT, and it is read from the record
+   * rather than assumed: main drops a tick whose model no longer matches the
+   * selection, which is what makes switching engines mid-download safe.
+   */
+  const reportDownloadProgress = useCallback((progress: { loaded: number; total: number; pct: number }) => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    const modelId = engineStateRef.current?.modelId;
+    if (!modelId) return;
+    ipc?.invoke('webgpu:download-progress', { modelId, ...progress });
+  }, []);
+
+  /**
+   * SINGLE-FLIGHT. Every `engine:state` broadcast asks for an init, and there
+   * are three call sites; the isLoading() check below cannot bound them because
+   * `loading` does not flip until orchestrator.initialize(), three awaits
+   * later. Measured on Windows: hundreds of inits inside a few milliseconds
+   * once the model-store lookup widened that window.
+   */
+  const initWebGpuOrchestrator = useCallback(singleFlight(async () => {
     const api = (window as any).electronAPI;
     if (orchestratorRef.current.isReady() || orchestratorRef.current.isLoading()) return;
     // Declared out here so the catch can record which variant failed.
@@ -120,20 +158,22 @@ export default function CaptureApp() {
       // worker falls back to fetching from the hub as before.
       // OPT-IN until the serving mechanism is proven on Windows.
       //
-      // The model:// scheme does not work: Chromium refuses a cross-origin
-      // fetch from a file:// document to anything outside
-      // chrome/chrome-extension/chrome-untrusted/data/http/https, and a custom
-      // scheme cannot be added to that list. `supportFetchAPI` makes a scheme
-      // fetchable but the origin check happens first.
+      // The URL shape is now http://127.0.0.1:<port>/<token>/<file>, served by
+      // a loopback server in main. The previous model:// scheme could not work:
+      // Chromium refuses a cross-origin fetch from a file:// document to
+      // anything outside chrome/chrome-extension/chrome-untrusted/data/http/
+      // https, and `supportFetchAPI` does not help because the origin check runs
+      // first. Loopback IS on that list, and a probe under Electron 43 confirmed
+      // a real file:// module worker can fetch it byte-identically.
       //
-      // Wiring it on by default replaced a WORKING fp16 path with a broken one,
-      // so it stays behind a flag until a build proves the replacement loads a
-      // model. The store, downloader, manifest and pruning are all fine — only
-      // the URL shape is wrong, and http://127.0.0.1 is on the allowed list.
+      // It STAYS behind --model-store regardless, until a Windows build has
+      // actually loaded a model this way. Wiring the last mechanism on by
+      // default replaced a WORKING fp16 path with a broken one and cost a user
+      // their 1.2GB encoder. A passing probe is not a passing build.
       let urls;
       if (backend === 'webgpu-hybrid' && (window as any).electronAPI?.modelStoreEnabled) {
         const ipc = (window as any).electron?.ipcRenderer;
-        const res = await ipc?.invoke('model:ensure', encoderQuant).catch(() => null);
+        const res = await ipc?.invoke('model:ensure', encoderQuant, engineStateRef.current?.modelId).catch(() => null);
         // filenames rides along with the urls; fp32 cannot attach its weights without it.
         if (res?.success) urls = { ...res.urls, filenames: res.filenames };
         else console.warn('CaptureApp: local model store unavailable, falling back to hub:', res?.error ?? 'no IPC');
@@ -141,7 +181,7 @@ export default function CaptureApp() {
 
       console.log(`CaptureApp: Initializing parakeet.js orchestrator (${backend}, encoder=${encoderQuant}, source=${urls ? 'disk' : 'hub'}, v=${appVersion ?? 'unknown'})...`);
       lastInitAtRef.current = Date.now();
-      await orchestratorRef.current.initialize(backend, appVersion, encoderQuant, urls);
+      await orchestratorRef.current.initialize(backend, appVersion, encoderQuant, urls, reportDownloadProgress);
       initFailRef.current = 0; // success resets the failure/backoff counter
       // fp16 proved itself on this machine — clear any old failure marker so a
       // one-off failure (a driver since updated) is not remembered forever.
@@ -185,7 +225,7 @@ export default function CaptureApp() {
       // failure — so it could only ever become more optimistic.
       reportReadiness();
     }
-  }, []);
+  }), []);
 
   // Load saved config on mount.
   // If a WebGPU model was previously selected, auto-init the orchestrator —
@@ -202,6 +242,23 @@ export default function CaptureApp() {
     const applyEngineState = (state: EngineStateRecord | null) => {
       if (!state) return;
       engineStateRef.current = state;
+      // The tray follows the record for the DOWNLOAD state only. Recording and
+      // processing stay owned by the renderer's own lifecycle — main must not
+      // become a second writer, or a progress tick lands on top of 'recording'.
+      const baseline = state.status === 'downloading' ? 'downloading' : 'ready';
+      const changed = baseline !== trayBaselineRef.current;
+      trayBaselineRef.current = baseline;
+      if (!isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) {
+        // Repaint on every tick while downloading so the tooltip percentage
+        // stays current; otherwise only when the baseline actually changes.
+        if (baseline === 'downloading' || changed) {
+          trayFlashRef.current.cancel();
+          (window as any).electronAPI?.updateTrayState(
+            baseline,
+            baseline === 'downloading' ? `${state.progress?.pct ?? 0}%` : undefined,
+          );
+        }
+      }
       if (state.engine === 'webgpu' && !orchestratorRef.current.isReady()) {
         initWebGpuOrchestrator();
       }
@@ -688,7 +745,16 @@ export default function CaptureApp() {
           isRecordingRef.current = false;
           isStartingRef.current = false;
           clearCountdown();
-          trayFlashRef.current('error');
+          // A WAIT IS NOT AN ERROR. This flashed red for both, so pressing the
+          // hotkey during a perfectly healthy download looked exactly like a
+          // crash. Only an unusable GPU gets the error treatment now; a wait
+          // shows the busy state and reverts to whatever is genuinely true —
+          // which during a download is 'downloading', not 'ready'.
+          if (plan.blockedKind === 'error') {
+            trayFlashRef.current('error', { revertTo: trayBaselineRef.current });
+          } else {
+            trayFlashRef.current('starting', { revertTo: trayBaselineRef.current });
+          }
           return;
         }
 

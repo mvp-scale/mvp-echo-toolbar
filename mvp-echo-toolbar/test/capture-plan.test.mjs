@@ -30,7 +30,9 @@ import { planCapture, FALLBACK_MODEL } from '../app/renderer/app/capture-plan.ts
 
 // engine-state is CommonJS because the main process requires it.
 const require = createRequire(import.meta.url);
-const { createState, select, DEFAULT_MODEL } = require('../app/stt/engine-state');
+const {
+  createState, select, DEFAULT_MODEL, applyModelReady, applyGpu, applyDownloadProgress,
+} = require('../app/stt/engine-state');
 
 const WEBGPU = 'webgpu-parakeet-0.6b';
 
@@ -173,5 +175,99 @@ describe('capture-plan / engine-state must agree on the fallback model', () => {
     // the Rollup named-export problem that broke `vite build`. This test is what
     // makes the duplication safe.
     assert.strictEqual(FALLBACK_MODEL, DEFAULT_MODEL);
+  });
+});
+
+describe('planCapture — a wait is not an error, and each wait says what it is', () => {
+  // The blocked press used to produce ONE sentence — "GPU model still loading —
+  // it will be ready shortly" — for a 20s warm start and a 90s download alike,
+  // and the caller flashed the tray's red error state for both. Pressing the
+  // hotkey during a healthy download looked exactly like a crash.
+  const gpu = (over = {}) => ({
+    ...select(createState(), 'webgpu-parakeet-0.6b'),
+    gpu: 'usable',
+    ...over,
+  });
+
+  test('a download names the percentage and what to do about it', () => {
+    const plan = planCapture(
+      gpu({ status: 'downloading', progress: { loaded: 470, total: 1000, pct: 47 } }),
+      { orchestratorReady: false },
+    );
+
+    assert.strictEqual(plan.blocked, true, 'still refuses — the selection is never substituted');
+    assert.strictEqual(
+      plan.reason,
+      'Downloading GPU model — 47%. Press again when it is ready, or switch to CPU in Settings.',
+    );
+    assert.strictEqual(plan.blockedKind, 'wait');
+  });
+
+  test('a download with no bytes reported yet still reads as started', () => {
+    const plan = planCapture(gpu({ status: 'downloading', progress: null }), { orchestratorReady: false });
+
+    assert.strictEqual(
+      plan.reason,
+      'Starting the GPU model download. Press again shortly, or switch to CPU in Settings.',
+    );
+    assert.strictEqual(plan.blockedKind, 'wait');
+  });
+
+  test('a warm start keeps its own, shorter message and no number', () => {
+    const plan = planCapture(gpu({ status: 'loading' }), { orchestratorReady: false });
+
+    assert.strictEqual(plan.reason, 'GPU model still loading — it will be ready shortly');
+    assert.doesNotMatch(plan.reason, /\d/, 'no bytes are moving, so there is no percentage to give');
+    assert.strictEqual(plan.blockedKind, 'wait');
+  });
+
+  test('an unusable GPU is the only one of these that is an error', () => {
+    const plan = planCapture(gpu({ gpu: 'unusable', status: 'unusable' }), { orchestratorReady: false });
+
+    assert.strictEqual(plan.reason, 'GPU unavailable — select the CPU engine in Settings to record');
+    assert.strictEqual(plan.blockedKind, 'error',
+      'this one genuinely needs the red treatment; a download does not');
+  });
+
+  test('the three waiting states produce three different sentences', () => {
+    const reasons = [
+      planCapture(gpu({ status: 'downloading', progress: { loaded: 1, total: 2, pct: 50 } }), {}).reason,
+      planCapture(gpu({ status: 'downloading', progress: null }), {}).reason,
+      planCapture(gpu({ status: 'loading' }), {}).reason,
+    ];
+
+    assert.strictEqual(new Set(reasons).size, 3, 'if two waits read the same, one of them is lying');
+  });
+
+  test('an unblocked plan carries no blockedKind', () => {
+    const plan = planCapture(gpu({ status: 'ready' }), { orchestratorReady: true });
+
+    assert.strictEqual(plan.blocked, false);
+    assert.strictEqual(plan.blockedKind, null);
+  });
+});
+
+describe('capture-plan / engine-state must agree on the status vocabulary', () => {
+  test('every status engine-state can produce is one capture-plan knows', () => {
+    // EngineStateRecord.status is hand-mirrored from engine-state.js for the
+    // same CommonJS/ESM reason as FALLBACK_MODEL above. Without this, adding a
+    // status in main leaves the renderer's union stale and the mismatch only
+    // shows up as a `default:` branch quietly swallowing a real state.
+    const gpuState = select(createState(), 'webgpu-parakeet-0.6b');
+    const produced = new Set([
+      createState().status,
+      gpuState.status,
+      applyModelReady(gpuState, true).status,
+      applyModelReady(gpuState, false).status,
+      applyGpu(gpuState, 'unusable').status,
+      applyDownloadProgress(gpuState, {
+        modelId: 'webgpu-parakeet-0.6b', loaded: 1, total: 2, pct: 50,
+      }).status,
+    ]);
+
+    const known = new Set(['ready', 'loading', 'downloading', 'unusable', 'unknown']);
+    for (const s of produced) {
+      assert.ok(known.has(s), `engine-state produces status "${s}" which capture-plan does not declare`);
+    }
   });
 });

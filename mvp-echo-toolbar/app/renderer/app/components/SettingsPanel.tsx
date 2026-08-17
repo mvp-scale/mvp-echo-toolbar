@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { endpointStatusLabel, type EndpointProbe } from '../engine-status-label';
+import type { EngineStateRecord } from '../capture-plan';
 
 // 'error' exists because a model card was previously incapable of expressing
 // failure: a rejected switch logged to a console nobody was reading and then
@@ -58,13 +59,22 @@ function StarRating({ rating }: { rating: number }) {
   return <span className="flex items-center gap-0.5">{dots}</span>;
 }
 
-function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: ModelOption) => void }) {
+function ModelCard(
+  { model, onSelect, downloadPct }:
+  { model: ModelOption; onSelect: (m: ModelOption) => void; downloadPct?: number | null },
+) {
   const isActive = model.state === 'loaded';
   const isSwitching = model.state === 'switching';
   const isDownloading = model.state === 'downloading';
   const needsDownload = model.state === 'download';
   const isError = model.state === 'error';
   const isBusy = isSwitching || isDownloading;
+  // The real number, from the record. This card used to say "Downloading..."
+  // and point at a console — the only string in the product that asked the user
+  // to open developer tools to find out what was happening.
+  const downloadLabel = Number.isFinite(downloadPct)
+    ? `Downloading ${downloadPct}%`
+    : 'Downloading...';
 
   return (
     <button
@@ -86,7 +96,7 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
           isError ? 'text-red-400 font-semibold' :
           'text-foreground'
         }`}>
-          {isSwitching ? 'Switching...' : isDownloading ? 'Downloading...' : model.label}
+          {isSwitching ? 'Switching...' : isDownloading ? downloadLabel : model.label}
         </span>
         {/* Shown on a SELECTED card too, not just a failed one. A hosted model
             whose server has no /v1/models/switch route is still your selection;
@@ -102,11 +112,6 @@ function ModelCard({ model, onSelect }: { model: ModelOption; onSelect: (m: Mode
         {needsDownload && (
           <span className="text-[7px] bg-blue-50 text-blue-500 px-1 py-0.5 rounded font-medium">
             download
-          </span>
-        )}
-        {isDownloading && (
-          <span className="text-[7px] text-muted-foreground px-1 py-0.5">
-            check console for progress
           </span>
         )}
         {model.note && !isBusy && !needsDownload && (
@@ -127,7 +132,20 @@ type MicReadinessMode = 'keep-ready' | 'release-each';
 /** Long enough to cover normal typing, short enough to feel like autosave. */
 const SAVE_DEBOUNCE_MS = 700;
 
-export default function SettingsPanel() {
+/**
+ * `engineState` arrives as a prop rather than through a second 'engine:state'
+ * subscription, because PopupApp already holds the record for StatusIndicator.
+ * A duplicate listener inside this component is what produced the orphaned
+ * poll it already had to fix once.
+ */
+export default function SettingsPanel({ engineState = null }: { engineState?: EngineStateRecord | null }) {
+  // Keyed on the model the bytes are FOR, never on whichever card is busy —
+  // the same rule the record itself applies. A percentage on the wrong card is
+  // worse than no percentage.
+  const downloadPctFor = (modelId: string): number | null =>
+    (engineState?.status === 'downloading' && engineState.modelId === modelId
+      ? engineState.progress?.pct ?? null
+      : null);
   // Starts EMPTY. It used to be seeded with a real LAN address, so the field
   // displayed a URL that had never been saved — the endpoint looked configured
   // while the adapter had none, and selecting a hosted model failed with
@@ -623,7 +641,7 @@ export default function SettingsPanel() {
           </div>
 
           {hostedModels.map(model => (
-            <ModelCard key={model.id} model={model} onSelect={handleSelectModel} />
+            <ModelCard key={model.id} model={model} onSelect={handleSelectModel} downloadPct={downloadPctFor(model.id)} />
           ))}
 
           {/* Divider */}
@@ -647,7 +665,7 @@ export default function SettingsPanel() {
             </div>
           )}
           {localAllModels.map(model => (
-            <ModelCard key={model.id} model={model} onSelect={handleSelectModel} />
+            <ModelCard key={model.id} model={model} onSelect={handleSelectModel} downloadPct={downloadPctFor(model.id)} />
           ))}
         </div>
 

@@ -19,6 +19,11 @@ const STATES = {
   processing: { icon: 'tray-processing.png', tooltip: 'MVP-Echo - Processing...' },
   done:       { icon: 'tray-done.png',       tooltip: 'MVP-Echo - Copied!' },
   error:      { icon: 'tray-error.png',      tooltip: 'MVP-Echo - Error' },
+  // A download is a WAIT, not a failure. Without a state of its own, pressing
+  // the hotkey mid-download flashed the red error icon — indistinguishable from
+  // a crash, for a machine that was working perfectly. Reuses the processing
+  // icon exactly as `starting` does; setState appends the percentage.
+  downloading: { icon: 'tray-processing.png', tooltip: 'MVP-Echo - Downloading GPU model...' },
 };
 
 class TrayManager {
@@ -94,7 +99,7 @@ class TrayManager {
   /**
    * Update tray state (icon + tooltip)
    */
-  setState(state) {
+  setState(state, detail) {
     if (!this.tray || !STATES[state]) return;
 
     // Clear any pending done->ready timeout
@@ -106,7 +111,9 @@ class TrayManager {
     this.state = state;
     const stateConfig = STATES[state];
     this.tray.setImage(this.getIcon(state));
-    this.tray.setToolTip(stateConfig.tooltip);
+    // `detail` is appended, never stored, so it cannot outlive the state that
+    // carried it — a percentage still sitting on "Ready" would be a lie.
+    this.tray.setToolTip(detail ? `${stateConfig.tooltip} ${detail}` : stateConfig.tooltip);
 
     // Auto-revert done -> ready after 3 seconds
     if (state === 'done') {
@@ -136,3 +143,5 @@ class TrayManager {
 }
 
 module.exports = TrayManager;
+// Exported for test/tray-manager.test.js — the state table is the contract.
+module.exports.STATES = STATES;

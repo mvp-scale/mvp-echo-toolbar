@@ -1,17 +1,19 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, clipboard, net } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { pathToFileURL } = require('url');
 
 const { EngineManager } = require('../stt/engine-manager');
 const TrayManager = require('./tray-manager');
 const { log, clearLog, getLogPath, flushSync } = require('./logger');
 const { ensureModel, modelDir, isComplete } = require('./model-store');
+const { createModelServer } = require('./model-server');
 
 const engineManager = new EngineManager();
 const trayManager = new TrayManager();
 const logPath = getLogPath();
+/** The loopback model server. Created at app-ready, bound lazily on first use. */
+let modelServer = null;
 
 // ── Diagnostics flag ──
 // OFF by default (clean, quiet console). Enable at launch with either:
@@ -21,19 +23,20 @@ const logPath = getLogPath();
 // a dedicated diagnostics file (separate from the general debug log).
 const DIAG_ENABLED = process.argv.includes('--diag') || !!process.env.MVP_DEBUG;
 
-// ── model:// — GPU model files served from disk ──
+// ── GPU model files served from disk, over loopback ──
 //
-// parakeet hands onnxruntime a URL and ORT fetches it, so serving the files off
-// a scheme is what lets them live on disk instead of in IndexedDB — which was
+// parakeet hands onnxruntime a URL and ORT fetches it, so serving the files
+// ourselves is what lets them live on disk instead of in IndexedDB — which was
 // observed losing a healthy 2.3GB copy between two inits thirty seconds apart.
 //
-// registerSchemesAsPrivileged MUST run before app-ready. `stream` matters: the
-// payload is a 1.2GB encoder that must not be buffered whole. `supportFetchAPI`
-// is what makes it reachable from fetch() inside the worker at all.
-const MODEL_SCHEME = 'model';
-protocol.registerSchemesAsPrivileged([
-  { scheme: MODEL_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
-]);
+// This was a `model://` custom protocol and that CANNOT work, whatever
+// privileges it is registered with: Chromium refuses a cross-origin fetch from
+// a `file://` document to any scheme outside chrome / chrome-extension /
+// chrome-untrusted / data / http / https, and the initiator-origin check runs
+// before `supportFetchAPI` is ever consulted. `http://127.0.0.1` is on that
+// list, so the fix is a loopback server and nothing else changes — same files,
+// same manifest, same downloader, different URL shape. See model-server.js for
+// the measured evidence.
 
 // ── Cross-origin isolation toggle ──
 // OFF by default since 3.1.0. On via --coi / MVP_COI=1.
@@ -206,6 +209,27 @@ function getPreloadPath() {
 }
 
 /**
+ * CLI flags the PRELOAD needs, forwarded explicitly.
+ *
+ * The preload runs in the RENDERER process, whose command line is Chromium's,
+ * not the app's — measured: main sees `--model-store`, the preload sees
+ * `--type=renderer --enable-crash-reporter=... --user-data-dir=...`. So
+ * `process.argv.includes('--model-store')` inside preload.js was ALWAYS false,
+ * in dev and packaged alike. The on-disk model store therefore had no working
+ * way to be switched on at all, and every run silently took the hub path.
+ *
+ * `--diag` never hit this because it is answered over IPC (`diag:enabled`),
+ * which is why one flag worked and the other quietly did not.
+ *
+ * additionalArguments is the documented way to put a value on the renderer's
+ * own argv. test/renderer-flags.test.js keeps this list in step with whatever
+ * the preload actually reads.
+ */
+function rendererFlags() {
+  return process.argv.includes('--no-model-store') ? ['--no-model-store'] : [];
+}
+
+/**
  * Should windows load from the Vite dev server rather than the built bundle?
  *
  * Both conditions are required:
@@ -365,6 +389,7 @@ function createHiddenWindow() {
       nodeIntegration: false,
       sandbox: false,
       preload: preloadPath,
+      additionalArguments: rendererFlags(),
     },
   });
 
@@ -435,6 +460,7 @@ function createPopupWindow() {
       nodeIntegration: false,
       sandbox: false,
       preload: preloadPath,
+      additionalArguments: rendererFlags(),
     },
   });
 
@@ -548,6 +574,7 @@ function showWelcomeWindow() {
       nodeIntegration: false,
       sandbox: false,
       preload: preloadPath,
+      additionalArguments: rendererFlags(),
     },
   });
 
@@ -574,16 +601,8 @@ function showWelcomeWindow() {
 // ── App Lifecycle ──
 
 app.whenReady().then(async () => {
-  // Serve model:// from the on-disk store. Electron streams the file and handles
-  // ranges itself via net.fetch on a file:// URL — that is the whole serving
-  // layer, no hand-rolled file server.
   const MODELS_DIR = modelDir({ fallbackDir: app.getPath('userData') });
-  protocol.handle(MODEL_SCHEME, (req) => {
-    // basename() confines this to MODELS_DIR: model://models/../../secret must not resolve.
-    const target = path.join(MODELS_DIR, path.basename(new URL(req.url).pathname));
-    if (!fs.existsSync(target)) return new Response('not found', { status: 404 });
-    return net.fetch(pathToFileURL(target).toString());
-  });
+  modelServer = createModelServer({ dir: MODELS_DIR });
   log(`MVP-Echo Toolbar: model store = ${MODELS_DIR}`);
 
   // Fetch the GPU model for `variant` if it is not already on disk, and hand
@@ -591,18 +610,31 @@ app.whenReady().then(async () => {
   // honours system proxies, PAC scripts and corporate certificate stores, which
   // Node's ignores — using Node here would break every user behind a corporate
   // proxy who works today.
-  ipcMain.handle('model:ensure', async (_e, variant) => {
+  ipcMain.handle('model:ensure', async (_e, variant, modelId) => {
     try {
+      // Started here rather than at app-ready so a user who never selects the
+      // GPU engine never has a listening socket at all. start() is idempotent
+      // and single-flight, so a switch, a retry and a restart share one port.
+      const addr = await modelServer.start();
       if (isComplete(variant, MODELS_DIR)) log(`ModelStore: ${variant} already on disk — no download`);
       const res = await ensureModel(variant, {
         dir: MODELS_DIR,
+        urlFor: modelServer.urlFor,
         fetchImpl: net.fetch,
-        onProgress: ({ file, pct, loaded, total }) => {
-          const hidden = hiddenWindow && !hiddenWindow.isDestroyed() ? hiddenWindow : null;
-          hidden?.webContents.send('model:download-progress', { file, pct, loaded, total });
+        // Straight into the record. This ran in the renderer's direction before,
+        // on a channel with no listener and no preload entry — the second of the
+        // two dead progress signals. EngineManager lives in this process, so
+        // there is no IPC hop: the store's own cumulative total (computed from
+        // the manifest before the first byte) becomes the percentage the user
+        // sees, with no aggregation needed.
+        onProgress: ({ pct, loaded, total }) => {
+          engineManager.reportDownloadProgress({ modelId, loaded, total, pct });
         },
       });
       if (res.pruned.length) log(`ModelStore: pruned stale variant files: ${res.pruned.join(', ')}`);
+      // The port, never the token: the log is pasted into issues, and a token in
+      // it would be a working URL to the model directory for the session.
+      log(`ModelStore: serving ${variant} on 127.0.0.1:${addr.port}`);
       return { success: true, urls: res.urls, filenames: res.filenames };
     } catch (err) {
       log('ModelStore: ensure failed:', err);
@@ -807,6 +839,10 @@ app.on('will-quit', () => {
 
 app.on('before-quit', () => {
   trayManager.destroy();
+  // Quit is one of the things a user can do DURING a 1.2GB load. Close the
+  // listener so the port goes with the process rather than being held by a
+  // half-open renderer socket.
+  modelServer?.close().catch(() => {});
   log('MVP-Echo Toolbar: Shutting down');
 });
 
@@ -923,8 +959,8 @@ ipcMain.handle('capture:request-reload', async () => {
 // unsynchronized source of truth: the 30s one fired mid-transcription and
 // flipped the tray to "ready" while the renderer was still processing, so the
 // next shortcut press was silently ignored ("alive but dead"). Removed.
-ipcMain.handle('tray:update-state', async (_event, state) => {
-  trayManager.setState(state);
+ipcMain.handle('tray:update-state', async (_event, state, detail) => {
+  trayManager.setState(state, detail);
   return { success: true };
 });
 

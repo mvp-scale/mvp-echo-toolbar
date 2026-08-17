@@ -38,6 +38,16 @@ const TINY = {
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mvp-store-'));
 
+/**
+ * Stands in for the loopback server's own `urlFor` — the same shape, without
+ * binding a port. The store no longer builds URLs itself; it is handed a
+ * function by whoever owns the port and the session token. That the shape is
+ * `http://127.0.0.1` and not a custom scheme is the whole of Phase 1: Chromium
+ * refuses a `file://` document any scheme outside http/https/data/chrome*.
+ */
+const FAKE_BASE = 'http://127.0.0.1:49152/deadbeefdeadbeefdeadbeefdeadbeef';
+const fakeUrlFor = (name) => `${FAKE_BASE}/${encodeURIComponent(name)}`;
+
 /** Write every file for a variant at its declared size. */
 function populate(dir, variant, { short = null } = {}) {
   fs.mkdirSync(dir, { recursive: true });
@@ -142,11 +152,28 @@ describe('ensureModel', () => {
     const dir = tmp();
     const calls = [];
 
-    const { urls } = await ensureModel('fp16', { dir, manifest: TINY, fetchImpl: () => {}, download: fakeDownload(calls) });
+    const { urls } = await ensureModel('fp16', { dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: fakeDownload(calls) });
 
     assert.strictEqual(calls.length, TINY.fp16.length);
-    assert.ok(urls.encoderUrl.startsWith('model://'), 'urls must point at the scheme, not the network');
+    assert.ok(urls.encoderUrl.startsWith('http://127.0.0.1:'),
+      'the loopback server, not the network — and not a custom scheme, which a file:// worker cannot fetch');
     assert.ok(urls.decoderUrl && urls.tokenizerUrl, 'fromUrls needs all three');
+  });
+
+  test('without a urlFor it refuses BEFORE downloading, not after', async () => {
+    // A missing urlFor is a caller that never started the server. Finding out
+    // afterwards means 1.2GB moved to produce URLs that cannot be fetched — and
+    // that failure arrives inside ORT looking like a capability problem, which
+    // is the exact misreading that cost a user their encoder last time.
+    const dir = tmp();
+    let downloaded = 0;
+
+    await assert.rejects(
+      ensureModel('fp16', { dir, manifest: TINY, fetchImpl: () => {}, download: async () => { downloaded++; } }),
+      /urlFor/,
+    );
+
+    assert.strictEqual(downloaded, 0, 'nothing should have been fetched');
   });
 
   test('progress is cumulative across files and ends at 100%', async () => {
@@ -154,7 +181,7 @@ describe('ensureModel', () => {
     let lastPct = 0;
 
     await ensureModel('fp16', {
-      dir, manifest: TINY, fetchImpl: () => {}, download: fakeDownload([]),
+      dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: fakeDownload([]),
       onProgress: ({ pct }) => { lastPct = pct; },
     });
 
@@ -166,7 +193,7 @@ describe('ensureModel', () => {
     const calls = [];
 
     await ensureModel('fp16', {
-      dir, base: 'https://mirror.internal/models', manifest: TINY, fetchImpl: () => {}, download: fakeDownload(calls),
+      dir, base: 'https://mirror.internal/models', manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: fakeDownload(calls),
     });
 
     assert.ok(calls.every((u) => u.startsWith('https://mirror.internal/models/')), calls[0]);
@@ -177,7 +204,7 @@ describe('ensureModel', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'encoder-model.int8.onnx'), Buffer.alloc(10));
 
-    const { pruned } = await ensureModel('fp16', { dir, manifest: TINY, fetchImpl: () => {}, download: fakeDownload([]) });
+    const { pruned } = await ensureModel('fp16', { dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: fakeDownload([]) });
 
     assert.deepStrictEqual(pruned, ['encoder-model.int8.onnx']);
   });
@@ -189,7 +216,7 @@ describe('ensureModel', () => {
     fs.writeFileSync(path.join(dir, 'encoder-model.int8.onnx'), Buffer.alloc(10));
 
     await assert.rejects(ensureModel('fp16', {
-      dir, manifest: TINY, fetchImpl: () => {}, download: async () => { throw new Error('network down'); },
+      dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: async () => { throw new Error('network down'); },
     }));
 
     assert.strictEqual(fs.existsSync(path.join(dir, 'encoder-model.int8.onnx')), true,
@@ -197,7 +224,7 @@ describe('ensureModel', () => {
   });
 
   test('an unknown variant is rejected by name', async () => {
-    await assert.rejects(ensureModel('fp64', { dir: tmp(), manifest: TINY, fetchImpl: () => {} }), /fp64/);
+    await assert.rejects(ensureModel('fp64', { dir: tmp(), manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {} }), /fp64/);
   });
 });
 
@@ -229,7 +256,7 @@ describe('fp32 — external data, split into parts', () => {
     const single = [], multi = [];
 
     await ensureModel('fp32', {
-      dir, manifest: FP32, fetchImpl: () => {},
+      dir, manifest: FP32, urlFor: fakeUrlFor, fetchImpl: () => {},
       download: async (url, dest, o) => { single.push(url); fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes)); return {}; },
       downloadMulti: async (urls, dest, o) => { multi.push(...urls); fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes)); return {}; },
     });
@@ -243,7 +270,7 @@ describe('fp32 — external data, split into parts', () => {
     const dir = tmp();
 
     const { urls } = await ensureModel('fp32', {
-      dir, manifest: FP32, fetchImpl: () => {},
+      dir, manifest: FP32, urlFor: fakeUrlFor, fetchImpl: () => {},
       download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
       downloadMulti: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
     });
@@ -256,7 +283,7 @@ describe('fp32 — external data, split into parts', () => {
     const dir = tmp();
 
     const res = await ensureModel('fp32', {
-      dir, manifest: FP32, fetchImpl: () => {},
+      dir, manifest: FP32, urlFor: fakeUrlFor, fetchImpl: () => {},
       download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
       downloadMulti: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; },
     });
@@ -313,7 +340,7 @@ describe('ensureModel is single-flight', () => {
       return { path: dest, bytes: o.expectedBytes };
     };
 
-    const opts = { dir, manifest: TINY, fetchImpl: () => {}, download: slowDownload };
+    const opts = { dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: slowDownload };
     const [a, b, c] = await Promise.all([
       ensureModel('fp16', opts), ensureModel('fp16', opts), ensureModel('fp16', opts),
     ]);
@@ -333,7 +360,7 @@ describe('ensureModel is single-flight', () => {
       return { path: dest, bytes: o.expectedBytes };
     };
 
-    const opts = { dir, manifest: TINY, fetchImpl: () => {}, download: flaky };
+    const opts = { dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {}, download: flaky };
     await assert.rejects(ensureModel('fp16', opts));
     const res = await ensureModel('fp16', opts);
 
@@ -342,7 +369,7 @@ describe('ensureModel is single-flight', () => {
 
   test('different variants are not serialised behind each other', async () => {
     const dir = tmp();
-    const opts = { dir, manifest: TINY, fetchImpl: () => {},
+    const opts = { dir, manifest: TINY, urlFor: fakeUrlFor, fetchImpl: () => {},
       download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; } };
 
     const [f, i] = await Promise.all([ensureModel('fp16', opts), ensureModel('int8', opts)]);

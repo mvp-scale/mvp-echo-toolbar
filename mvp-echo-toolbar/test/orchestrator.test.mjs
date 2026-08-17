@@ -362,3 +362,85 @@ describe('initialize refuses to thrash after repeated failures', () => {
     assert.strictEqual(orch.isReady(), true, 'a recovered machine must not stay locked out');
   });
 });
+
+// ── Download progress reaches the caller, aggregated ───────────────────────
+//
+// This branch existed and threw its data away: it rearmed the stall timer,
+// console.logged, and dropped the tick (inference-orchestrator.ts, the
+// 'download-progress' case). That is why SettingsPanel said "check console for
+// progress" — the console was genuinely the only place it went.
+
+describe('download progress is forwarded, not just logged', () => {
+  test('the caller receives an aggregate, not the raw per-file tick', async () => {
+    const { orch, latest } = makeOrchestrator(500);
+    const seen = [];
+
+    const init = orch.initialize('webgpu-hybrid', undefined, 'fp32', undefined, (p) => seen.push(p));
+    await flush();
+    const w = latest();
+
+    // Two files, as a real parakeet download reports: each runs its own 0→100%.
+    w.emit({ type: 'download-progress', file: 'encoder.onnx', loaded: 500, total: 1000, pct: 50 });
+    w.emit({ type: 'download-progress', file: 'decoder.onnx', loaded: 0, total: 1000, pct: 0 });
+    w.emit({ type: 'ready' });
+    await init;
+
+    assert.ok(seen.length >= 2, 'progress must reach the caller at all');
+    assert.strictEqual(seen[0].pct, 50, 'first file alone: 500 of 1000');
+    assert.strictEqual(seen[1].total, 2000, 'the denominator is every file seen, not the latest one');
+    assert.strictEqual(seen[1].pct, 25, 'aggregate — NOT the raw 0% the second file reported');
+  });
+
+  test('repeated ticks at the same percent are not forwarded', async () => {
+    // The bound at the emitter: a 1.2GB download produces tens of thousands of
+    // raw ticks, and every forward becomes an IPC message plus a broadcast to
+    // three windows.
+    const { orch, latest } = makeOrchestrator(500);
+    const seen = [];
+
+    const init = orch.initialize('webgpu-hybrid', undefined, 'fp32', undefined, (p) => seen.push(p));
+    await flush();
+    const w = latest();
+
+    for (let i = 0; i < 50; i++) {
+      w.emit({ type: 'download-progress', file: 'encoder.onnx', loaded: 500 + i, total: 100000, pct: 0 });
+    }
+    w.emit({ type: 'ready' });
+    await init;
+
+    assert.strictEqual(seen.length, 1, `50 sub-percent ticks must collapse to 1, got ${seen.length}`);
+  });
+
+  test('a second init does not inherit the first download\'s progress', async () => {
+    const { orch, latest } = makeOrchestrator(500);
+    const first = [];
+    const second = [];
+
+    const a = orch.initialize('webgpu-hybrid', undefined, 'fp32', undefined, (p) => first.push(p));
+    await flush();
+    latest().emit({ type: 'download-progress', file: 'encoder.onnx', loaded: 1000, total: 1000, pct: 100 });
+    latest().emit({ type: 'ready' });
+    await a;
+
+    orch.dispose();
+    const b = orch.initialize('webgpu-hybrid', undefined, 'fp32', undefined, (p) => second.push(p));
+    await flush();
+    latest().emit({ type: 'download-progress', file: 'encoder.onnx', loaded: 0, total: 1000, pct: 0 });
+    latest().emit({ type: 'ready' });
+    await b;
+
+    assert.strictEqual(second[0]?.pct, 0, 'a fresh download starts at 0, not at the last one\'s 100');
+  });
+
+  test('omitting the callback is safe — nothing else changes', async () => {
+    const { orch, latest } = makeOrchestrator(500);
+
+    const init = orch.initialize('webgpu-hybrid');
+    await flush();
+    latest().emit({ type: 'download-progress', file: 'x', loaded: 1, total: 2, pct: 50 });
+    latest().emit({ type: 'ready' });
+
+    await init;
+    assert.strictEqual(orch.isReady(), true);
+  });
+});

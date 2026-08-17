@@ -29,11 +29,6 @@ class WebGpuModelManager {
     return this._ready;
   }
 
-  /** @returns {string} Current state. */
-  getDownloadState() {
-    return this._ready ? 'completed' : 'idle';
-  }
-
   /** @returns {Array} Single-entry list for the WebGPU model. */
   listModels() {
     return [{

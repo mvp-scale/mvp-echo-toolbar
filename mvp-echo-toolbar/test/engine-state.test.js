@@ -250,3 +250,138 @@ describe('applyModelReady — the renderer reports readiness UP', () => {
     assert.strictEqual(after.engine, 'local');
   });
 });
+
+/**
+ * Download progress — the record learns 'downloading', and cannot lie about it.
+ *
+ * Decision and rationale: _review/DOWNLOAD-STATE-DECISION.md.
+ *
+ * Until now `loading` covered both "warming a cached model" (~20s, no bytes
+ * moving) and "fetching 1.2GB" (~90s), which is why the blocked-press message
+ * said "ready shortly" when it might be minutes away.
+ *
+ * The two properties under test here are the ones that bite in production and
+ * cannot be seen by reading the code: that a late tick for a model the user has
+ * moved off cannot change the record, and that a percentage can never be
+ * persisted and resurrected onto an engine that downloads nothing.
+ */
+describe('applyDownloadProgress — bytes are a fact about ONE model', () => {
+  const { applyDownloadProgress } = require('../app/stt/engine-state');
+  const GPU = 'webgpu-parakeet-0.6b';
+
+  const downloading = (pct = 47) => applyDownloadProgress(
+    select(createState(), GPU),
+    { modelId: GPU, loaded: pct * 10, total: 1000, pct },
+  );
+
+  test('progress for the selected model sets downloading and the percentage', () => {
+    const after = downloading(47);
+
+    assert.strictEqual(after.status, 'downloading',
+      'downloading must be distinguishable from loading — they are 20s and 90s apart');
+    assert.strictEqual(after.progress.pct, 47);
+    assert.strictEqual(after.progress.loaded, 470);
+    assert.strictEqual(after.progress.total, 1000);
+  });
+
+  test('progress for a DIFFERENT model changes nothing but rev', () => {
+    // The RC-1 assertion. The guard keys on what the download is ABOUT
+    // (payload.modelId), never on what happens to be active — which is the
+    // shape that has produced five separate bugs in this codebase. It also
+    // drops a late tick from a superseded init for free, and makes a
+    // background prefetch for an unselected model invisible by construction.
+    const chosen = select(createState(), 'local-fast');
+
+    const after = applyDownloadProgress(chosen, { modelId: GPU, loaded: 1, total: 2, pct: 50 });
+
+    assert.strictEqual(after.status, chosen.status, 'a download for another model is not this model news');
+    assert.strictEqual(after.progress ?? null, null);
+    assert.ok(after.rev > chosen.rev, 'still bumped, so nothing silently stalls the broadcast');
+  });
+
+  test('it never touches the choice', () => {
+    const after = downloading();
+
+    assert.strictEqual(after.engine, 'webgpu');
+    assert.strictEqual(after.modelId, GPU, 'bytes arriving is not a selection');
+  });
+
+  test('it bumps rev so the record is broadcast', () => {
+    const chosen = select(createState(), GPU);
+
+    assert.ok(applyDownloadProgress(chosen, { modelId: GPU, loaded: 1, total: 2, pct: 50 }).rev > chosen.rev);
+  });
+});
+
+describe('a percentage can never outlive the download it describes', () => {
+  const { applyDownloadProgress, applyModelReady } = require('../app/stt/engine-state');
+  const GPU = 'webgpu-parakeet-0.6b';
+
+  const downloading = () => applyDownloadProgress(
+    select(createState(), GPU),
+    { modelId: GPU, loaded: 470, total: 1000, pct: 47 },
+  );
+
+  test('switching to the CPU engine at 47% clears both status and progress', () => {
+    // THE BUG THIS EXISTS TO PREVENT. switchModel() persists the record
+    // (engine-manager.js:573) and select() passed `status` straight through, so
+    // switching GPU->CPU mid-download wrote {engine:'local', status:'downloading',
+    // progress:{pct:47}} to engine-state.json — and after a restart the popup
+    // read "Downloading CPU model — 47%" forever, with nothing downloading.
+    const after = select(downloading(), 'local-fast');
+
+    assert.notStrictEqual(after.status, 'downloading',
+      'the CPU engine downloads nothing; it can never be in this state');
+    assert.strictEqual(after.progress ?? null, null,
+      'an abandoned percentage must not leak onto the engine the user moved to');
+  });
+
+  test('a persisted downloading state does not survive a restart', () => {
+    // Nothing is in flight at boot, by definition.
+    const after = restore({ modelId: GPU, status: 'downloading', progress: { pct: 47, loaded: 470, total: 1000 } });
+
+    assert.notStrictEqual(after.status, 'downloading');
+    assert.strictEqual(after.progress ?? null, null);
+  });
+
+  test('becoming ready clears the percentage', () => {
+    const after = applyModelReady(downloading(), true);
+
+    assert.strictEqual(after.status, 'ready');
+    assert.strictEqual(after.progress ?? null, null, 'a finished load has no percentage');
+  });
+
+  test('a not-ready report also clears it', () => {
+    const after = applyModelReady(downloading(), false);
+
+    assert.strictEqual(after.status, 'loading');
+    assert.strictEqual(after.progress ?? null, null);
+  });
+
+  test('an unusable GPU wins over a download in flight', () => {
+    const after = applyGpu(downloading(), 'unusable');
+
+    assert.strictEqual(after.status, 'unusable', 'a definitive negative outranks progress');
+    assert.strictEqual(after.progress ?? null, null);
+  });
+
+  test('progress is non-null if and only if the status is downloading', () => {
+    // The invariant stated once, checked across every transition that exists.
+    const states = [
+      createState(),
+      select(createState(), GPU),
+      downloading(),
+      select(downloading(), 'local-fast'),
+      applyModelReady(downloading(), true),
+      applyGpu(downloading(), 'unusable'),
+      restore({ modelId: GPU, status: 'downloading', progress: { pct: 47 } }),
+    ];
+
+    for (const s of states) {
+      assert.strictEqual(
+        (s.progress ?? null) !== null, s.status === 'downloading',
+        `invariant broken for status=${s.status} progress=${JSON.stringify(s.progress ?? null)}`,
+      );
+    }
+  });
+});

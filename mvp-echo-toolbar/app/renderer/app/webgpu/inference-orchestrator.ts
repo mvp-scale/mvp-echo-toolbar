@@ -8,6 +8,7 @@
  */
 
 import { prepareModelCache } from './model-cache';
+import { createProgressAggregator, type AggregateProgress } from './download-progress';
 
 export interface TranscriptionResult {
   text: string;
@@ -58,6 +59,16 @@ export class InferenceOrchestrator {
   private teardownEpoch = 0;
 
   /**
+   * Where download ticks go for the init currently in flight, or null.
+   *
+   * Set by initialize() and cleared when it settles, so a tick from a
+   * superseded worker cannot report against a newer download. The aggregator
+   * behind it is created per init — otherwise a second download would inherit
+   * the first's file map and open at 100%.
+   */
+  private progressSink: ((tick: { file: string; loaded: number; total: number }) => void) | null = null;
+
+  /**
    * How long init may go with NO progress before it is declared hung.
    *
    * Deliberately a STALL window, not a total budget — see sendMessage().
@@ -106,8 +117,14 @@ export class InferenceOrchestrator {
     appVersion?: string,
     /** Which encoder this machine can run. Decided by the caller's capability probe. */
     encoderQuant: 'fp32' | 'fp16' = 'fp32',
-    /** Local model:// URLs. When present the worker skips the hub entirely. */
-    urls?: Record<string, unknown>
+    /** Local loopback URLs. When present the worker skips the hub entirely. */
+    urls?: Record<string, unknown>,
+    /**
+     * Called as bytes arrive, with the AGGREGATE across every file — already
+     * throttled to whole-percent transitions. Optional: omitting it leaves the
+     * download behaving exactly as before.
+     */
+    onProgress?: (progress: AggregateProgress) => void
   ): Promise<void> {
     if (this.loading) throw new AlreadyLoadingError();
     if (this.modelReady) return;
@@ -119,6 +136,17 @@ export class InferenceOrchestrator {
 
     this.loading = true;
     const myEpoch = this.teardownEpoch;
+
+    // One aggregator per download. parakeet reports a percentage PER FILE, so
+    // forwarding raw ticks makes the user watch 0→100% once per file; and a
+    // shared aggregator would let a second download open at the first's 100%.
+    const aggregate = createProgressAggregator();
+    this.progressSink = onProgress
+      ? (tick) => {
+        const agg = aggregate.push(tick);
+        if (agg) onProgress(agg);
+      }
+      : null;
 
     try {
       // Always prep the cache: requests persistent storage (so the ~1.2GB blob
@@ -207,6 +235,9 @@ export class InferenceOrchestrator {
       throw err;
     } finally {
       this.loading = false;
+      // Cleared on BOTH paths. Left set, a late tick from a worker this init
+      // already abandoned would report progress against whatever came next.
+      this.progressSink = null;
     }
   }
 
@@ -326,7 +357,11 @@ export class InferenceOrchestrator {
         if (data.type === responseType) { cleanup(); resolve(data); }
         else if (data.type === 'error') { cleanup(); reject(new Error(data.message)); }
         else if (data.type === 'download-progress') {
+          // arm() fires on every RAW tick, never on the throttled forward below.
+          // Throttling the stall timer would let a slow-but-alive download be
+          // killed as hung between two whole-percent transitions.
           arm();
+          this.progressSink?.({ file: data.file, loaded: data.loaded, total: data.total });
           console.log(`[Download] ${data.file}: ${(data.loaded / 1024 / 1024).toFixed(1)}/${(data.total / 1024 / 1024).toFixed(1)} MB (${data.pct}%)`);
         }
       };

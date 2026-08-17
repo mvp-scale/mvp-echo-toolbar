@@ -119,8 +119,8 @@ function pruneOtherVariants(keep, dir, manifest = MANIFEST) {
 
 /**
  * Ensure every file for `variant` is on disk, then return the URL map that
- * `ParakeetModel.fromUrls` expects — pointing at the custom scheme, not the
- * network.
+ * `ParakeetModel.fromUrls` expects — pointing at the local loopback server, not
+ * the network.
  *
  * Downloading is skipped entirely when the files are already present and the
  * right size, which is the whole point: one download per machine, ever.
@@ -160,7 +160,18 @@ async function _ensureModel(variant, opts = {}) {
     fetchImpl,
     onProgress,
     connections = 8,
-    scheme = 'model',
+    /**
+     * How a file on disk becomes a URL the renderer may fetch — supplied by the
+     * loopback server, which owns the port and the per-session token.
+     *
+     * There is deliberately NO default. This used to build `model://models/<f>`
+     * itself, and that shape cannot work: Chromium refuses a cross-origin fetch
+     * from a `file://` document to any scheme outside chrome / chrome-extension
+     * / chrome-untrusted / data / http / https. A default here would let a
+     * caller that forgot to start the server ship URLs that fail at load time,
+     * deep inside ORT, in the shape of a "capability" error. See model-server.js.
+     */
+    urlFor,
     // Injected so the orchestration is testable without moving gigabytes.
     download = downloadFile,
     downloadMulti = downloadParts,
@@ -171,6 +182,11 @@ async function _ensureModel(variant, opts = {}) {
 
   const files = manifest[variant];
   if (!files) throw new Error(`unknown model variant: ${variant}`);
+  // Checked BEFORE any download, not after: finding out the URLs cannot be built
+  // is worth knowing before moving 1.2GB, not once it is already on disk.
+  if (typeof urlFor !== 'function') {
+    throw new Error('ensureModel: urlFor is required — the model server must be started first');
+  }
 
   fs.mkdirSync(dir, { recursive: true });
 
@@ -203,7 +219,7 @@ async function _ensureModel(variant, opts = {}) {
   const pruned = pruneOtherVariants(variant, dir, manifest);
 
   const urls = {};
-  for (const f of files) urls[f.key] = `${scheme}://models/${f.name}`;
+  for (const f of files) urls[f.key] = urlFor(f.name);
 
   // fromUrls derives the external-data path as `filenames.encoder + '.data'`.
   // Without filenames it attaches no external data at all and the fp32 session

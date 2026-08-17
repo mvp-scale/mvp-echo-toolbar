@@ -48,7 +48,7 @@ async function init(
   backend: 'webgpu-hybrid' | 'wasm',
   encoderQuant: 'fp32' | 'fp16' = 'fp32',
   /**
-   * Local model:// URLs from the on-disk store. When present the hub is skipped
+   * Local loopback URLs from the on-disk store. When present the hub is skipped
    * entirely — no network, no IndexedDB. fromHub() is only a thin wrapper around
    * fromUrls(); it resolves the same URLs and caches the bytes in IndexedDB on
    * the way past, which is the part being replaced.

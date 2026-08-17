@@ -191,14 +191,11 @@ class WebGpuBridgeAdapter {
 
   async getHealth() {
     const downloaded = this.modelManager.isModelDownloaded();
-    const downloadState = this.modelManager.getDownloadState();
 
     let state = 'unavailable';
     if (downloaded && this._gpuCapability?.available) {
       state = 'loaded';
     } else if (downloaded && !this._gpuCapability?.available) {
-      state = 'degraded';
-    } else if (downloadState === 'downloading') {
       state = 'degraded';
     }
 
@@ -209,7 +206,6 @@ class WebGpuBridgeAdapter {
       extra: {
         gpu: this._gpuCapability,
         modelDownloaded: downloaded,
-        downloadState,
       },
     };
   }

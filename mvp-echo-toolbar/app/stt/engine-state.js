@@ -61,6 +61,15 @@ function createState(overrides = {}) {
     reason: null,
     gpu: 'indeterminate',
     endpoint: { url: null, verifiedAt: null },
+    /**
+     * Bytes in flight for `modelId`, or null. Non-null ONLY while
+     * status === 'downloading' — see withStatus.
+     *
+     * `at` is a timestamp for a later "about 40s left"; nothing computes an ETA
+     * yet. It is here because carrying one field costs nothing and adding it
+     * later would be a second change to the shape.
+     */
+    progress: null,
     ...overrides,
   };
 }
@@ -74,9 +83,21 @@ function createState(overrides = {}) {
  */
 function withStatus(state) {
   if (state.engine === 'webgpu' && state.gpu === 'unusable') {
-    return { ...state, status: 'unusable', reason: 'GPU unavailable on this system' };
+    // A definitive negative outranks a download in flight: there is no point
+    // reporting 47% toward a model this machine cannot run.
+    return { ...state, status: 'unusable', reason: 'GPU unavailable on this system', progress: null };
   }
-  return { ...state, status: state.status === 'unusable' ? 'unknown' : state.status, reason: null };
+  // 'downloading' is a fact about the WebGPU worker. Any other engine holding it
+  // is stale — and this is the ONE place that can be true, because select() and
+  // restore() both funnel through here.
+  //
+  // Without this, switching GPU -> CPU at 47% wrote {engine:'local',
+  // status:'downloading', progress:{pct:47}} to engine-state.json (switchModel
+  // persists at engine-manager.js:573), and after a restart the popup read
+  // "Downloading CPU model — 47%" forever with nothing downloading.
+  const stale = state.status === 'downloading' && state.engine !== 'webgpu';
+  const status = (state.status === 'unusable' || stale) ? 'unknown' : state.status;
+  return { ...state, status, reason: null, progress: status === 'downloading' ? state.progress : null };
 }
 
 /**
@@ -89,11 +110,18 @@ function withStatus(state) {
 function select(state, modelId) {
   const engine = engineForModel(modelId);
   assertPair(engine, modelId);
+  // Progress describes a download for the model that WAS selected. Choosing a
+  // different one discards it — withStatus catches the webgpu -> other-engine
+  // case, but not webgpu -> a different webgpu model, where the engine is
+  // unchanged and the percentage would otherwise be attributed to the new pick.
+  const movedOn = modelId !== state.modelId;
   return withStatus({
     ...state,
     rev: state.rev + 1,
     engine,
     modelId,
+    status: movedOn && state.status === 'downloading' ? 'unknown' : state.status,
+    progress: movedOn ? null : state.progress,
   });
 }
 
@@ -141,7 +169,15 @@ function restore(saved, { gpu = 'indeterminate' } = {}) {
       gpu,
     });
 
-  return withStatus(base);
+  // Nothing is in flight at boot, by definition — so a persisted 'downloading'
+  // is always a lie, even when the engine still matches. (It should never reach
+  // disk: the progress handler deliberately does not persist. This is the belt
+  // to that braces, because the record IS written on select and on restore.)
+  const atBoot = base.status === 'downloading'
+    ? { ...base, status: 'unknown', progress: null }
+    : base;
+
+  return withStatus(atBoot);
 }
 
 /**
@@ -159,11 +195,38 @@ function applyModelReady(state, ready) {
   // Readiness is a fact about the WebGPU worker specifically; it says nothing
   // about the CPU or remote engines.
   if (next.engine !== 'webgpu') return next;
-  return { ...next, status: ready ? 'ready' : 'loading', reason: null };
+  // Either way the download is over: warm and ready, or back to a plain load
+  // with no bytes being reported. A percentage that outlives its download is
+  // the "stuck at 47%" complaint waiting to happen.
+  return { ...next, status: ready ? 'ready' : 'loading', reason: null, progress: null };
+}
+
+/**
+ * Fold in observed download progress for a specific model.
+ *
+ * THE GUARD IS THE POINT. It compares the payload's `modelId` against the
+ * record — what this download is ABOUT — and NOT `state.engine === 'webgpu'`,
+ * which is what `applyModelReady` above does. Keying on what happens to be
+ * active rather than on what the operation concerns is the shape behind five
+ * separate bugs in this codebase (the `activeAdapter` family), and this would
+ * have been the sixth.
+ *
+ * Keying on the model id also buys two things for free: a late tick from a
+ * superseded init cannot disturb the record, and a background prefetch for a
+ * model the user has not selected is invisible by construction rather than by
+ * a caller remembering to suppress it.
+ *
+ * Never persisted — the handler that calls this deliberately does not save.
+ */
+function applyDownloadProgress(state, { modelId, loaded, total, pct, at = Date.now() } = {}) {
+  const next = { ...state, rev: state.rev + 1 };
+  if (next.modelId !== modelId) return next;
+  return { ...next, status: 'downloading', reason: null, progress: { loaded, total, pct, at } };
 }
 
 module.exports = {
   DEFAULT_MODEL,
+  applyDownloadProgress,
   applyModelReady,
   createState,
   engineForModel,

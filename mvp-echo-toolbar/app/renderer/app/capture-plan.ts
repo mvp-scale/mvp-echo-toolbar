@@ -38,11 +38,13 @@ export interface EngineStateRecord {
   rev: number;
   engine: 'webgpu' | 'local' | 'remote';
   modelId: string;
-  status: 'ready' | 'loading' | 'unusable' | 'unknown';
+  status: 'ready' | 'loading' | 'downloading' | 'unusable' | 'unknown';
   reason: string | null;
   gpu: 'usable' | 'unusable' | 'indeterminate';
   endpoint?: { url: string | null; verifiedAt: number | null };
   preferredModelId?: string | null;
+  /** Bytes in flight for `modelId`. Non-null only while status is 'downloading'. */
+  progress?: { loaded: number; total: number; pct: number; at?: number } | null;
 }
 
 export interface CapturePlan {
@@ -61,6 +63,14 @@ export interface CapturePlan {
   readonly blocked: boolean;
   /** Why this recording cannot proceed, or null. Shown to the user. */
   readonly reason: string | null;
+  /**
+   * Whether being blocked is a FAILURE or just a WAIT.
+   *
+   * The caller flashed the tray's red `error` state for both, so pressing the
+   * hotkey during a perfectly healthy download looked identical to a crash.
+   * A wait is not an error and must not be dressed as one.
+   */
+  readonly blockedKind: 'error' | 'wait' | null;
 }
 
 export function planCapture(
@@ -82,15 +92,31 @@ export function planCapture(
   // Waiting is the honest behaviour. If the user wants the CPU engine, that is
   // one click, and it is their click to make.
   if (state.engine === 'webgpu' && !(orchestratorReady && state.status === 'ready')) {
+    // One message used to cover all of these, and it said "ready shortly" —
+    // true for a 20s warm start, a lie during a 90s download, and simply wrong
+    // when the GPU cannot run at all. Each state now says what is actually
+    // happening and what the user can do about it.
+    const unusable = state.gpu === 'unusable';
+    const pct = state.progress?.pct;
+    let reason: string;
+    if (unusable) {
+      reason = 'GPU unavailable — select the CPU engine in Settings to record';
+    } else if (state.status === 'downloading') {
+      reason = Number.isFinite(pct)
+        ? `Downloading GPU model — ${pct}%. Press again when it is ready, or switch to CPU in Settings.`
+        : 'Starting the GPU model download. Press again shortly, or switch to CPU in Settings.';
+    } else {
+      reason = 'GPU model still loading — it will be ready shortly';
+    }
+
     return Object.freeze({
       engine: state.engine,
       modelId: state.modelId,
       mode: 'raw-pcm' as const,
       selectedModelId,
       blocked: true,
-      reason: state.gpu === 'unusable'
-        ? 'GPU unavailable — select the CPU engine in Settings to record'
-        : 'GPU model still loading — it will be ready shortly',
+      reason,
+      blockedKind: (unusable ? 'error' : 'wait') as 'error' | 'wait',
     });
   }
 
@@ -103,5 +129,6 @@ export function planCapture(
     selectedModelId,
     blocked: false,
     reason: null,
+    blockedKind: null,
   });
 }
