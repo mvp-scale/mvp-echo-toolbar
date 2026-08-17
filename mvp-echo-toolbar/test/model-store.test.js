@@ -284,3 +284,70 @@ describe('fp32 — external data, split into parts', () => {
     }
   });
 });
+
+/**
+ * Concurrent ensure — found on Windows, invisible on POSIX.
+ *
+ * Observed in a real run: three overlapping ensureModel calls raced on the same
+ * `.part` file and every one of them failed.
+ *
+ *   EPERM  open   ...encoder-model.fp16.onnx.part   (a second run held it open)
+ *   EPERM  rename ...part -> ...onnx                (Windows will not rename an open file)
+ *   ENOENT stat   ...part                           (another run had deleted it)
+ *
+ * They overlapped because CaptureApp's re-entry guard keys on
+ * orchestrator.isLoading(), which only becomes true AFTER `await model:ensure`
+ * returns — so every hotkey press during the download started another one.
+ *
+ * POSIX would have permitted all of it and produced a corrupt file instead of an
+ * error, so the platform difference is the only reason this was ever visible.
+ */
+describe('ensureModel is single-flight', () => {
+  test('concurrent calls for the same variant download ONCE', async () => {
+    const dir = tmp();
+    let downloads = 0;
+    const slowDownload = async (_u, dest, o) => {
+      downloads++;
+      await new Promise((r) => setTimeout(r, 40));
+      fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes));
+      return { path: dest, bytes: o.expectedBytes };
+    };
+
+    const opts = { dir, manifest: TINY, fetchImpl: () => {}, download: slowDownload };
+    const [a, b, c] = await Promise.all([
+      ensureModel('fp16', opts), ensureModel('fp16', opts), ensureModel('fp16', opts),
+    ]);
+
+    assert.strictEqual(downloads, TINY.fp16.length,
+      `three concurrent callers must share one download, got ${downloads} file fetches`);
+    assert.deepStrictEqual(a.urls, b.urls);
+    assert.deepStrictEqual(b.urls, c.urls, 'every caller gets the same answer');
+  });
+
+  test('a failure is not cached — the next call retries', async () => {
+    const dir = tmp();
+    let attempt = 0;
+    const flaky = async (_u, dest, o) => {
+      if (++attempt === 1) throw new Error('network blip');
+      fs.writeFileSync(dest, Buffer.alloc(o.expectedBytes));
+      return { path: dest, bytes: o.expectedBytes };
+    };
+
+    const opts = { dir, manifest: TINY, fetchImpl: () => {}, download: flaky };
+    await assert.rejects(ensureModel('fp16', opts));
+    const res = await ensureModel('fp16', opts);
+
+    assert.ok(res.urls.encoderUrl, 'a transient failure must not permanently poison the store');
+  });
+
+  test('different variants are not serialised behind each other', async () => {
+    const dir = tmp();
+    const opts = { dir, manifest: TINY, fetchImpl: () => {},
+      download: async (_u, d, o) => { fs.writeFileSync(d, Buffer.alloc(o.expectedBytes)); return {}; } };
+
+    const [f, i] = await Promise.all([ensureModel('fp16', opts), ensureModel('int8', opts)]);
+
+    assert.match(f.urls.encoderUrl, /fp16/);
+    assert.match(i.urls.encoderUrl, /int8/);
+  });
+});

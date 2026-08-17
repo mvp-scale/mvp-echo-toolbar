@@ -125,7 +125,35 @@ function pruneOtherVariants(keep, dir, manifest = MANIFEST) {
  * Downloading is skipped entirely when the files are already present and the
  * right size, which is the whole point: one download per machine, ever.
  */
+/**
+ * In-flight ensures, keyed by variant.
+ *
+ * Windows found this: three overlapping calls raced on the same `.part` file
+ * and all three failed — EPERM on open, EPERM on rename, ENOENT on stat — because
+ * Windows will not rename or reopen a file another handle holds. POSIX permits
+ * all of it and silently produces a corrupt file instead, which is worse.
+ *
+ * They overlap because the caller's re-entry guard keys on
+ * orchestrator.isLoading(), which is only true AFTER this resolves. Rather than
+ * rely on every caller guarding correctly, the download is single-flight here:
+ * concurrent callers for the same variant share one download and one result.
+ */
+const inFlight = new Map();
+
 async function ensureModel(variant, opts = {}) {
+  const pending = inFlight.get(variant);
+  if (pending) return pending;
+
+  const run = _ensureModel(variant, opts)
+    // Cleared on BOTH paths: caching a rejection would make one network blip
+    // permanent for the life of the process.
+    .finally(() => { inFlight.delete(variant); });
+
+  inFlight.set(variant, run);
+  return run;
+}
+
+async function _ensureModel(variant, opts = {}) {
   const {
     dir = modelDir(opts),
     base = DEFAULT_BASE,
